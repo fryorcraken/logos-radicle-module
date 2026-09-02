@@ -1,0 +1,30 @@
+{
+  "name": "radicle_ui",
+  "display_name": "Radicle",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "development",
+  "description": "Browse Radicle repositories, issues and patches",
+  "main": "radicle_ui_plugin",
+  "icon": "src/icons/icon.png",
+  "view": "qml/Main.qml",
+  "dependencies": ["radicle"],
+  "provides": [],
+  "uses": [],
+  "codegen": { "rep": "src/radicle_ui.rep" },
+
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

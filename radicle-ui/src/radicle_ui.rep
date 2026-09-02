@@ -1,0 +1,50 @@
+// View contract for the Radicle UI.
+//
+// This is deliberately thin. Every slot is a pass-through to the `radicle`
+// core module, which owns all the business logic: HTTP to seed nodes, JSON
+// parsing, SHA resolution and local-profile detection. Nothing here parses
+// Radicle data or talks to the network itself.
+//
+// The remote*/local* split from the core module's API is preserved verbatim
+// rather than collapsed into one "fetch" call: which source you are asking is
+// a user-visible fact (different reachability, different privacy, read-only vs
+// writable), so the view stays explicit about it.
+//
+// Every slot returns a JSON string — the shapes are the core module's
+// contract. Failures are always {"error":"..."}. QML receives these via
+// logos.watch(...) and renders them; it never constructs a request URL.
+class RadicleUi
+{
+    // --- source-neutral ---------------------------------------------------
+    SLOT(QString getCapabilities())
+    SLOT(QString listKnownSeeds())
+    SLOT(QString setRemoteSeed(QString seedUrl))
+
+    // --- remote: proxied to a public seed, no local node needed ------------
+    SLOT(QString remoteListRepos(QString query, int page, int perPage))
+    SLOT(QString remoteGetRepo(QString rid))
+    SLOT(QString remoteGetTree(QString rid, QString sha, QString path))
+    SLOT(QString remoteGetBlob(QString rid, QString sha, QString path))
+    SLOT(QString remoteGetReadme(QString rid, QString sha))
+    SLOT(QString remoteListCommits(QString rid, QString sha, int page, int perPage))
+    SLOT(QString remoteListIssues(QString rid, QString status, int page, int perPage))
+    SLOT(QString remoteGetIssue(QString rid, QString id))
+    SLOT(QString remoteListPatches(QString rid, QString status, int page, int perPage))
+    SLOT(QString remoteGetPatch(QString rid, QString id))
+
+    // --- local: this machine's node, offline-capable, sees private repos ---
+    SLOT(QString localListRepos(QString scope, int page, int perPage))
+    SLOT(QString localGetRepo(QString rid))
+    SLOT(QString localGetTree(QString rid, QString sha, QString path))
+    SLOT(QString localGetBlob(QString rid, QString sha, QString path))
+    SLOT(QString localGetReadme(QString rid, QString sha))
+    SLOT(QString localListCommits(QString rid, QString sha, int page, int perPage))
+    SLOT(QString localListIssues(QString rid, QString status, int page, int perPage))
+    SLOT(QString localGetIssue(QString rid, QString id))
+    SLOT(QString localListPatches(QString rid, QString status, int page, int perPage))
+    SLOT(QString localGetPatch(QString rid, QString id))
+
+    // Auto-synced summary of what the module can currently do, so the view can
+    // show/hide the local source without an explicit round-trip on startup.
+    PROP(QString capabilities="" READONLY)
+}
