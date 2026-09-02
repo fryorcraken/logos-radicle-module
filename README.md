@@ -11,6 +11,20 @@ Two ways to browse, kept deliberately distinct:
 - **My node** — reads this machine's own Radicle node, including private
   repositories, and works offline.
 
+## Where this lives
+
+Two remotes, on purpose:
+
+- **GitHub** — <https://github.com/fryorcraken/logos-radicle-module>. Logos
+  modules are published to the catalog from GitHub, so releases go from here.
+- **Radicle** — `rad:z39LLirsD1d4BvWMa9gFoi2B88413`. A Radicle browser ought to
+  live on Radicle; you can open this repository in the module itself.
+
+```bash
+git push origin main   # GitHub
+git push rad main      # Radicle
+```
+
 ## Modules
 
 This repository holds all the modules for the mini app. They are published to
