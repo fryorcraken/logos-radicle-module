@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <nlohmann/json.hpp>
 #include <string>
 
@@ -29,7 +30,7 @@ public:
     /// Fetch `/api/v1` and cache apiVersion + nid. -> the index object.
     nlohmann::json probe();
 
-    nlohmann::json listRepos(const std::string& query, int page, int perPage);
+    nlohmann::json listRepos(const std::string& query, int64_t page, int64_t perPage);
     nlohmann::json getRepo(const std::string& rid);
     nlohmann::json getTree(const std::string& rid, const std::string& sha,
                            const std::string& path);
@@ -37,13 +38,13 @@ public:
                            const std::string& path);
     nlohmann::json getReadme(const std::string& rid, const std::string& sha);
     nlohmann::json listCommits(const std::string& rid, const std::string& sha,
-                               int page, int perPage);
+                               int64_t page, int64_t perPage);
     nlohmann::json getCommit(const std::string& rid, const std::string& sha);
     nlohmann::json listIssues(const std::string& rid, const std::string& status,
-                              int page, int perPage);
+                              int64_t page, int64_t perPage);
     nlohmann::json getIssue(const std::string& rid, const std::string& id);
     nlohmann::json listPatches(const std::string& rid, const std::string& status,
-                               int page, int perPage);
+                               int64_t page, int64_t perPage);
     nlohmann::json getPatch(const std::string& rid, const std::string& id);
 
     /**
@@ -86,6 +87,6 @@ std::string urlEncode(const std::string& s);
  *
  * Passes `{"error":...}` objects through untouched.
  */
-nlohmann::json paginate(const nlohmann::json& arr, int page, int perPage);
+nlohmann::json paginate(const nlohmann::json& arr, int64_t page, int64_t perPage);
 
 } // namespace radicle

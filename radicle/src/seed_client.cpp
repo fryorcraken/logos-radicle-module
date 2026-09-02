@@ -71,12 +71,12 @@ std::string urlEncode(const std::string& s)
     return out;
 }
 
-nlohmann::json paginate(const nlohmann::json& arr, int page, int perPage)
+nlohmann::json paginate(const nlohmann::json& arr, int64_t page, int64_t perPage)
 {
     if (isError(arr)) return arr;
     if (!arr.is_array()) return makeError("expected a JSON array from seed");
 
-    const int count = static_cast<int>(arr.size());
+    const int64_t count = static_cast<int64_t>(arr.size());
     return nlohmann::json{
         {"items", arr},
         {"page", page},
@@ -138,7 +138,7 @@ nlohmann::json SeedClient::probe()
     return index;
 }
 
-nlohmann::json SeedClient::listRepos(const std::string& query, int page, int perPage)
+nlohmann::json SeedClient::listRepos(const std::string& query, int64_t page, int64_t perPage)
 {
     std::string path = "/repos?page=" + std::to_string(page)
                      + "&perPage=" + std::to_string(perPage);
@@ -212,7 +212,7 @@ nlohmann::json SeedClient::getReadme(const std::string& rid, const std::string& 
 }
 
 nlohmann::json SeedClient::listCommits(const std::string& rid, const std::string& sha,
-                                       int page, int perPage)
+                                       int64_t page, int64_t perPage)
 {
     std::string path = "/repos/" + urlEncode(rid) + "/commits?page=" + std::to_string(page)
                      + "&perPage=" + std::to_string(perPage);
@@ -233,7 +233,7 @@ nlohmann::json SeedClient::getCommit(const std::string& rid, const std::string& 
 }
 
 nlohmann::json SeedClient::listIssues(const std::string& rid, const std::string& status,
-                                      int page, int perPage)
+                                      int64_t page, int64_t perPage)
 {
     std::string path = "/repos/" + urlEncode(rid) + "/issues?page=" + std::to_string(page)
                      + "&perPage=" + std::to_string(perPage);
@@ -247,7 +247,7 @@ nlohmann::json SeedClient::getIssue(const std::string& rid, const std::string& i
 }
 
 nlohmann::json SeedClient::listPatches(const std::string& rid, const std::string& status,
-                                       int page, int perPage)
+                                       int64_t page, int64_t perPage)
 {
     std::string path = "/repos/" + urlEncode(rid) + "/patches?page=" + std::to_string(page)
                      + "&perPage=" + std::to_string(perPage);

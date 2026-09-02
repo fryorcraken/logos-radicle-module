@@ -108,7 +108,7 @@ std::string RadicleImpl::listKnownSeeds()
 // REMOTE — proxied to a public seed over HTTPS
 // ===========================================================================
 
-std::string RadicleImpl::remoteListRepos(const std::string& query, int page, int perPage)
+std::string RadicleImpl::remoteListRepos(const std::string& query, int64_t page, int64_t perPage)
 {
     return dump(radicle::paginate(seed().listRepos(query, page, perPage), page, perPage));
 }
@@ -136,7 +136,7 @@ std::string RadicleImpl::remoteGetReadme(const std::string& rid, const std::stri
 }
 
 std::string RadicleImpl::remoteListCommits(const std::string& rid, const std::string& sha,
-                                           int page, int perPage)
+                                           int64_t page, int64_t perPage)
 {
     return dump(radicle::paginate(seed().listCommits(rid, sha, page, perPage), page, perPage));
 }
@@ -147,7 +147,7 @@ std::string RadicleImpl::remoteGetCommit(const std::string& rid, const std::stri
 }
 
 std::string RadicleImpl::remoteListIssues(const std::string& rid, const std::string& status,
-                                          int page, int perPage)
+                                          int64_t page, int64_t perPage)
 {
     return dump(radicle::paginate(seed().listIssues(rid, status, page, perPage), page, perPage));
 }
@@ -158,7 +158,7 @@ std::string RadicleImpl::remoteGetIssue(const std::string& rid, const std::strin
 }
 
 std::string RadicleImpl::remoteListPatches(const std::string& rid, const std::string& status,
-                                           int page, int perPage)
+                                           int64_t page, int64_t perPage)
 {
     return dump(radicle::paginate(seed().listPatches(rid, status, page, perPage), page, perPage));
 }
@@ -177,7 +177,7 @@ std::string RadicleImpl::remoteGetPatch(const std::string& rid, const std::strin
 // are very different answers, and a view must be able to tell them apart.
 // ===========================================================================
 
-std::string RadicleImpl::localListRepos(const std::string&, int, int)      { return localUnavailable(); }
+std::string RadicleImpl::localListRepos(const std::string&, int64_t, int64_t)      { return localUnavailable(); }
 std::string RadicleImpl::localGetRepo(const std::string&)                  { return localUnavailable(); }
 std::string RadicleImpl::localGetTree(const std::string&, const std::string&,
                                       const std::string&)                 { return localUnavailable(); }
@@ -185,11 +185,11 @@ std::string RadicleImpl::localGetBlob(const std::string&, const std::string&,
                                       const std::string&)                 { return localUnavailable(); }
 std::string RadicleImpl::localGetReadme(const std::string&, const std::string&) { return localUnavailable(); }
 std::string RadicleImpl::localListCommits(const std::string&, const std::string&,
-                                          int, int)                       { return localUnavailable(); }
+                                          int64_t, int64_t)                       { return localUnavailable(); }
 std::string RadicleImpl::localGetCommit(const std::string&, const std::string&) { return localUnavailable(); }
 std::string RadicleImpl::localListIssues(const std::string&, const std::string&,
-                                         int, int)                        { return localUnavailable(); }
+                                         int64_t, int64_t)                        { return localUnavailable(); }
 std::string RadicleImpl::localGetIssue(const std::string&, const std::string&)  { return localUnavailable(); }
 std::string RadicleImpl::localListPatches(const std::string&, const std::string&,
-                                          int, int)                       { return localUnavailable(); }
+                                          int64_t, int64_t)                       { return localUnavailable(); }
 std::string RadicleImpl::localGetPatch(const std::string&, const std::string&)  { return localUnavailable(); }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include "logos_module_context.h"
 
@@ -99,7 +100,7 @@ public:
      * Search/list repos the seed replicates. `query` may be empty for all.
      * -> {"items":[<repo>],"page":N,"hasMore":bool}
      */
-    std::string remoteListRepos(const std::string& query, int page, int perPage);
+    std::string remoteListRepos(const std::string& query, int64_t page, int64_t perPage);
 
     /**
      * One repo's metadata: name, description, defaultBranch, head SHA,
@@ -124,21 +125,21 @@ public:
 
     /// Commit log from `sha` backwards. -> {"items":[<commit>],...}
     std::string remoteListCommits(const std::string& rid, const std::string& sha,
-                                  int page, int perPage);
+                                  int64_t page, int64_t perPage);
 
     /// A single commit with its diff. -> <commit> + {"diff":{...}}
     std::string remoteGetCommit(const std::string& rid, const std::string& sha);
 
     /// Issues. `status` is "open"|"closed"|"" (all). -> {"items":[<issue>],...}
     std::string remoteListIssues(const std::string& rid, const std::string& status,
-                                 int page, int perPage);
+                                 int64_t page, int64_t perPage);
 
     /// One issue including its full discussion thread. -> <issue>
     std::string remoteGetIssue(const std::string& rid, const std::string& id);
 
     /// Patches. `status` is "open"|"merged"|"archived"|"draft"|"".
     std::string remoteListPatches(const std::string& rid, const std::string& status,
-                                  int page, int perPage);
+                                  int64_t page, int64_t perPage);
 
     /// One patch including revisions and reviews. -> <patch>
     std::string remoteGetPatch(const std::string& rid, const std::string& id);
@@ -150,7 +151,7 @@ public:
     // ======================================================================
 
     /// Repos in local storage. `scope`: "all"|"delegate"|"private"|"seeded".
-    std::string localListRepos(const std::string& scope, int page, int perPage);
+    std::string localListRepos(const std::string& scope, int64_t page, int64_t perPage);
 
     std::string localGetRepo(const std::string& rid);
 
@@ -163,17 +164,17 @@ public:
     std::string localGetReadme(const std::string& rid, const std::string& sha);
 
     std::string localListCommits(const std::string& rid, const std::string& sha,
-                                 int page, int perPage);
+                                 int64_t page, int64_t perPage);
 
     std::string localGetCommit(const std::string& rid, const std::string& sha);
 
     std::string localListIssues(const std::string& rid, const std::string& status,
-                                int page, int perPage);
+                                int64_t page, int64_t perPage);
 
     std::string localGetIssue(const std::string& rid, const std::string& id);
 
     std::string localListPatches(const std::string& rid, const std::string& status,
-                                 int page, int perPage);
+                                 int64_t page, int64_t perPage);
 
     std::string localGetPatch(const std::string& rid, const std::string& id);
 
