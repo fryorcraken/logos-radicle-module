@@ -1,0 +1,319 @@
+name: UI tests
+
+# Runs the sitometres end-to-end spec against a real Basecamp: real clicks
+# through the QML inspector, the real QtRO transport, and the real `radicle`
+# core module talking to a real seed node.
+#
+# Kept out of ci.yml on purpose. This job builds Basecamp from source (see
+# below) and needs the network for every step, so it is measured in tens of
+# minutes where every job in ci.yml is measured in seconds to a few minutes.
+# Hanging that off `pull_request` would make the PR path unusable, so this runs
+# on pushes to main (post-merge) and on demand.
+#
+# ─── why Basecamp is BUILT and not fetched ──────────────────────────────────
+# sitometres attaches to Basecamp's QML inspector. That is a compile-time
+# feature and is off in every shipping build, so the only usable target is
+# `#bin-bundle-dir-inspector`.
+#
+# Measured on 2026-09-03 against rev aa23776 (Basecamp 0.2.3): that output is
+# NOT in the logos public binary cache. Checked two ways —
+#
+#   curl https://cache.nix.logos.co/public/0bkhqsq5fl6wr6wsiyq4cjx92538gvld.narinfo   -> 404
+#   nix path-info --store https://cache.nix.logos.co/public /nix/store/0bkhq…-logos-basecamp-bundle-0.2.3
+#                                                                     -> "path is not valid"
+#
+# and `nix build --dry-run` lists `logos-basecamp-0.2.3.drv` under "these 9
+# derivations will be built", not under "will be fetched". The plain
+# (non-inspector) `#bin-bundle-dir` and `#app` are absent too, so this is not
+# an inspector-only gap — nothing for 0.2.3 at that rev is published.
+#
+# Consequences, and why the job is shaped the way it is:
+#   * timeout-minutes is 120, matching Basecamp's own doctests, because a cold
+#     run is a full Qt/C++ compile rather than a download.
+#   * the store is cached across runs with cache-nix-action, which is what
+#     actually makes repeat runs fast here. The substituter alone cannot: it
+#     does not hold the artefact. It is still configured, because the ~2.5 GB
+#     of dependencies AROUND Basecamp do come from it.
+#   * the rev is pinned. An unpinned build would recompile on every upstream
+#     commit and would also miss the store cache every time.
+# If a future Basecamp release publishes the inspector bundle, drop the store
+# cache and let the substituter do the work — re-check with the curl above.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ui-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browse:
+    name: sitometres browse spec
+    runs-on: ubuntu-latest
+    # Basecamp's own doctests use 120 for the same from-source bundle build.
+    timeout-minutes: 120
+
+    env:
+      # Pinned: Basecamp 0.2.3. Bump deliberately — an unpinned rev recompiles
+      # on every upstream commit and invalidates the store cache with it.
+      BASECAMP_REV: aa237766baf61404e12da86b7303cb41065464c9
+      SPEC: radicle-ui/tests/ui/browse.yaml
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          # The logos substituter is anonymously readable — verified with
+          # `curl .../nix-cache-info` -> HTTP 200 — so no token is needed. The
+          # attic tokens in logos-co/setup-nix-cache-action are for WRITING.
+          #
+          # Set here rather than relying on the flake's own nixConfig: a flake's
+          # extra-substituters is only honoured for a trusted user, and is
+          # otherwise skipped with "ignoring untrusted flake configuration
+          # setting". install-nix-action makes the runner user trusted, so
+          # putting the substituter in nix.conf makes it apply unconditionally.
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.nix.logos.co/public
+            extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU=
+            accept-flake-config = true
+
+      # The store cache is what makes a repeat run fast, because the Basecamp
+      # bundle has to be compiled here (see the header). Keyed on the pinned rev
+      # so bumping BASECAMP_REV starts a fresh cache rather than restoring a
+      # store that cannot help.
+      - name: Cache the Nix store
+        uses: nix-community/cache-nix-action@v5
+        with:
+          # radicle-ui has no flake.lock committed, so the .nix files are in the
+          # key too — hashFiles silently yields "" for a path that matches
+          # nothing, which would leave the key keyed on the rev alone.
+          primary-key: nix-ui-${{ runner.os }}-${{ env.BASECAMP_REV }}-${{ hashFiles('radicle/flake.nix', 'radicle-ui/flake.nix', 'radicle/flake.lock', 'radicle-ui/flake.lock') }}
+          restore-prefixes-first-match: nix-ui-${{ runner.os }}-${{ env.BASECAMP_REV }}-
+          # Keep the cache from growing without bound across runs.
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-ui-${{ runner.os }}-
+          purge-created: 604800
+
+      # The bundle carries its own Qt but NOT host graphics libraries — you
+      # cannot bundle a GPU driver — so it resolves libGL/glvnd through the
+      # normal loader path. A bare runner has none, and the binary dies at load
+      # with `libOpenGL.so.0: cannot open shared object file`. Same list as
+      # logos-basecamp's own doctests workflow.
+      - name: Install graphics runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
+
+      - name: Build Basecamp with the QML inspector
+        run: |
+          set -eu
+          nix build "github:logos-co/logos-basecamp/${BASECAMP_REV}#bin-bundle-dir-inspector" \
+            -L --out-link result-bundle
+          test -x result-bundle/bin/LogosBasecamp
+          # Prove the inspector really is compiled in before anything depends on
+          # it, so a Basecamp built without it fails here — where the message
+          # says so — rather than as a timeout waiting for a port.
+          strings -a result-bundle/bin/.LogosBasecamp.elf \
+            | grep -q 'Inspector server listening on port'
+          echo "ok: inspector present"
+
+      # sitometres 0.1.0 decides whether a build has the inspector by scanning
+      # for the inspector's log strings, and it probes exactly two paths:
+      # bin/LogosBasecamp and bin/.LogosBasecamp (src/app/discover.ts,
+      # hasInspector). In this bundle the first is a 5 KB shell wrapper and the
+      # second does not exist — the real ELF is bin/.LogosBasecamp.elf — so the
+      # run is refused with "no Basecamp with the QML inspector compiled in"
+      # even though the string above proves it is there.
+      #
+      # Pointing --basecamp at the .elf directly gets past the check and then
+      # fails to spawn (ENOENT from the loader): the wrapper is what sets up the
+      # bundled library and Qt plugin paths. So keep the wrapper as the binary
+      # and add the name the probe looks for beside it.
+      #
+      # Copied out of the store because the store is read-only. Remove all of
+      # this once sitometres also probes the .elf.
+      - name: Work around the sitometres inspector probe
+        run: |
+          set -eu
+          rm -rf basecamp
+          cp -RL result-bundle basecamp
+          chmod -R u+w basecamp
+          ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
+          test -x basecamp/bin/LogosBasecamp
+
+      # `.#lgx-portable`, NOT `.#lgx` — and this is the opposite of what the
+      # target's name suggests, so it is worth being explicit.
+      #
+      # sitometres unpacks ONE platform variant from the .lgx, and defaults to
+      # `hostVariant()`, which is hardcoded to "<os>-<arch>-dev"
+      # (src/app/userdir.ts). That default is right for the dev app (`#app`) and
+      # wrong here: what this job runs is the BUNDLE, and the bundle only
+      # accepts the portable variants. Staging the dev build got as far as
+      # Basecamp refusing to load it —
+      #
+      #   Warning: module 'radicle' … was installed for variant 'linux-amd64-dev'
+      #   which is not supported on this platform and will not be loadable:
+      #   supported variants [linux-x86_64, linux-amd64].
+      #
+      # — after which the UI opened to nothing and the spec timed out on its
+      # first step, with no hint in sitometres' own output as to why.
+      #
+      # So: build `.#lgx-portable` (verified with `tar tzf` to contain exactly
+      # `variants/linux-amd64`) and pass --variant to override the -dev default.
+      # Both halves are needed; either alone reproduces the failure above.
+      - name: Build the core module
+        run: nix build '.#lgx-portable' --out-link result-lgx-portable --print-build-logs
+        working-directory: radicle
+
+      - name: Build the UI module
+        run: nix build '.#lgx-portable' --override-input radicle path:../radicle --out-link result-lgx-portable --print-build-logs
+        working-directory: radicle-ui
+
+      # sitometres discovers apps under <app-dir>/dist/*.lgx among other places
+      # (src/app/discover.ts). Staging both there lets one --app-dir serve the
+      # app under test and the `with: [radicle]` dependency the spec declares.
+      - name: Stage the modules for discovery
+        run: |
+          set -eu
+          rm -rf dist
+          mkdir -p dist
+          cp radicle/result-lgx-portable/*.lgx    dist/
+          cp radicle-ui/result-lgx-portable/*.lgx dist/
+          # Assert the staged packages really carry the variant the bundle
+          # accepts. Getting this wrong does not fail loudly: Basecamp logs one
+          # warning, declines to load the module, and the spec then times out on
+          # its first step for no visible reason.
+          for f in dist/*.lgx; do
+            echo "$f: $(tar tzf "$f" | grep -oE 'variants/[^/]+' | sort -u | tr '\n' ' ')"
+            tar tzf "$f" | grep -q '^variants/linux-amd64/' \
+              || { echo "::error::$f has no linux-amd64 variant — is this .#lgx instead of .#lgx-portable?"; exit 1; }
+          done
+
+      - name: Run the browse spec
+        # Bounded well inside the job's 120, so a spec that hangs fails HERE —
+        # leaving the later steps to collect logs and upload evidence. If the
+        # job-level timeout fires instead it kills the whole run, artifacts and
+        # all, and you are left with nothing to look at. Observed locally:
+        # sitometres 0.1.0 can sit in `open` indefinitely rather than honouring
+        # the spec's own timeout, so this bound is doing real work.
+        timeout-minutes: 30
+        run: |
+          # pipefail is load-bearing: without it the `| tee` below makes the
+          # step's exit status tee's, which is always 0, so a failing run would
+          # report as a pass.
+          set -euo pipefail
+          mkdir -p ui-results ui-results/screenshots
+          # --strict: an INCONCLUSIVE run is one that proved nothing, and a
+          # green tick on no evidence is worse than a red one. Without it
+          # sitometres exits 0 on INCONCLUSIVE by design.
+          npx --yes @paradoxcomputer/sitometres@0.1.0 run "$SPEC" \
+            --app radicle_ui \
+            --app-dir . \
+            --basecamp basecamp/bin/LogosBasecamp \
+            --variant linux-amd64 \
+            --strict \
+            --json  ui-results/browse.json \
+            --junit ui-results/browse.xml \
+            --artifacts ui-results/screenshots \
+            2>&1 | tee ui-results/sitometres.log
+
+      # The exit code is the primary gate; this is the belt-and-braces check,
+      # in the spirit of the `qml` job's "Totals: N passed" grep. It asserts
+      # against the machine report rather than the terminal summary, because
+      # the summary is ANSI-coloured and has no stable "N passed" line, while
+      # --json is written on every exit path.
+      #
+      # Three things have to hold: the verdict is a pass, every step in the
+      # report passed, and the number of steps matches the number in the spec.
+      # The last one is what stops a run that opened the app, did nothing else
+      # and reported a clean sheet from reading as a pass.
+      - name: The run proved what the spec asks
+        # `always()` so the per-step breakdown is printed even when the run step
+        # already failed — that listing is usually the fastest way to see which
+        # step broke and why. It cannot rescue a failed run: this step only ever
+        # adds a failure, never removes one.
+        if: always()
+        run: |
+          set -eu
+          # Explicit rather than assumed: the runner image happens to ship
+          # PyYAML, but this check is the gate and must not depend on that.
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 - <<'PY'
+          import json, os, sys, yaml
+
+          # sitometres writes --json from a `finally`, so a report is missing
+          # only when the process never got to exit — killed by the job's
+          # timeout-minutes, or OOM. Say that, rather than dying on a traceback
+          # about a missing file.
+          if not os.path.exists("ui-results/browse.json"):
+              print("::error::no JSON report — sitometres was killed before it could "
+                    "write one (job timeout?), so nothing was proved")
+              sys.exit(1)
+
+          report = json.load(open("ui-results/browse.json"))
+          spec = yaml.safe_load(open("radicle-ui/tests/ui/browse.yaml"))
+          expected = len(spec["steps"])
+          steps = report.get("steps", [])
+
+          print(f"verdict: {report.get('verdict')}")
+          for s in steps:
+              print(f"  [{s.get('verdict'):>12}] {s.get('name')}")
+
+          problems = []
+          if report.get("verdict") != "pass":
+              problems.append(f"verdict is {report.get('verdict')!r}, expected 'pass'")
+          if len(steps) != expected:
+              problems.append(
+                  f"report has {len(steps)} steps, spec has {expected} — "
+                  "the run did not execute the whole spec"
+              )
+          bad = [s["name"] for s in steps if s.get("verdict") != "pass"]
+          if bad:
+              problems.append(f"steps that did not pass: {bad}")
+
+          if problems:
+              for p in problems:
+                  print(f"::error::{p}")
+              sys.exit(1)
+          print(f"ok: all {len(steps)} steps passed")
+          PY
+
+      # Uploaded on failure only — this is the evidence you need to diagnose a
+      # red run, and there is nothing to look at when it is green.
+      # sitometres runs against a throwaway user-dir, and Basecamp's own log is
+      # the only record of what the app did — QML errors, module load failures,
+      # the calls the view actually dispatched. Verified layout, from a real
+      # local run: /tmp/sitometres-<rand>/logs/basecamp_<timestamp>.log
+      # (the sibling /tmp/sitometres-home-<rand> is the throwaway HOME and holds
+      # no logs). The directory is reaped when sitometres exits, so this only
+      # catches anything if the process was killed rather than exiting cleanly;
+      # it is best-effort by nature, hence the `|| true`.
+      - name: Collect Basecamp logs
+        if: failure()
+        run: |
+          set -eu
+          mkdir -p ui-results/logs
+          find "${TMPDIR:-/tmp}" -maxdepth 3 -type f -name 'basecamp_*.log' \
+            -path '*sitometres*' -exec cp {} ui-results/logs/ \; 2>/dev/null || true
+          ls -la ui-results/logs || true
+          [ -n "$(ls -A ui-results/logs 2>/dev/null)" ] \
+            || echo "no basecamp log survived — sitometres reaps its user-dir on exit"
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-evidence
+          path: ui-results/
+          if-no-files-found: warn

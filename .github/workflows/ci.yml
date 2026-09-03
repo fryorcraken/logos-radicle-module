@@ -117,6 +117,13 @@ jobs:
             qml6-module-qtquick-window qml6-module-qttest \
             qml6-module-qtqml-workerscript libgl1-mesa-dev
 
+      # qmllint does NOT catch a syntax error: it reported "ok" on a file Qt
+      # then refused with "Unexpected token `}'", and basecamp surfaces that
+      # failure nowhere the user can see — the app just does nothing when
+      # clicked. So parse every file for real, first.
+      - name: QML parses
+        run: sh radicle-ui/tests/check-qml-syntax.sh
+
       - name: qmllint
         run: |
           set -eu

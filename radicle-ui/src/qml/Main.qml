@@ -209,12 +209,9 @@ Item {
                         font.bold: true
                     }
 
-                    }
-
                     SeedPicker {
                         id: seedPicker
                         objectName: "seedPicker"
-                        visible: root.source === "remote"
                         currentSeed: root.caps.remoteSeed || ""
                         fetchSeeds: function (cb) {
                             root.callPlain("listKnownSeeds", [], cb);

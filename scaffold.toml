@@ -46,6 +46,12 @@ version = "0.4.1"
 # the Wayland compositor socket (wayland-0) through XDG_RUNTIME_DIR, so a
 # private dir like /tmp/lgs-alice starts basecamp with no display and it exits
 # immediately.
+[basecamp.env]
+# Surface QML errors. Basecamp does not log them itself, so a ui_qml plugin
+# that fails to load looks exactly like one that was never clicked.
+QT_LOGGING_RULES = "qt.qml.import.debug=true"
+QT_FORCE_STDERR_LOGGING = "1"
+
 [basecamp.profiles.alice]
 runtime_dir = "/run/user/1000"
 
