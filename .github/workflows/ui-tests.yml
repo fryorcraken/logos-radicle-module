@@ -4,11 +4,26 @@ name: UI tests
 # through the QML inspector, the real QtRO transport, and the real `radicle`
 # core module talking to a real seed node.
 #
-# Kept out of ci.yml on purpose. This job builds Basecamp from source (see
-# below) and needs the network for every step, so it is measured in tens of
-# minutes where every job in ci.yml is measured in seconds to a few minutes.
-# Hanging that off `pull_request` would make the PR path unusable, so this runs
-# on pushes to main (post-merge) and on demand.
+# Kept out of ci.yml on purpose: it builds Basecamp from source (see below) and
+# needs the network for every step, where every job in ci.yml is seconds to a
+# few minutes. So it runs on pushes to main (post-merge) and on demand.
+#
+# Whether it could also run on `pull_request` is a live question rather than a
+# settled one. Measured from run 33712429609, the whole job was 8m21s, not the
+# "tens of minutes" this comment used to claim:
+#
+#   install nix + apt          ~20s
+#   build Basecamp             ~6m00s   (~4.5m substituter downloads,
+#                                        ~1.5m actually compiling Basecamp)
+#   build both modules         ~1m10s
+#   run the spec               ~20s
+#
+# So the cold cost is dominated by downloading the closure, not by compiling,
+# and that is the part a working store cache removes. Once the cache below is
+# confirmed to restore, a warm run should be a few minutes, which is plausibly
+# PR-affordable. Do not move this to `pull_request` on that estimate alone —
+# check a real warm run's timing first, and note that PRs from forks get their
+# own isolated cache scope and would therefore always run cold.
 #
 # ─── why Basecamp is BUILT and not fetched ──────────────────────────────────
 # sitometres attaches to Basecamp's QML inspector. That is a compile-time
@@ -28,12 +43,14 @@ name: UI tests
 # an inspector-only gap — nothing for 0.2.3 at that rev is published.
 #
 # Consequences, and why the job is shaped the way it is:
-#   * timeout-minutes is 120, matching Basecamp's own doctests, because a cold
-#     run is a full Qt/C++ compile rather than a download.
+#   * timeout-minutes is 120, matching Basecamp's own doctests. That is far
+#     above the 8m21s actually observed, and deliberately so: it is a backstop
+#     against a pathological cold run, not an estimate.
 #   * the store is cached across runs with cache-nix-action, which is what
 #     actually makes repeat runs fast here. The substituter alone cannot: it
-#     does not hold the artefact. It is still configured, because the ~2.5 GB
-#     of dependencies AROUND Basecamp do come from it.
+#     does not hold the artefact. It is still configured, because the
+#     dependencies AROUND Basecamp do come from it — 676 paths were substituted
+#     on the run above, for a resulting store of 5.15 GB.
 #   * the rev is pinned. An unpinned build would recompile on every upstream
 #     commit and would also miss the store cache every time.
 # If a future Basecamp release publishes the inspector bundle, drop the store
@@ -86,19 +103,48 @@ jobs:
             extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU=
             accept-flake-config = true
 
-      # The store cache is what makes a repeat run fast, because the Basecamp
-      # bundle has to be compiled here (see the header). Keyed on the pinned rev
-      # so bumping BASECAMP_REV starts a fresh cache rather than restoring a
-      # store that cannot help.
+      # The store cache is what makes a repeat run fast. Most of the cold cost
+      # is not the Basecamp compile (~1.5 min) but pulling ~5 GB of closure from
+      # the substituters (~4.5 min); the cache removes the download, not the
+      # compile. Keyed on the pinned rev so bumping BASECAMP_REV starts a fresh
+      # cache rather than restoring a store that cannot help.
+      #
+      # v7, not v5. On v5 this step never cached anything — run 33712429609
+      # failed both halves, for two independent reasons:
+      #
+      #   Failed to restore: Cache service responded with 400
+      #   Failed to save: '/usr/bin/tar' failed with exit code 2
+      #
+      #   * the 400 is v5 (March 2024) still calling the legacy Actions cache
+      #     API, which GitHub has since retired. It is not size or auth: the
+      #     request was refused in 80 ms, on a RESTORE, before any upload, and
+      #     the repo holds 0 of its 10 GB quota.
+      #   * exit 2 is tar being unable to read root-owned daemon state —
+      #     /nix/var/nix/{gc.lock,userpool/*}, /nix/var/nix/db/{reserved,
+      #     big-lock}. v7 runs tar under sudo and excludes everything under
+      #     /nix/var/nix bar the db.sqlite it actually needs.
+      #
+      # v7 also fixes a live footgun in the input below, and checkpoints the
+      # store's SQLite WAL before saving, so a restored db.sqlite is not missing
+      # writes that were still in the WAL when the cache was taken.
       - name: Cache the Nix store
-        uses: nix-community/cache-nix-action@v5
+        uses: nix-community/cache-nix-action@v7
         with:
           # radicle-ui has no flake.lock committed, so the .nix files are in the
           # key too — hashFiles silently yields "" for a path that matches
           # nothing, which would leave the key keyed on the rev alone.
           primary-key: nix-ui-${{ runner.os }}-${{ env.BASECAMP_REV }}-${{ hashFiles('radicle/flake.nix', 'radicle-ui/flake.nix', 'radicle/flake.lock', 'radicle-ui/flake.lock') }}
           restore-prefixes-first-match: nix-ui-${{ runner.os }}-${{ env.BASECAMP_REV }}-
-          # Keep the cache from growing without bound across runs.
+          # Keep the cache from growing without bound across runs. The store
+          # measured 5.15 GB on the run above, so 8G leaves headroom without
+          # forcing a collection every time.
+          #
+          # v5 did not understand the G suffix: it interpolated the string into
+          # bash arithmetic, so `8G` became `MAX_STORE_SIZE=8` — eight BYTES —
+          # and it asked nix to free 5150115832 of them, i.e. the entire store.
+          # That only ever did nothing because everything was still held by a GC
+          # root. v7 parses the suffix itself and logs the parsed byte value
+          # beside the raw input, so check that line if this misbehaves.
           gc-max-store-size-linux: 8G
           purge: true
           purge-prefixes: nix-ui-${{ runner.os }}-
