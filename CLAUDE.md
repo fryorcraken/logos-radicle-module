@@ -407,7 +407,7 @@ two builds by dependency, and deriving the sibling `--override-input`.
 | Instead of | Run |
 |---|---|
 | `cd radicle && nix build '.#lgx'` (both modules, then `lgpm install`) | `lgs basecamp install` |
-| the two-line portable build below | `lgs basecamp build-portable` |
+| `nix build '.#lgx-portable'` in each dir, with a hand-written `--override-input` | `lgs basecamp build-portable` |
 | `nix build '.#lgx'` just to check it compiles | `lgs basecamp build --variant lgx [--module radicle_ui]` |
 | `nix develop` in a module dir | `lgs basecamp develop radicle_ui` |
 | launching Basecamp by hand | `lgs basecamp launch alice` |
