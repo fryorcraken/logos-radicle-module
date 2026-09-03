@@ -148,21 +148,29 @@ Item {
         viewer.loading = true;
         var wantRid = rid;
         app.call("GetReadme", [rid, branch], function (data) {
-            // A README arriving after the user switched repos belongs to the
-            // old one — this is what put radicle.xyz's README under
-            // radicle-tui's header.
-            if (tab.rid !== wantRid) return;
             var path = data.path || "README";
             var body = data.content || "";
-            // Store it under the same key GetBlob would use, so clicking the
-            // README in the tree is a cache hit instead of a second fetch.
-            if (data.path)
+
+            // Cache it under the key GetBlob would use, so clicking the README
+            // in the tree is a hit rather than a second fetch. Worth doing even
+            // when we do not display it.
+            if (data.path && tab.rid === wantRid)
                 blobCache[cacheKey(data.path)] = body;
+
+            // Only paint if this reply is still what the user is looking at.
+            // Two ways it might not be:
+            //   - they moved to another repository, or
+            //   - they clicked a file while the README was still in flight.
+            // The second is the one that bit: the README landed afterwards and
+            // relabelled the pane, leaving the clicked file's contents under
+            // "README.md".
+            if (tab.rid !== wantRid || tab.selectedFile !== "") return;
+
             viewer.loading = false;
             viewer.title = path;
             viewer.body = body;
         }, function () {
-            if (tab.rid !== wantRid) return;
+            if (tab.rid !== wantRid || tab.selectedFile !== "") return;
             // Plenty of repos have no README; not an error worth showing.
             viewer.loading = false;
             viewer.title = "";
