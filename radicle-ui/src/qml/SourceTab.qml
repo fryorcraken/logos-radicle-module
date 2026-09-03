@@ -49,6 +49,11 @@ Item {
     /// Entries in the current directory — read by the UI tests.
     readonly property int entryCount: entries.count
 
+    /// True while a directory listing is in flight.
+    property bool treeLoading: false
+    /// True once a listing has completed at least once for this repo.
+    property bool treeLoaded: false
+
     /// Drop everything from the previous repository without fetching.
     /// Called when the repo changes, so no stale tree or file is on screen
     /// while the new repo's data is in flight.
@@ -59,6 +64,8 @@ Item {
         treeCache = ({});
         inFlight = ({});
         entries.clear();
+        treeLoading = false;
+        treeLoaded = false;
         viewer.title = "";
         viewer.body = "";
         viewer.loading = false;
@@ -76,6 +83,8 @@ Item {
         treeCache = ({});
         inFlight = ({});
         entries.clear();
+        treeLoading = true;
+        treeLoaded = false;
         viewer.title = "";
         viewer.body = "";
         viewer.loading = true;
@@ -102,16 +111,25 @@ Item {
         if (treeCache[tkey] !== undefined) {
             tab.path = p;
             applyEntries(treeCache[tkey]);
+            tab.treeLoading = false;
+            tab.treeLoaded = true;
             return;
         }
+        tab.treeLoading = true;
         var wantRid = rid;
         app.call("GetTree", [rid, branch, p], function (data) {
             var list = data.entries || [];
             treeCache[tkey] = list;
             // Drop a reply that arrived after the user moved to another repo.
             if (tab.rid !== wantRid) return;
+            tab.treeLoading = false;
+            tab.treeLoaded = true;
             tab.path = p;
             applyEntries(list);
+        }, function () {
+            if (tab.rid !== wantRid) return;
+            tab.treeLoading = false;
+            tab.treeLoaded = true;
         });
     }
 
@@ -263,8 +281,20 @@ Item {
                     }
                 }
 
+                LoadingState {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: entries.count === 0
+                    loading: tab.treeLoading
+                    loaded: tab.treeLoaded
+                    count: entries.count
+                    emptyText: "Empty directory"
+                    loadingText: "Loading files…"
+                }
+
                 ListView {
                     id: treeList
+                    visible: entries.count > 0
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     model: entries

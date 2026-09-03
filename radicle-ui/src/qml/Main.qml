@@ -104,6 +104,31 @@ Item {
         });
     }
 
+    /// Switch the remote seed, surfacing a failure instead of silently
+    /// keeping the old data under the new seed's name.
+    function setSeed(url) {
+        if (!backend) return;
+        nav.busy = true;
+        nav.error = "";
+        logos.watch(backend.setRemoteSeed(url), function (text) {
+            nav.busy = false;
+            var r = R.parse(text);
+            if (r.ok) {
+                nav.reset();
+            } else {
+                nav.error = "Cannot use " + url + ": " + r.error;
+                // Snap the picker back to the seed actually in use.
+                seedPicker.currentSeed = Qt.binding(function () {
+                    return root.caps.remoteSeed || "";
+                });
+                seedPicker.syncSelection();
+            }
+        }, function (err) {
+            nav.busy = false;
+            nav.error = String(err);
+        });
+    }
+
     /// Source-neutral call (getCapabilities, listKnownSeeds, setRemoteSeed).
     function callPlain(method, args, onOk) {
         if (!backend) return;
@@ -207,9 +232,13 @@ Item {
                             root.callPlain("listKnownSeeds", [], cb);
                         }
                         onSeedChosen: function (url) {
-                            root.callPlain("setRemoteSeed", [url], function () {
-                                nav.reset();
-                            });
+                            // setRemoteSeed validates the seed and reverts to
+                            // the previous one if it does not answer. Report
+                            // that and put the picker back, rather than leaving
+                            // it naming a seed whose data is not on screen —
+                            // plenty of preferred seeds run the p2p node
+                            // without the HTTP API.
+                            root.setSeed(url);
                         }
                     }
 

@@ -92,13 +92,23 @@ std::string RadicleImpl::listKnownSeeds()
         items.push_back({{"url", s[0]}, {"alias", s[1]}, {"source", "builtin"}});
     }
 
-    // A local config usually names the seeds this user actually prefers.
+    // Seeds from this machine's Radicle config. They are recorded as p2p
+    // addresses; whether the host also serves the HTTP API is a separate
+    // question, so they are labelled as the user's own rather than presented
+    // as equivalent to the public ones.
     for (const std::string& url : local().preferredSeedUrls()) {
         bool seen = false;
         for (const auto& existing : items)
             if (existing.value("url", "") == url) { seen = true; break; }
-        if (!seen)
-            items.push_back({{"url", url}, {"alias", url}, {"source", "config"}});
+        if (seen) continue;
+
+        // Show the bare host, not the scheme — "frog.royer.one", not
+        // "https://frog.royer.one".
+        std::string alias = url;
+        const std::string scheme = "https://";
+        if (alias.rfind(scheme, 0) == 0) alias = alias.substr(scheme.size());
+
+        items.push_back({{"url", url}, {"alias", alias}, {"source", "config"}});
     }
 
     return dump(nlohmann::json{{"items", items}});

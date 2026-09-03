@@ -142,11 +142,12 @@ Item {
         }
     }
 
-    Text {
-        anchors.centerIn: parent
-        visible: commits.count === 0 && tab.loadedOnce && !tab.loading
-        text: "No commits"
-        color: Theme.textDim
-        font.pixelSize: Theme.fontLg
+    LoadingState {
+        anchors.fill: parent
+        loading: tab.loading
+        loaded: tab.loadedOnce
+        count: commits.count
+        emptyText: "No commits"
+        loadingText: "Loading commits…"
     }
 }

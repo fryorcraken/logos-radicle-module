@@ -27,13 +27,14 @@ std::string envOr(const char* name, const std::string& fallback)
 }
 
 /**
- * Turn a `nid@host:port` seed spec from config.json into an HTTPS origin.
+ * Extract the host from a `nid@host:port` seed spec in config.json.
  *
- * Preferred seeds are recorded as peer-to-peer addresses (port 8776), but the
- * JSON API we proxy to is served over HTTPS on the same host. So we keep the
- * host and drop both the node id and the p2p port.
+ * Preferred seeds are recorded as peer-to-peer addresses (port 8776). The JSON
+ * API we proxy to is a *separate* service (radicle-httpd) on the same host over
+ * HTTPS — and plenty of seeds run the p2p node without it, so being listed here
+ * is no guarantee the API answers.
  */
-std::string seedSpecToHttpsOrigin(const std::string& spec)
+std::string seedSpecToHost(const std::string& spec)
 {
     std::string host = spec;
 
@@ -43,8 +44,7 @@ std::string seedSpecToHttpsOrigin(const std::string& spec)
     const size_t colon = host.find(':');
     if (colon != std::string::npos) host = host.substr(0, colon);
 
-    if (host.empty()) return {};
-    return "https://" + host;
+    return host;
 }
 
 } // namespace
@@ -131,8 +131,8 @@ std::vector<std::string> LocalStore::preferredSeedUrls() const
 
     for (const auto& entry : seeds) {
         if (!entry.is_string()) continue;
-        std::string origin = seedSpecToHttpsOrigin(entry.get<std::string>());
-        if (!origin.empty()) out.push_back(std::move(origin));
+        std::string host = seedSpecToHost(entry.get<std::string>());
+        if (!host.empty()) out.push_back("https://" + host);
     }
     return out;
 }

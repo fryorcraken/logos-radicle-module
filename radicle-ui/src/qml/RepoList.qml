@@ -213,15 +213,14 @@ Item {
         }
     }
 
-    // Empty state — only after a load has actually completed, so it never
-    // flashes over a list that is still arriving.
-    Text {
-        anchors.centerIn: parent
-        visible: repos.count === 0 && page.loadedOnce && !page.loading
-        text: (page.app && page.app.source === "local")
-              ? "No local repositories found"
-              : "No repositories matched"
-        color: Theme.textDim
-        font.pixelSize: Theme.fontLg
+    LoadingState {
+        anchors.fill: parent
+        loading: page.loading
+        loaded: page.loadedOnce
+        count: repos.count
+        emptyText: (page.app && page.app.source === "local")
+                   ? "No local repositories found"
+                   : "No repositories matched"
+        loadingText: "Loading repositories…"
     }
 }
