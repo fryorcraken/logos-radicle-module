@@ -179,6 +179,23 @@ re-derive the reasoning:
   `syncEpoch`/repo-switch semantics the same way `syncAll()` does, so a stale
   poll reply from a previous repository can't flip the indicator for the
   wrong repo.
+- **Review test coverage as part of M1.1**, not just for the new
+  branch-switching/staleness-detection code — the gaps this session's
+  pre-release review surfaced and deferred (see above: `nav.busy`/`nav.error`,
+  the actual `syncEpoch` race, `CommitView.qml`, `PatchesTab` click coverage)
+  are still open. Roll that follow-up pass into M1.1 rather than letting it
+  drift further.
+- **Favour data structure over code logic when closing those gaps.** Where a
+  coverage gap traces back to branchy, ad hoc guard logic repeated slightly
+  differently across `CommitsTab`/`IssuesTab`/`PatchesTab`/`ThreadView`
+  (the `wantRid`/`wantEpoch`-style staleness checks), prefer reshaping the
+  shared state so the invariant is structural — impossible to get wrong by
+  construction — over adding more test cases to pin down more branches. The
+  architecture review's flagged `IssuesTab`/`PatchesTab` duplication is the
+  concrete case in point: a well-chosen shared data shape for "list tab with
+  staleness guard" would make the guard correct everywhere at once, instead
+  of needing a dedicated regression test per component (as `CommitsTab`
+  needed this session).
 
 ### What is left, in order
 
