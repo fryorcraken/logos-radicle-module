@@ -80,9 +80,13 @@ Item {
     }
 
     /// Source-routed backend call. `method` is the suffix after remote/local.
-    function call(method, args, onOk, onFail) {
+    /// `source` defaults to "remote" — every call site today browses via a
+    /// seed node. Threading it through now, ahead of any caller actually
+    /// needing "local", is cheaper than retrofitting a source parameter
+    /// across every call site once M2 adds local-node browsing.
+    function call(method, args, onOk, onFail, source) {
         if (!backend) return;
-        var name = "remote" + method;
+        var name = (source || "remote") + method;
         if (typeof backend[name] !== "function") {
             nav.error = "unsupported operation: " + name;
             if (onFail) onFail();

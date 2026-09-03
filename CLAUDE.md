@@ -129,14 +129,14 @@ each:
   features. None of these are regressions from this session's work — they're
   pre-existing gaps the coverage review surfaced. Worth a follow-up pass,
   not a release blocker.
-- **Architectural note for M2, not urgent now:** `Main.qml`'s `call()`
-  hardcodes `"remote" + method` — every QML caller is wired to the `remote*`
-  source with no way to choose `local*`, even though the core module's
-  `local*` surface is already fully implemented and forwarded. Fine today
-  (there's no local-node UI yet), but when M2 adds one, every call site
-  threading through `Main.qml.call()` will need a `source` parameter added.
-  Cheaper to add that parameter now (default `"remote"`, no behaviour
-  change) than to retrofit it across seven files once M2 lands.
+- **Acted on now (cheap, zero behaviour change):** `Main.qml`'s `call()`
+  hardcoded `"remote" + method`, so every QML caller was wired to the
+  `remote*` source with no way to choose `local*`, even though the core
+  module's `local*` surface is already fully implemented and forwarded.
+  Added an optional `source` parameter (defaults to `"remote"`) — none of
+  the 13 existing call sites needed touching. Whoever builds M2's local-node
+  UI now has a parameter to pass instead of a hardcoded prefix to retrofit
+  across every caller.
 - **Flagged, not actioned:** `IssuesTab.qml`/`PatchesTab.qml` are near-
   identical (same fetch/cache/pagination shape, differing only in the status
   list and backend method name) — real duplication, but CLAUDE.md's stance
