@@ -30,6 +30,12 @@ Item {
     readonly property var meta: repo ? R.projectMeta(repo) : ({})
     readonly property string defaultBranch: repo ? (R.project(repo).defaultBranch || "") : ""
 
+    /// The branch Source and Commits are currently showing. Starts out bound
+    /// to defaultBranch; picking a branch (see BranchPicker below) replaces
+    /// that binding with a plain value, and onRidChanged restores it (see
+    /// there) so a new repository does not inherit the old one's pick.
+    property string branch: defaultBranch
+
     property int tab: 0
     property var loadedTabs: ({})
 
@@ -54,6 +60,17 @@ Item {
     onRidChanged: {
         tab = 0;
         loadedTabs = ({});
+        // Re-bind to the new repo's default branch. A plain assignment
+        // (branch = defaultBranch) would only copy today's value and leave
+        // `branch` a dead literal from then on; Qt.binding restores the live
+        // binding declared above, so a repo picked before its own repo
+        // object (and therefore defaultBranch) has arrived still ends up on
+        // the right branch once it does. Without this, picking a non-default
+        // branch on one repository and then opening a different one carried
+        // the old repo's branch NAME into the new repo — silently wrong
+        // rather than merely stale, since two repos rarely share branch
+        // names on purpose.
+        branch = Qt.binding(function () { return page.defaultBranch; });
         // Drop every tab's contents up front. Without this, switching repos
         // left the previous repo's commits/issues/patches on screen under the
         // new repo's header until each tab was re-opened.
@@ -63,6 +80,23 @@ Item {
         commits.reset();
         issues.reset();
         patches.reset();
+        branchPicker.rid = rid;
+        maybeLoad();
+    }
+
+    onBranchChanged: {
+        // Same principle as switching repository, one level down: the
+        // previously loaded tree/commits belong to the OLD branch and must
+        // not linger on screen — or worse, look current — while the new
+        // branch's data is in flight. Only source (tab 0) and commits
+        // (tab 1) are branch-scoped — issues and patches are repository-wide
+        // COBs with no branch concept — so only their loadedTabs entries are
+        // cleared, and only they refetch. Clearing all four would refetch
+        // issues/patches for no reason on every branch switch.
+        delete loadedTabs[0];
+        delete loadedTabs[1];
+        source.reset();
+        commits.reset();
         maybeLoad();
     }
 
@@ -201,23 +235,18 @@ Item {
                                      : "Download every file so browsing is instant")
                 }
 
-                // Branch chip.
-                Rectangle {
-                    visible: page.defaultBranch !== ""
-                    Layout.preferredWidth: branchText.implicitWidth + 20
-                    Layout.preferredHeight: 22
-                    radius: Theme.radiusPill
-                    color: Theme.surfaceAlt
-                    border.color: Theme.border
-                    border.width: 1
-                    Text {
-                        id: branchText
-                        anchors.centerIn: parent
-                        text: page.defaultBranch
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontSm
-                        font.family: Theme.mono
+                // Branch picker: which branch Source and Commits show.
+                BranchPicker {
+                    id: branchPicker
+                    objectName: "branchPicker"
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: page.rid !== ""
+                    currentBranch: page.branch
+                    fetchBranches: function (cb) {
+                        if (!page.app || page.rid === "") return;
+                        page.app.call("ListBranches", [page.rid], cb);
                     }
+                    onBranchChosen: function (name) { page.branch = name; }
                 }
             }
 
@@ -255,13 +284,13 @@ Item {
                         : page.openCommitSha !== "" ? page.commitIndex
                         : page.tab
 
-            SourceTab  { id: source;  app: page.app; rid: page.rid; branch: page.defaultBranch }
+            SourceTab  { id: source;  app: page.app; rid: page.rid; branch: page.branch }
 
             CommitsTab {
                 id: commits
                 app: page.app
                 rid: page.rid
-                branch: page.defaultBranch
+                branch: page.branch
                 onCommitActivated: function (sha) { page.openCommitSha = sha; }
             }
 
