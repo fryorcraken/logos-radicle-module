@@ -392,8 +392,73 @@ Read files with the `Read` tool, not `cat` or `grep` through Bash. This
 session's permission setup blocks Bash commands it cannot statically analyse —
 inline `VAR=value` prefixes, `sh <relative-path>`, `cd && grep <relative>` —
 and each one costs a prompt. The test scripts take no arguments and set their
-own environment for exactly this reason. Bash is for `nix`, `git`, `gh` and
-running those scripts by absolute path.
+own environment for exactly this reason. Bash is for `lgs`, `nix`, `git`, `gh`
+and running those scripts by absolute path.
+
+## This is a scaffold-managed project — reach for `lgs` first
+
+`scaffold.toml` at the root is a `logos-scaffold` (`lgs`, 0.3.0) config, and
+both modules are captured in it as `[modules.radicle]` / `[modules.radicle_ui]`
+with `role = "project"`. That means the build, install, launch and dev-shell
+paths all have an `lgs` verb, and reaching straight for `nix build` skips the
+part scaffold does for you — resolving each module's flake ref, ordering the
+two builds by dependency, and deriving the sibling `--override-input`.
+
+| Instead of | Run |
+|---|---|
+| `cd radicle && nix build '.#lgx'` (both modules, then `lgpm install`) | `lgs basecamp install` |
+| the two-line portable build below | `lgs basecamp build-portable` |
+| `nix build '.#lgx'` just to check it compiles | `lgs basecamp build --variant lgx [--module radicle_ui]` |
+| `nix develop` in a module dir | `lgs basecamp develop radicle_ui` |
+| launching Basecamp by hand | `lgs basecamp launch alice` |
+
+`lgs basecamp paths alice` prints where that profile's log, module and XDG dirs
+actually resolve to — quicker than guessing when a log is not where you expect.
+`lgs basecamp doctor` reports drift between `[modules.*]` and the installed
+profiles.
+
+Two things `lgs` deliberately does **not** cover, both kept as raw `nix` below:
+the core module's unit tests (`nix build '.#checks…'` — no `lgs` equivalent),
+and the inspector-enabled Basecamp bundle for sitometres (a third-party flake
+plus a workaround for a sitometres probe bug — outside scaffold's scope). CI
+also stays on explicit `nix build` calls on purpose: it needs per-step
+`--out-link` names and `--print-build-logs`, and per-sub-flake jobs give useful
+matrix parallelism. Do not convert `.github/workflows/`.
+
+### The bundled `basecamp` skill is stale — do not trust it over this file
+
+`lgs init` generates `.claude/skills/`, `.cursor/` and `AGENTS.md`, and
+`.gitignore` excludes all three: they are regenerated, not checked in, so
+hand-edits there do not survive and cannot be reviewed in a PR. As of
+scaffold 0.3.0 the shipped `basecamp` skill is behind the CLI in two ways
+worth knowing, because it will actively mislead you:
+
+- It documents the schema as `[basecamp.modules.<name>]` throughout, including
+  its own activation criteria. The real 0.3.0 schema — and what this repo's
+  `scaffold.toml` uses — is top-level `[modules.<name>]`. `lgs basecamp
+  develop --help` confirms it. `lgs init` migrates the legacy keys.
+- It omits `develop`, `build`, `run` and `paths` entirely, so it reads as if
+  `install` / `launch` / `build-portable` were the whole verb set and raw
+  `nix` were the only way to do anything else. The table above is the current
+  surface; `lgs basecamp --help` is authoritative.
+
+Fixing this belongs upstream in logos-scaffold's shipped skill template, not
+here — there is nothing in this repo to patch.
+
+### If you are working in a git worktree
+
+A worktree has no `.scaffold/` — that directory is untracked, so it does not
+come along. `lgs basecamp doctor` there fails on missing basecamp/lgpm binaries
+and missing `alice`/`bob` profiles until you run `lgs basecamp setup` in the
+worktree itself.
+
+What it does **not** mean is that you are building the main tree's code.
+`scaffold.toml`'s module refs are relative (`path:./radicle#lgx`), and `lgs`
+resolves them against the project root it was invoked from — so from a
+worktree, `install` and `build-portable` build that worktree's sources. The
+consequence is isolation, not a wrong-code hazard: the worktree's
+`launch alice` is a *separate* Basecamp instance with its own profile state,
+not the one the main tree launches.
 
 ## Tests are part of the change, not a follow-up
 
@@ -489,6 +554,10 @@ Pick the cheapest layer that can actually see the behaviour you changed.
 | QML component tests | `radicle-ui/tests/tst_*.qml` | `sh radicle-ui/tests/run-qml-tests.sh` | One component in isolation: selection state, layout invariants, load ordering |
 | End-to-end UI specs | `radicle-ui/tests/ui/*.yaml` | `npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml` | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
 
+The unit-test row is raw `nix` on purpose — `lgs` has no verb for a flake's
+`checks` outputs. Everything *building* the modules goes through `lgs` instead;
+see the tooling note above.
+
 Logic that does not need a view belongs in the core module, where it is testable
 without Qt at all. A component test is the right layer for anything one QML file
 decides on its own. Reach for a sitometres spec when the thing that broke was
@@ -560,11 +629,30 @@ from any checkout instead of needing this note.
 Stage the **portable** modules, and say so explicitly:
 
 ```bash
-cd radicle    && nix build '.#lgx-portable'
-cd radicle-ui && nix build '.#lgx-portable' --override-input radicle path:../radicle
+lgs basecamp build-portable
+# artefacts: .scaffold/basecamp/portable/<NN>-<module>.lgx (symlinks, wiped each run)
 # then, from the repo root, with both .lgx copied into dist/
 --variant linux-amd64
 ```
+
+This replaces the two hand-written `nix build '.#lgx-portable'` calls this
+section used to prescribe. It builds both `role = "project"` modules in
+dependency order and **derives the `--override-input radicle path:<abs>`
+itself**, by reading `radicle-ui/flake.nix` — which is why that input must stay
+on one line:
+
+```nix
+radicle.url = "path:../radicle";
+```
+
+Scaffold's sibling-override parser is line-based. Flattening this into the
+multi-line `inputs.radicle = { url = "…"; };` form is not a syntax error and
+nothing warns: the override silently stops applying, and `radicle-ui` gets
+built against the locked pin instead of the working tree. If a portable build
+mysteriously ships stale core-module behaviour, check this line first.
+
+(`build-portable` is an alias for `build --variant lgx-portable`. Use
+`lgs basecamp build --module radicle_ui` when you only want one of them.)
 
 sitometres unpacks one platform variant from the `.lgx` and defaults to
 `linux-amd64-dev`, which suits the dev app (`#app`) but not the bundle. The
