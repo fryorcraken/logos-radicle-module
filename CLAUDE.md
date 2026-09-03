@@ -635,6 +635,19 @@ lgs basecamp build-portable
 --variant linux-amd64
 ```
 
+**Why the copy into `dist/`.** There is no `--dist` flag; sitometres takes one
+`--app-dir` search root (default: cwd) and discovers `<app-dir>/dist/*.lgx`.
+This is a monorepo, so the two modules build into two separate sub-flake
+`result-*` symlinks and no pre-existing directory holds both — and both must be
+discoverable, because `browse.yaml` declares `with: [radicle]`. Collecting them
+into one directory is the whole reason for the copy.
+
+`lgs basecamp build-portable` already collects both into one directory, so it
+may remove the copy outright — but its filenames carry an `<NN>-` prefix and
+its entries are symlinks into `/nix/store`, and whether discovery tolerates
+either is unverified. Confirm with a real run before rewriting this block;
+getting it wrong fails silently, as a spec timing out on step 1.
+
 This replaces the two hand-written `nix build '.#lgx-portable'` calls this
 section used to prescribe. It builds both `role = "project"` modules in
 dependency order and **derives the `--override-input radicle path:<abs>`
