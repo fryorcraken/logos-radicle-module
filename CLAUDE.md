@@ -124,6 +124,47 @@ straight into issues/patches using the same `Issues::open`/`Patches::open`
 + `NoCache` pattern — there's no architectural reason to stop, only a budget
 one.
 
+### M2.1 progress — the FFI crate exists, nothing calls it yet
+
+`radicle/rust-ffi/` is real and on a branch (PR #3, draft). What is true
+today, so nobody re-derives it:
+
+- **`local::get_repo` and `local::list_repos` work**, matching
+  `remoteGetRepo`/`remoteListRepos`'s JSON shape as pinned by
+  `test_seed_client.cpp`. Compiles clean, 7 tests pass via `cargo test`.
+- **Reading needs no passphrase** — only `keys/radicle.pub` is read.
+  `UserInfo.key` is used when *signing*, which this never does, so the
+  private key stays encrypted and untouched. Confirmed empirically, not
+  assumed: the test fixtures init a profile with `None` for the passphrase
+  and the read path works against it.
+- **`radicle 0.25.1` / `radicle-oid 0.2.2` need no pin.** The
+  `radicle = "0.24"` / radicle-oid 0.2.0 gotcha in memory does not apply
+  to this version line.
+- **Nothing calls it.** `radicle_impl.h`'s `local*` methods still all
+  return `localUnavailable()`. There is no behaviour change for a user,
+  and **CI does not build Rust at all** — no workflow runs `cargo`,
+  `radicle/CMakeLists.txt` has no Rust reference, and `metadata.json`'s
+  `extra_link_libraries`/`extra_include_dirs` are still empty. A green CI
+  run on that PR says nothing about this crate; the tests are advisory
+  until a `cargo test` job exists.
+- **Still to write**: tree/blob/commit reads, then issues/patches via
+  `Issues::open`/`Patches::open` + `NoCache`, then `scope` filtering in
+  `list_repos` (accepted for shape parity, currently ignored).
+- **Build wiring is the risky follow-up**, deliberately left out to keep
+  the PR reviewable: a `rustPlatform.buildRustPackage` derivation in
+  `radicle/flake.nix` adds a Rust toolchain to a Nix build that has none,
+  which affects build time and the binary cache. That deserves its own PR
+  and its own CI run.
+
+A note on testing this crate, learned the hard way: the rescued code came
+with `SMOKE_*`-env-gated tests that returned early when the var was unset,
+so `cargo test` went green having executed none of the code under test —
+the same false-green shape recorded for `qmltestrunner`. They were
+replaced with fixtures built through the crate's *public* API. When adding
+coverage here, verify it fails when it should: breaking `local.rs` on
+purpose and watching the assertion go red takes a minute and is the only
+thing that distinguishes a real test from a skip.
+
 ## Status — 2026-09-03
 
 ### What landed this session
