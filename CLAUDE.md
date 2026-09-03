@@ -1,5 +1,117 @@
 # Working on this repository
 
+## M2.1 — scope and FFI decision, 2026-09-03
+
+M2.1 = read-only local-node browsing: mirror every `remote*` method with a
+working `local*` implementation, reading `~/.radicle` in-process instead of
+proxying to a seed over HTTP. `radicle_impl.h`'s doc comment already commits
+to the hard constraint: a repo from `remoteGetRepo` and `localGetRepo` must
+deserialize identically, so a view renders either without branching.
+
+### FFI approach: a Rust staticlib with a flat `extern "C"` string API, not `cxx`
+
+There is no Rust anywhere in this repo yet — no `Cargo.toml`, no hints in
+`radicle/flake.nix`, `radicle/CMakeLists.txt` or `metadata.json`'s
+`nix.cmake.extra_link_libraries`. This is a from-scratch FFI boundary.
+
+Considered `cxx` (typed C++/Rust interop, codegen'd bridge) vs a plain
+`cbindgen`-style C header over a `staticlib`. Chose the latter: every existing
+module method is already `std::string in, std::string out` JSON — see
+`radicle_impl.h`'s own conventions section, "returning JSON keeps the
+radicle crate's churn behind this wall." `cxx` buys typed struct marshalling
+across the boundary, which is exactly the thing this codebase has deliberately
+avoided needing. A flat API matches the existing shape with the least new
+machinery:
+
+```c
+// caller owns nothing until it gets a pointer back; frees it with
+// radicle_free_string. NULL home = not found via RAD_HOME/HOME (mirrors
+// LocalStore's own env lookup, so behaviour stays identical if both live for
+// a while).
+char* radicle_local_list_repos(const char* home, const char* scope,
+                                int64_t page, int64_t per_page);
+char* radicle_local_get_repo(const char* home, const char* rid);
+// ...one function per local* method, same signature shape as radicle_impl.h.
+void  radicle_free_string(char* s);
+```
+
+The Rust side builds the JSON itself (via `serde_json`, matching the shapes
+below) and returns a `CString::into_raw()` pointer; `radicle_free_string`
+calls `CString::from_raw` to drop it. `local_store.cpp` calls these from a new
+`radicle::LocalRepoReader` (or similar) that owns the FFI boundary, the same
+way `SeedClient` owns the HTTP boundary — `radicle_impl.cpp` should not call
+`extern "C"` functions directly.
+
+Nix wiring (not yet built, this is the plan): a `rustPlatform.buildRustPackage`
+derivation in `radicle/flake.nix` producing the staticlib, added to
+`metadata.json`'s `nix.cmake.extra_link_libraries` /
+`nix.cmake.extra_include_dirs` (that extension point already exists in
+`metadata.json`'s schema, unused today — this is what it's for) so
+`logos_module()`'s `LINK_LIBRARIES` picks it up. `radicle/CMakeLists.txt`
+gets a `radicle_ffi.h` (cbindgen-generated, checked in rather than
+generated-at-configure-time so the header is reviewable) alongside the
+existing sources.
+
+**Known gotcha, unconfirmed whether still live**: a prior memory recorded
+`radicle = "0.24"` failing to build until `radicle-oid` was pinned to
+`0.2.0`. Checked crates.io/GitHub as of this session: `radicle` is now at
+`0.25.1` and `radicle-oid` at `0.2.2` upstream — the pin this module needs, if
+any, has to be re-verified empirically against whatever `Cargo.lock` resolves
+to; do not assume the old pin still applies to the new version line.
+
+### Reading local storage — confirmed against heartwood source (crates/radicle, tag matching v0.25.1)
+
+- **Git-native (repos, tree, blob, commit)**: `radicle::storage::git::Storage::open(path, info: UserInfo)`
+  opens the profile's storage root (no signer, no passphrase — `UserInfo` is
+  config, not a key). `storage.repository(rid) -> Repository` opens one repo;
+  `Repository` wraps a `git2::Repository` (`.backend`) plus helpers for refs,
+  head, tree, blob, commit — all `ReadRepository` trait methods, all
+  read-only. This is genuinely "a few more calls on the same object", same
+  complexity class as what `SeedClient` already does over HTTP.
+- **COBs (issues, patches)**: NOT plain git objects — each COB is a DAG of
+  signed operations under `refs/cobs/<typename>/<id>/...`, replayed
+  (`Evaluate`) into current state. The crate does the replay for you:
+  `radicle::cob::issue::Issues::open(&repository, ReadOnly)` then `.get(&id)`
+  / `.all()` (via `Deref` to `store::Store`) — confirmed in
+  `crates/radicle/src/cob/issue.rs`. `radicle::cob::patch::Patches::open`
+  mirrors it exactly (`crates/radicle/src/cob/patch.rs`). Critically,
+  `store::access::ReadOnly` is a zero-field unit struct requiring no signer
+  (`crates/radicle/src/cob/store/access.rs`) — read access needs only a
+  `&Repository`, so this works fully offline with no passphrase prompt.
+- **The SQLite cache (`radicle::cob::issue::cache::Cache` /
+  `cob::cache::StoreReader`/`StoreWriter`) is NOT required for correctness.**
+  `Cache<..., cache::NoCache>` exists specifically as a direct-read path —
+  `NoCacheIter` walks `store.all()`/`store.get()` straight off git refs, no
+  DB involved (confirmed in `crates/radicle/src/cob/issue/cache.rs`,
+  `impl Issues for Cache<..., cache::NoCache>`). Use `NoCache` for M2.1: it
+  avoids owning a SQLite file's lifecycle/location entirely. The real `rad`
+  CLI's on-disk cache (`~/.radicle/cache/cobs.db`) is a read-through
+  optimization for its own use, not a dependency other readers need.
+- Net effect: **COB reading is not the separate subsystem it looked like
+  from the outside.** No `automerge` crate knowledge needed, no custom
+  signature-verification code to write — `Issue`/`Patch` (the replayed
+  state structs) come out with fields matching what `remoteGetIssue`/
+  `remoteGetPatch` already expose (title, description, state, thread/
+  comments for issues; revisions/reviews for patches). The actual open
+  question is JSON *shape* matching, not read mechanics — `radicle-httpd`
+  (which produces the `remote*` shapes) lives in a separate repo, not in
+  this heartwood checkout, so its exact serde output wasn't directly
+  confirmed this session. Match `test_seed_client.cpp`'s fixture JSON
+  (`radicle/tests/test_seed_client.cpp`, `kRepoJson` etc.) empirically
+  against real local output once a repo is available to compare, rather
+  than guessing radicle-httpd's serialization from first principles.
+
+### Sequencing: repos + tree + blob + commits first, issues + patches as a flagged follow-up if time runs out
+
+Not because COBs are hard — the research above says they're not
+meaningfully harder than git-native reads — but because there's more total
+surface (two more list+get method pairs, two more JSON shapes to match, two
+more sets of unit tests) and this is one session. Build and land git-native
+`local*` completely and tested first; if session time remains, continue
+straight into issues/patches using the same `Issues::open`/`Patches::open`
++ `NoCache` pattern — there's no architectural reason to stop, only a budget
+one.
+
 ## Status — 2026-09-03
 
 ### What landed this session
