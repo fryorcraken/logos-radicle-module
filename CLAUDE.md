@@ -197,21 +197,65 @@ re-derive the reasoning:
   of needing a dedicated regression test per component (as `CommitsTab`
   needed this session).
 
-### What is left, in order
+### M1 shipped — status as of 2026-09-03
 
-1. **Commit and push** to both remotes: `git push origin main` and
-   `git push rad main`.
-2. **Release CI**: `ci.yml` already has a `release` job attaching `.lgx`
-   artefacts on a `v*` tag, but it has never run. Check it produces both
-   portable and `-dev` variants.
-3. **Cut the first release** and confirm the assets are attached.
-4. **Register in the catalog.** The fork already exists at
-   `fryorcraken/logos-modules` (from `logos-co/logos-modules-release-base`).
-   Still to do: edit its `logos-repo.json` (replace every `CHANGE-ME`, point
-   `indexUrl` at the fork), run `./scripts/add-module.sh` for this repo, then
-   run its **Release all modules** workflow.
-5. **Hand over the catalog URL** for prod Basecamp:
+1. ✅ **Committed and pushed** to both remotes.
+2. ✅ **Release CI verified**: `ci.yml`'s `release` job ran for real on the
+   `v0.1.0` tag and attached all four expected `.lgx` artefacts (both
+   modules, portable + `-dev` each).
+3. ✅ **First release cut**: `v0.1.0`, assets confirmed at
+   `https://github.com/fryorcraken/logos-radicle-module/releases/tag/v0.1.0`.
+4. ✅ **Registered in the catalog.** The fork at `fryorcraken/logos-modules`
+   is set up: `logos-repo.json` edited, both modules released
+   (`radicle-v0.1.0`, `radicle_ui-v0.1.0`), index rebuilt and confirmed to
+   list both. **One real snag along the way, worth knowing if this repo's
+   layout is ever copied**: `logos-radicle-module` is a monorepo (two
+   modules, `radicle/` and `radicle-ui/`, under one git repo) but the
+   catalog's release-action `@v1` tag can only handle `module_path` pointing
+   at a submodule's *root* — it fails checkout with "pathspec did not match
+   any file(s) known to git" for any `module_path` that's a subdirectory of
+   a submodule. The fix (`module_path` may point inside a submodule) exists
+   on the action's `master` branch
+   (`logos-co/logos-modules-release-action@974960591a8d`) but isn't in a
+   tagged `v1.x` yet — the catalog's `_release-module.yml` is pinned to that
+   exact commit rather than a moving ref. **Re-pin to a tagged `v1.x` once
+   the fix ships in one.** Also: `release-all.yml`'s auto-discovery reads
+   module paths straight from `.gitmodules` submodule paths, so it can't see
+   the two modules inside one submodule either — `radicle` and `radicle_ui`
+   each need their own manually-triggered workflow
+   (`release-radicle.yml`, `release-radicle_ui.yml`), not the umbrella.
+5. ✅ **Catalog URL handed over** — ready to add to Basecamp:
    `https://raw.githubusercontent.com/fryorcraken/logos-modules/main/logos-repo.json`
+
+### M1.1 and M2.1 — in progress in separate worktrees
+
+Both started 2026-09-03, each in its own git worktree/branch, isolated from
+`main` and from each other:
+
+- **M1.1** (branch switching, sync staleness detection, the deferred
+  test-coverage follow-up from the pre-release review — see the M1.1 section
+  above for full scope): in progress. First commit landed —
+  `Main.qml`'s `nav.busy`/`nav.error` state extracted into a dedicated,
+  tested `NavState` component, closing the first deferred coverage gap via
+  structural extraction rather than just adding test cases (the
+  data-structure-over-logic principle noted above). Instructed to push and
+  open a draft PR once at a good stopping point, and to watch/fix its own
+  CI rather than leave it red.
+- **M2.1** (read-only local-node browsing — the `local*` API surface already
+  declared in `radicle_impl.h` is fully stubbed, returning
+  `localUnavailable()` unconditionally; `LocalStore` only does filesystem/
+  socket *detection*, no actual reading of `~/.radicle/storage`; there is no
+  Rust/FFI integration in this module at all yet). This is real, from-scratch
+  work — a new FFI boundary into the `radicle` crate, plus reading git-native
+  data (repos/trees/blobs/commits) and COBs (issues/patches, which need the
+  crate's COB machinery, not just git). Scoped as: design/scope first
+  (FFI approach, how COBs get read, whether full parity fits one session or
+  issues+patches become a flagged follow-up), then implement bottom-up
+  (Rust/C++ core proven with tests before any QML wiring). `Main.qml.call()`
+  already has the `source` parameter needed for QML call sites to eventually
+  pass `"local"` (added this session, see above). **M2.2** (write actions —
+  issues/patches/comments, a GitHub-Desktop-style workflow) is a planning
+  task for later, explicitly out of scope for the M2.1 agent.
    — unverified until step 4 is done.
 
 **M2 (local-node browsing) is explicitly out of scope until the user has
