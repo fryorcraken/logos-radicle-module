@@ -186,6 +186,36 @@ Item {
             compare(picker.currentIndex, 1);
         }
 
+        function test_a_fetcher_that_bails_out_leaves_it_retryable() {
+            // The real failure: the picker's load triggers all fire before the
+            // QtRO replica exists, so the fetcher returns without ever calling
+            // back. The earlier test injected a fetcher that replied
+            // synchronously, so it never exercised this path and the dropdown
+            // stayed empty in the running app while the test passed.
+            picker.loaded = false;
+            var attempts = 0;
+            picker.fetchSeeds = function (cb) {
+                attempts++;
+                // Backend not ready: return without invoking cb, as
+                // Main.qml's callPlain does when `backend` is null.
+            };
+            picker.reload();
+            compare(attempts, 1);
+            compare(picker.count, 0);
+
+            // Once the backend is live the app clears `loaded` and retries;
+            // without that the picker never loads at all.
+            picker.loaded = false;
+            picker.fetchSeeds = function (cb) {
+                attempts++;
+                cb({ items: [{ url: "https://a.test", alias: "a" },
+                             { url: "https://b.test", alias: "b" }] });
+            };
+            picker.reload();
+            compare(attempts, 2);
+            compare(picker.count, 2);
+        }
+
         function test_an_empty_reply_leaves_it_retryable() {
             picker.loaded = false;
             picker.fetchSeeds = function (cb) { cb({ items: [] }); };

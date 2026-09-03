@@ -1,4 +1,5 @@
 import QtQuick
+import "Theme.js" as Theme
 
 /// Coloured pill for an issue/patch state (open, closed, merged, draft…).
 /// Colour AND text, never colour alone.

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "Theme.js" as Theme
 
 /// Themed text input. Wrapped so every field looks the same and the focus
 /// ring is consistent.

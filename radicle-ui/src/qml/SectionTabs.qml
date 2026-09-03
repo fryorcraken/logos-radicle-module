@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "Theme.js" as Theme
 
 /*
  * Repo section tabs (Source / Commits / Issues / Patches).

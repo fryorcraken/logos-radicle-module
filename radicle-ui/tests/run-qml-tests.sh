@@ -67,6 +67,11 @@ if ! QT_QPA_PLATFORM=offscreen "$runner" -input "$smoke/tst_smoke.qml" >/dev/nul
 fi
 
 echo "qml tests: using $runner"
-exec env QT_QPA_PLATFORM=offscreen "$runner" \
-    -input "$here/tst_components.qml" \
-    -import "$qml_dir"
+# Every tst_*.qml in this directory, so a new test file is picked up without
+# editing this script.
+status=0
+for spec in "$here"/tst_*.qml; do
+    echo "--- $(basename "$spec")"
+    QT_QPA_PLATFORM=offscreen "$runner" -input "$spec" -import "$qml_dir" || status=1
+done
+exit "$status"

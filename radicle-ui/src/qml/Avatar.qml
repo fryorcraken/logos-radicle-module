@@ -1,5 +1,6 @@
 import QtQuick
 import "Radicle.js" as R
+import "Theme.js" as Theme
 
 /// Identicon-style square. Rendered locally from the id — the QML sandbox
 /// blocks remote images, so there are no avatar URLs to fetch.

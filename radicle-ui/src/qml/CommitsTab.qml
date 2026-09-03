@@ -2,9 +2,14 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
+import "Theme.js" as Theme
 
 Item {
     id: tab
+
+    // A StackLayout child: must fill, or it is sized 0x0.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
     property var app: null
     property string rid: ""
     property string branch: ""
@@ -18,8 +23,13 @@ Item {
     /// Commits currently listed — read by the UI tests.
     readonly property int count: commits.count
 
+    /// Clear without fetching — used when the repository changes.
+    function reset() {
+        page_ = 0; commits.clear(); loadedOnce = false; hasMore = false; loading = false;
+    }
+
     function load() {
-        page_ = 0; commits.clear(); loadedOnce = false; fetch();
+        reset(); fetch();
     }
 
     function fetch() {

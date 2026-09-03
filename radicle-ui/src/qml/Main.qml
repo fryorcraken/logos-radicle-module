@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
+import "Theme.js" as Theme
 
 /*
  * Radicle browser.
@@ -23,6 +24,13 @@ Item {
 
     implicitWidth: 1000
     implicitHeight: 700
+
+    // Basecamp sizes the root itself (QQuickWidget + SizeRootObjectToView),
+    // and parents it into a *widget* layout, so QML Layout attached properties
+    // on the root have no attachee and are inert. Kept only for the case where
+    // this view is embedded in a QML layout instead.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
 
     // ---- backend wiring ---------------------------------------------------
 
@@ -47,7 +55,7 @@ Item {
         function onViewModuleReadyChanged(moduleName, isReady) {
             if (moduleName === "radicle_ui") {
                 root.ready = isReady && root.backend !== null;
-                if (root.ready) nav.reset();
+                if (root.ready) root.onBackendReady();
             }
         }
     }
@@ -56,7 +64,17 @@ Item {
         ready = backend !== null
                 && (typeof logos !== "undefined")
                 && logos.isViewModuleReady("radicle_ui");
-        if (ready) nav.reset();
+        if (ready) onBackendReady();
+    }
+
+    /// Everything that needs a live QtRO replica. The seed picker's own load
+    /// triggers (Component.onCompleted, onFetchSeedsChanged) all fire before
+    /// the replica exists, so its fetch bails out and the dropdown stays empty
+    /// forever — it has to be retried from here.
+    function onBackendReady() {
+        seedPicker.loaded = false;
+        seedPicker.reload();
+        nav.reset();
     }
 
     /// Source-routed backend call. `method` is the suffix after remote/local.

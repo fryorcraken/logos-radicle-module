@@ -1,4 +1,5 @@
 import QtQuick
+import "Theme.js" as Theme
 
 /*
  * Thin strip under the top bar for loading / error state.

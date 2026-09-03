@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "Theme.js" as Theme
 
 /*
  * Plain monospace file viewer.
@@ -14,6 +15,10 @@ Rectangle {
 
     property string title: ""
     property string body: ""
+    /// While true the pane shows a loading state instead of `body`. Without
+    /// this a click on a new file left the PREVIOUS file's text on screen
+    /// until the reply arrived, which reads as "this is that file".
+    property bool loading: false
 
     color: Theme.bg
 
@@ -52,7 +57,8 @@ Rectangle {
             clip: true
 
             TextArea {
-                text: viewer.body
+                visible: !viewer.loading
+                text: viewer.loading ? "" : viewer.body
                 readOnly: true
                 selectByMouse: true
                 wrapMode: TextArea.NoWrap
@@ -68,7 +74,15 @@ Rectangle {
 
     Text {
         anchors.centerIn: parent
-        visible: viewer.body === ""
+        visible: viewer.loading
+        text: "Loading…"
+        color: Theme.textDim
+        font.pixelSize: Theme.fontLg
+    }
+
+    Text {
+        anchors.centerIn: parent
+        visible: !viewer.loading && viewer.body === ""
         text: "Select a file"
         color: Theme.textFaint
         font.pixelSize: Theme.fontLg

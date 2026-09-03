@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
+import "Theme.js" as Theme
 
 /*
  * One repository: source tree, commits, issues and patches.
@@ -11,6 +12,12 @@ import "Radicle.js" as R
  */
 Item {
     id: page
+
+    // Placed directly in Main.qml's StackLayout. A plain Item has no
+    // implicit size, so without these the layout hands it 0x0 and every
+    // row draws at y=0 — the whole view collapses onto one line.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
 
     property var app: null
     property string rid: ""
@@ -33,6 +40,13 @@ Item {
     onRidChanged: {
         tab = 0;
         loadedTabs = ({});
+        // Drop every tab's contents up front. Without this, switching repos
+        // left the previous repo's commits/issues/patches on screen under the
+        // new repo's header until each tab was re-opened.
+        source.reset();
+        commits.reset();
+        issues.reset();
+        patches.reset();
         maybeLoad();
     }
 

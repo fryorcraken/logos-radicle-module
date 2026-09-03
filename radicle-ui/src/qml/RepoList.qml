@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
+import "Theme.js" as Theme
 
 /*
  * Repository browser. Under "Any repo" this searches every repo the seed
@@ -10,6 +11,12 @@ import "Radicle.js" as R
  */
 Item {
     id: page
+
+    // Placed directly in Main.qml's StackLayout. A plain Item has no
+    // implicit size, so without these the layout hands it 0x0 and every
+    // row draws at y=0 — the whole view collapses onto one line.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
 
     /// Injected by Main.qml: owns backend call routing and source selection.
     property var app: null
@@ -88,6 +95,8 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                 }
 
+                // Name + description. Takes all the slack so the stat columns
+                // that follow are pushed to a consistent right-hand edge.
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
@@ -123,40 +132,41 @@ Item {
                     }
                 }
 
-                // Right-hand stats. Fixed widths so the column does not
-                // shimmy as counts change between rows.
-                RowLayout {
-                    spacing: Theme.gapLg
-                    Layout.alignment: Qt.AlignVCenter
+                // Stat columns. Each occupies a FIXED width and is always
+                // present (an absent value renders as a dash), so the three
+                // columns land on the same x on every row and read as a table.
+                // Sizing them to content, or hiding empty ones, made every row
+                // place them differently.
+                Repeater {
+                    model: [
+                        { label: "issues",  value: R.projectMeta(repo).issues
+                                                   ? R.projectMeta(repo).issues.open : -1 },
+                        { label: "patches", value: R.projectMeta(repo).patches
+                                                   ? R.projectMeta(repo).patches.open : -1 },
+                        { label: "seeds",   value: repo.seeding !== undefined
+                                                   ? repo.seeding : -1 }
+                    ]
+                    delegate: ColumnLayout {
+                        required property var modelData
+                        spacing: 0
+                        Layout.preferredWidth: Theme.statColumn
+                        Layout.minimumWidth: Theme.statColumn
+                        Layout.maximumWidth: Theme.statColumn
+                        Layout.alignment: Qt.AlignVCenter
 
-                    Repeater {
-                        model: [
-                            { label: "issues",  value: R.projectMeta(repo).issues
-                                                       ? R.projectMeta(repo).issues.open : -1 },
-                            { label: "patches", value: R.projectMeta(repo).patches
-                                                       ? R.projectMeta(repo).patches.open : -1 },
-                            { label: "seeds",   value: repo.seeding !== undefined
-                                                       ? repo.seeding : -1 }
-                        ]
-                        delegate: ColumnLayout {
-                            required property var modelData
-                            visible: modelData.value >= 0
-                            spacing: 0
-                            Layout.preferredWidth: 52
-                            Text {
-                                text: modelData.value >= 0 ? modelData.value : ""
-                                color: Theme.text
-                                font.pixelSize: Theme.fontMd
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.fillWidth: true
-                            }
-                            Text {
-                                text: modelData.label
-                                color: Theme.textFaint
-                                font.pixelSize: Theme.fontXs
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.fillWidth: true
-                            }
+                        Text {
+                            text: modelData.value >= 0 ? modelData.value : "–"
+                            color: modelData.value > 0 ? Theme.text : Theme.textFaint
+                            font.pixelSize: Theme.fontMd
+                            horizontalAlignment: Text.AlignRight
+                            Layout.fillWidth: true
+                        }
+                        Text {
+                            text: modelData.label
+                            color: Theme.textFaint
+                            font.pixelSize: Theme.fontXs
+                            horizontalAlignment: Text.AlignRight
+                            Layout.fillWidth: true
                         }
                     }
                 }

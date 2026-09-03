@@ -137,9 +137,13 @@ jobs:
         run: |
           export QT_QPA_PLATFORM=offscreen
           sh radicle-ui/tests/run-qml-tests.sh | tee /tmp/qml-tests.log
-          # Belt and braces: assert the run actually reported totals, so a
-          # runner that exits 0 having done nothing cannot pass either.
-          grep -qE "^Totals: [0-9]+ passed" /tmp/qml-tests.log
+          # Belt and braces: assert every spec actually reported totals, so a
+          # runner that exits 0 having done nothing cannot pass either. The
+          # counts must also match the number of tst_*.qml files present.
+          specs=$(ls radicle-ui/tests/tst_*.qml | wc -l)
+          totals=$(grep -cE "^Totals: [0-9]+ passed" /tmp/qml-tests.log || true)
+          echo "spec files: $specs, Totals lines: $totals"
+          test "$totals" -eq "$specs"
 
   # The end-to-end UI specs need a Basecamp built with the QML inspector (a
   # compile-time feature, off in shipping builds), so running them in CI means

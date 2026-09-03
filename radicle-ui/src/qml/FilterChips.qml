@@ -1,4 +1,5 @@
 import QtQuick
+import "Theme.js" as Theme
 
 /*
  * State filter row (open / closed, or open / merged / archived / draft).

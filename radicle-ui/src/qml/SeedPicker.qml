@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "Theme.js" as Theme
 
 // Which seed node the remote source proxies to. The list comes from the core
 // module, which merges the built-in public seeds with any preferredSeeds found
@@ -32,6 +33,8 @@ ComboBox {
     function reload() {
         if (!fetchSeeds || loaded)
             return;
+        // Optimistically mark as loaded; cleared again below if the reply is
+        // empty, so a failed attempt can be retried.
         loaded = true;
         fetchSeeds(function (data) {
             seedModel.clear();

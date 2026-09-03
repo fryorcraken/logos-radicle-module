@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
+import "Theme.js" as Theme
 
 /*
  * File tree on the left, README or the selected file on the right.
@@ -16,6 +17,10 @@ import "Radicle.js" as R
 Item {
     id: tab
 
+    // A StackLayout child: must fill, or it is sized 0x0.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
+
     property var app: null
     property string rid: ""
     property string branch: ""
@@ -24,21 +29,57 @@ Item {
     property string path: ""
     property string selectedFile: ""
 
-    /// path -> content, so revisiting a file is instant.
+    /// Caches are keyed by rid + branch + path, never by path alone: a bare
+    /// path collides across repositories, which served one repo's README as
+    /// another's. Clearing on repo change is not sufficient by itself, because
+    /// a reply already in flight lands after the clear.
     property var blobCache: ({})
-    /// path -> entries array, so going back up a directory is instant.
     property var treeCache: ({})
+
+    /// Keys currently being fetched, so a click during a hover-prefetch does
+    /// not start a second identical request.
+    property var inFlight: ({})
+
+    function cacheKey(path) {
+        return rid + "\u0000" + branch + "\u0000" + path;
+    }
 
     ListModel { id: entries }
 
     /// Entries in the current directory — read by the UI tests.
     readonly property int entryCount: entries.count
 
-    function load() {
+    /// Drop everything from the previous repository without fetching.
+    /// Called when the repo changes, so no stale tree or file is on screen
+    /// while the new repo's data is in flight.
+    function reset() {
         path = "";
         selectedFile = "";
         blobCache = ({});
         treeCache = ({});
+        inFlight = ({});
+        entries.clear();
+        viewer.title = "";
+        viewer.body = "";
+        viewer.loading = false;
+    }
+
+    function load() {
+        // Clear everything from the previous repository BEFORE fetching. The
+        // caches are keyed by path only, so carrying them across repos would
+        // serve one repo's file under another's name; and leaving the old
+        // tree and README on screen made a new repo look like it had the
+        // previous one's contents until the replies landed.
+        path = "";
+        selectedFile = "";
+        blobCache = ({});
+        treeCache = ({});
+        inFlight = ({});
+        entries.clear();
+        viewer.title = "";
+        viewer.body = "";
+        viewer.loading = true;
+
         loadTree("");
         loadReadme();
     }
@@ -57,14 +98,18 @@ Item {
     function loadTree(p) {
         if (!app || rid === "") return;
 
-        if (treeCache[p] !== undefined) {
+        var tkey = cacheKey(p);
+        if (treeCache[tkey] !== undefined) {
             tab.path = p;
-            applyEntries(treeCache[p]);
+            applyEntries(treeCache[tkey]);
             return;
         }
+        var wantRid = rid;
         app.call("GetTree", [rid, branch, p], function (data) {
             var list = data.entries || [];
-            treeCache[p] = list;
+            treeCache[tkey] = list;
+            // Drop a reply that arrived after the user moved to another repo.
+            if (tab.rid !== wantRid) return;
             tab.path = p;
             applyEntries(list);
         });
@@ -72,11 +117,26 @@ Item {
 
     function loadReadme() {
         if (!app || rid === "") return;
+        viewer.loading = true;
+        var wantRid = rid;
         app.call("GetReadme", [rid, branch], function (data) {
-            viewer.title = data.path || "README";
-            viewer.body = data.content || "";
+            // A README arriving after the user switched repos belongs to the
+            // old one — this is what put radicle.xyz's README under
+            // radicle-tui's header.
+            if (tab.rid !== wantRid) return;
+            var path = data.path || "README";
+            var body = data.content || "";
+            // Store it under the same key GetBlob would use, so clicking the
+            // README in the tree is a cache hit instead of a second fetch.
+            if (data.path)
+                blobCache[cacheKey(data.path)] = body;
+            viewer.loading = false;
+            viewer.title = path;
+            viewer.body = body;
         }, function () {
+            if (tab.rid !== wantRid) return;
             // Plenty of repos have no README; not an error worth showing.
+            viewer.loading = false;
             viewer.title = "";
             viewer.body = "";
         });
@@ -90,24 +150,46 @@ Item {
 
         tab.selectedFile = entry.path;
 
-        var cached = blobCache[entry.path];
+        // Retitle immediately so the header names the file being opened, not
+        // the one still on screen.
+        viewer.title = entry.path;
+
+        var bkey = cacheKey(entry.path);
+        var cached = blobCache[bkey];
         if (cached !== undefined) {
-            viewer.title = entry.path;
+            viewer.loading = false;
             viewer.body = cached;
             return;
         }
 
+        // Clear the previous file's text while the new one is in flight.
+        // Leaving it up made a slow load look like the wrong file had opened.
+        viewer.body = "";
+        viewer.loading = true;
+
+        // A hover-prefetch for this same file may already be running; let it
+        // finish and paint rather than issuing a duplicate request.
+        if (inFlight[bkey]) return;
+        inFlight[bkey] = true;
+
+        var wantRid = rid;
         app.call("GetBlob", [rid, branch, entry.path], function (data) {
             var body = data.binary
                      ? "(binary file — " + (data.name || entry.name) + ")"
                      : (data.content || "");
-            blobCache[entry.path] = body;
-            // Only paint if this is still the file the user wants; a slow
-            // reply for an earlier click must not overwrite a later one.
-            if (tab.selectedFile === entry.path) {
-                viewer.title = entry.path;
+            blobCache[bkey] = body;
+            delete inFlight[bkey];
+            // Only paint if this is still the file the user wants, in the repo
+            // they are still looking at; a slow reply for an earlier click
+            // must not overwrite a later one.
+            if (tab.rid === wantRid && tab.selectedFile === entry.path) {
+                viewer.loading = false;
                 viewer.body = body;
             }
+        }, function () {
+            delete inFlight[bkey];
+            if (tab.rid === wantRid && tab.selectedFile === entry.path)
+                viewer.loading = false;
         });
     }
 
@@ -115,12 +197,25 @@ Item {
     /// usually follows paints immediately.
     function prefetch(entry) {
         if (!app || rid === "" || entry.kind === "tree") return;
-        if (blobCache[entry.path] !== undefined) return;
+        var pkey = cacheKey(entry.path);
+        if (blobCache[pkey] !== undefined || inFlight[pkey]) return;
+        inFlight[pkey] = true;
+        var wantRid = rid;
         app.call("GetBlob", [rid, branch, entry.path], function (data) {
-            blobCache[entry.path] = data.binary
+            var body = data.binary
                 ? "(binary file — " + (data.name || entry.name) + ")"
                 : (data.content || "");
-        }, function () {});
+            blobCache[pkey] = body;
+            delete inFlight[pkey];
+            // If the user clicked this file while the prefetch was in flight,
+            // the click found no cache entry and started waiting. Nothing else
+            // will paint it, so this reply must — otherwise the pane sits on
+            // "Loading…" until the file is clicked a second time.
+            if (tab.rid === wantRid && tab.selectedFile === entry.path) {
+                viewer.loading = false;
+                viewer.body = body;
+            }
+        }, function () { delete inFlight[pkey]; });
     }
 
     function goUp() {
