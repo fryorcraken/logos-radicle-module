@@ -20,7 +20,17 @@ Item {
     property string rid: ""
     property string sha: ""
 
-    property var data: null
+    // Named commitData, not data: Item's default property is literally
+    // called `data`, and every unparented child declared in this file (the
+    // ColumnLayout below, and LoadingState) is assigned into it at
+    // construction time. A property named `data` shadows that mechanism
+    // silently — no warning, no error — so the child items are captured by
+    // this property instead of becoming real scene-graph children. The
+    // result: CommitView rendered as a completely blank pane, `children`
+    // reported empty, and the back button was unreachable by any means.
+    // Caught by a component test that grabbed the rendered image and found
+    // it blank; qmllint and check-qml-syntax.sh do not catch this class.
+    property var commitData: null
     property bool loading: false
     property bool loadedOnce: false
 
@@ -29,7 +39,7 @@ Item {
     onShaChanged: load()
 
     function load() {
-        data = null;
+        commitData = null;
         loadedOnce = false;
         if (!app || rid === "" || sha === "") return;
 
@@ -42,7 +52,7 @@ Item {
             if (view.sha !== wantSha || view.rid !== wantRid) return;
             view.loading = false;
             view.loadedOnce = true;
-            view.data = d;
+            view.commitData = d;
         }, function () {
             if (view.sha !== wantSha || view.rid !== wantRid) return;
             view.loading = false;
@@ -50,11 +60,11 @@ Item {
         });
     }
 
-    readonly property var commit: data && data.commit ? data.commit : null
-    readonly property var files: data && data.diff && data.diff.files
-                                 ? data.diff.files : []
-    readonly property var stats: data && data.diff && data.diff.stats
-                                 ? data.diff.stats : null
+    readonly property var commit: commitData && commitData.commit ? commitData.commit : null
+    readonly property var files: commitData && commitData.diff && commitData.diff.files
+                                 ? commitData.diff.files : []
+    readonly property var stats: commitData && commitData.diff && commitData.diff.stats
+                                 ? commitData.diff.stats : null
 
     ColumnLayout {
         anchors.fill: parent
@@ -312,9 +322,16 @@ Item {
         anchors.fill: parent
         loading: view.loading
         loaded: view.loadedOnce
-        count: view.files.length
-        emptyText: view.loadedOnce && view.data ? "No changes in this commit"
-                                                : "Could not load this commit"
+        // Keyed on whether a commit loaded at all, like ThreadView's
+        // equivalent overlay (count: view.item ? 1 : 0) — NOT on
+        // view.files.length. The header, including the back button, lives
+        // in the same view as this full-size overlay; keying count on the
+        // diff's file count left the overlay covering the header forever
+        // for any commit with an empty diff (a merge commit, for instance),
+        // making the back button permanently unreachable.
+        count: view.commitData ? 1 : 0
+        emptyText: view.loadedOnce && view.commitData ? "No changes in this commit"
+                                                       : "Could not load this commit"
         loadingText: "Loading commit…"
     }
 }
