@@ -2,6 +2,10 @@
 
 ## Tests are part of the change, not a follow-up
 
+All four test layers run on **every pull request**, so coverage is not
+something added later — an uncovered change is a change CI has not checked.
+Write the test as you write the code, not after it.
+
 Every new UI feature ships with UI test coverage in the same change. Every UI
 bug fixed ships with a regression test in the same change, and that test must
 provably fail before the fix: write it first, watch it fail, then fix the code.
@@ -38,6 +42,19 @@ Basecamp. Two things to know if you add steps to it:
   `radicle_ui` QtRO replica and that hop is not logged as a LogosAPIClient
   invocation, so sitometres reports "no backend calls at all" while the data
   plainly arrives. Assert the effect with `state:` instead.
+
+## The four gates, all on every PR
+
+| Gate | Runs on | Catches |
+|---|---|---|
+| QML syntax (`check-qml-syntax.sh`) | every PR | a file Qt cannot parse — `qmllint` does **not** catch this |
+| Core unit tests | every PR | logic: URLs, ref resolution, pagination, error shapes |
+| QML component tests | every PR | one component's own behaviour |
+| End-to-end spec (sitometres) | every PR + push to main | the wiring: does the module load, does the replica connect, does data arrive |
+
+The end-to-end job takes about three minutes warm. A PR from a fork, or the
+first run after `BASECAMP_REV` changes, pays roughly nine minutes because the
+Nix store cache is cold.
 
 ## The three layers
 

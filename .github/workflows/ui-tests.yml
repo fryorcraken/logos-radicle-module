@@ -61,6 +61,16 @@ name: UI tests
 on:
   push:
     branches: [main]
+  # Also on PRs. This was originally push-only on the assumption that the job
+  # was too slow for the PR path — measured, that was wrong: ~3m14s warm, and
+  # the cold cost is mostly fetching the closure rather than compiling
+  # Basecamp. Two cases still pay the ~9m cold price and are worth knowing
+  # about rather than being surprised by:
+  #   - a PR from a fork gets its own isolated cache scope, so it never hits
+  #     this repo's cache;
+  #   - the first run after BASECAMP_REV changes, since the rev is in the key.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
