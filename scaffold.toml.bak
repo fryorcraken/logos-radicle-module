@@ -11,13 +11,13 @@ pin = "1db7c5f8af3165318f9046c13ab185e24773fd59"
 
 [repos.basecamp]
 source = "https://github.com/logos-co/logos-basecamp.git"
-pin = "aa237766baf61404e12da86b7303cb41065464c9"
+pin = "a746cdbc521f72ee22c5a4856fd17a9802bb9d69"
 build = "nix-flake"
 attr = "app"
 
 [repos.lgpm]
 source = "github:logos-co/logos-package-manager"
-pin = "202af6fa0f0f4493bc59c8a609dff9326f78a18d"
+pin = "e5c25989861f4487c3dc8c7b3bc0062bcbc3221f"
 build = "nix-flake"
 attr = "cli"
 
@@ -46,15 +46,3 @@ risc0_dev_mode = true
 
 [circuits]
 version = "0.4.1"
-
-# QtRO module sockets live under XDG_RUNTIME_DIR/TMPDIR. A unix socket path is
-# capped at 108 bytes (sun_path), and scaffold's default in-profile `xdg-tmp`
-# under this project path came to 88 chars — every module then segfaulted at
-# "Failed to register module for remote access" (signal 11), basecamp's own
-# bundled modules included. macOS gets a short /tmp/lgs-<profile> by default;
-# Linux does not, so set it explicitly.
-[basecamp.profiles.alice]
-runtime_dir = "/tmp/lgs-alice"
-
-[basecamp.profiles.bob]
-runtime_dir = "/tmp/lgs-bob"
