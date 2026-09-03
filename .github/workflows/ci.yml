@@ -146,9 +146,15 @@ jobs:
 
       # Unit tests for the core module's logic (URL building, ref resolution,
       # pagination, error shapes, local-profile detection).
+      #
+      # Built explicitly rather than via `nix flake check`: that only evaluates
+      # the derivation ("running 0 flake checks") and so passes even when the
+      # test binary does not link.
       - name: Core module tests
-        run: cd radicle && nix build '.#test' -L --out-link result-test || \
-             nix flake check -L
+        run: |
+          cd radicle
+          nix build ".#checks.$(nix eval --raw --impure --expr builtins.currentSystem).unit-tests" \
+            -L --out-link result-test
 
       - name: Build core module (dev + portable)
         run: |

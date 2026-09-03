@@ -15,6 +15,9 @@ logos_test(
     MODULE_SOURCES
         ../src/seed_client.cpp
         ../src/local_store.cpp
+        # Linked even though the tests inject their own transport: SeedClient
+        # still references httpGet as its default.
+        ../src/http_client.cpp
     TEST_SOURCES
         main.cpp
         test_seed_client.cpp
