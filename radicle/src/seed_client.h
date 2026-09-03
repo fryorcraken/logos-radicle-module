@@ -42,6 +42,16 @@ public:
 
     nlohmann::json listRepos(const std::string& query, int64_t page, int64_t perPage);
     nlohmann::json getRepo(const std::string& rid);
+    /**
+     * Branches (refs/heads/*) for a repo, each with the name (prefix
+     * stripped) and the commit it points at, plus which one is the repo's
+     * default. No dedicated seed endpoint exists for this: getRepo() already
+     * returns the full refs map (see resolveSha(), which reads the same
+     * data), so this reuses that single request rather than adding another
+     * round trip.
+     * -> {"items":[{"name":"main","head":"<sha>"}],"default":"main"}
+     */
+    nlohmann::json listBranches(const std::string& rid);
     nlohmann::json getTree(const std::string& rid, const std::string& sha,
                            const std::string& path);
     nlohmann::json getBlob(const std::string& rid, const std::string& sha,

@@ -42,6 +42,11 @@ QString RadicleUiBackend::remoteGetRepo(QString rid)
     return modules().radicle.remoteGetRepo(rid);
 }
 
+QString RadicleUiBackend::remoteListBranches(QString rid)
+{
+    return modules().radicle.remoteListBranches(rid);
+}
+
 QString RadicleUiBackend::remoteGetTree(QString rid, QString sha, QString path)
 {
     return modules().radicle.remoteGetTree(rid, sha, path);
@@ -97,6 +102,11 @@ QString RadicleUiBackend::localListRepos(QString scope, int page, int perPage)
 QString RadicleUiBackend::localGetRepo(QString rid)
 {
     return modules().radicle.localGetRepo(rid);
+}
+
+QString RadicleUiBackend::localListBranches(QString rid)
+{
+    return modules().radicle.localListBranches(rid);
 }
 
 QString RadicleUiBackend::localGetTree(QString rid, QString sha, QString path)
