@@ -11,13 +11,28 @@ to cover.
 This is not a request for exhaustive coverage. It is a request that the change
 which introduces behaviour is the change that pins it down.
 
+## Before anything else, make the failure visible
+
+Basecamp swallows QML errors. A view that fails to compile, a plugin skipped for
+a missing manifest field, a binding that evaluates to `undefined` — all present
+identically as "clicking the app does nothing". Four separate bugs here wore
+that same face.
+
+`scaffold.toml` sets `QT_LOGGING_RULES=qt.qml.import.debug=true` so Basecamp
+prints why a view failed. Read `.scaffold/basecamp/profiles/alice/basecamp.log`
+before forming a theory; one line there beats an afternoon of guessing.
+
+Note that `qmllint` does not catch syntax errors — it passed a file Qt then
+refused with "Unexpected token `}'". `radicle-ui/tests/check-qml-syntax.sh`
+covers that, and runs first in CI.
+
 ## The three layers
 
 Pick the cheapest layer that can actually see the behaviour you changed.
 
 | Layer | Lives in | Run it with | Covers |
 |---|---|---|---|
-| Core module unit tests | `radicle/tests/` | `cd radicle && nix build '.#test'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
+| Core module unit tests | `radicle/tests/` | `cd radicle && nix build '.#checks.x86_64-linux.unit-tests'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
 | QML component tests | `radicle-ui/tests/tst_*.qml` | `sh radicle-ui/tests/run-qml-tests.sh` | One component in isolation: selection state, layout invariants, load ordering |
 | End-to-end UI specs | `radicle-ui/tests/ui/*.yaml` | `npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml` | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
 
