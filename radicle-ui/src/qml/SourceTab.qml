@@ -49,6 +49,15 @@ Item {
     /// Entries in the current directory — read by the UI tests.
     readonly property int entryCount: entries.count
 
+    /// The viewer pane's state, surfaced so RepoView (and through it the
+    /// end-to-end specs) can assert on what the right-hand pane is showing
+    /// without reaching into a nested id. Aliases, not a second copy: the
+    /// viewer remains the only thing that sets them.
+    readonly property string viewerTitle: viewer.title
+    /// The length, not the text — a spec asks whether content arrived, and a
+    /// whole blob pasted into a test report is noise.
+    readonly property int viewerBodyLength: viewer.body.length
+
     /// Sync: walk the whole tree up front and pull every file into the cache,
     /// so navigation afterwards is instant rather than a request per click.
     property bool syncing: false
@@ -553,6 +562,7 @@ Item {
                         }
                         MouseArea {
                             id: upMouse
+                            objectName: "fileUpRow"
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
@@ -597,6 +607,12 @@ Item {
                                 font.pixelSize: Theme.fontSm
                             }
                             Text {
+                                // Named so a spec can address a row by the
+                                // file's NAME and still be sure it hit the
+                                // tree: the viewer's title bar shows the same
+                                // string once a file is open, and a bare text
+                                // selector matched that instead.
+                                objectName: "fileRowName"
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: parent.width - 26
                                 text: name
@@ -609,6 +625,11 @@ Item {
 
                         MouseArea {
                             id: rowMouse
+                            // Named on the MouseArea, not the delegate Rectangle:
+                            // UI specs select by objectName AND clickability, and
+                            // naming a non-clickable parent matches one element
+                            // instead of one per row (see SectionTabs.qml).
+                            objectName: "fileRow"
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor

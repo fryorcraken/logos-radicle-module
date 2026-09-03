@@ -159,6 +159,43 @@ Item {
     readonly property int    repoTab:   repoPage.tab
     readonly property int    treeCount: repoPage.treeCount
     readonly property int    commitCount: repoPage.commitCount
+    readonly property int    issueCount:  repoPage.issueCount
+    readonly property int    patchCount:  repoPage.patchCount
+    readonly property string patchStatus: repoPage.patchStatus
+
+    // Sync button: its three idle labels ("Download All" / "Re-sync" /
+    // "Update") plus the in-progress percentage are the whole of that
+    // feature's user-visible behaviour, so the specs assert on all of them.
+    readonly property bool   syncing:         repoPage.syncing
+    readonly property real   syncProgress:    repoPage.syncProgress
+    readonly property bool   syncedOnce:      repoPage.syncedOnce
+    readonly property bool   updateAvailable: repoPage.updateAvailable
+    readonly property string syncLabel:       repoPage.syncLabel
+
+    /// See RepoView.sourceTabItem: the sync spec sets the real
+    /// `lastSyncedCommit` and calls the real `checkForUpdate()` through this,
+    /// rather than through a test-only hook that would fake the outcome.
+    readonly property var    sourceTabItem:  repoPage.sourceTabItem
+
+    // File tree and viewer.
+    readonly property string treePath:       repoPage.treePath
+    readonly property string selectedFile:   repoPage.selectedFile
+    readonly property string fileTitle:      repoPage.fileTitle
+    readonly property int    fileBodyLength: repoPage.fileBodyLength
+
+    // Branch picker.
+    readonly property string repoBranch:        repoPage.branch
+    readonly property string repoDefaultBranch: repoPage.defaultBranch
+    readonly property int    branchCount:       repoPage.branchCount
+    readonly property string branchLabel:       repoPage.branchLabel
+    /// See RepoView.branchPickerItem: a ComboBox's popup delegates live in a
+    /// separate window and cannot be clicked by objectName, so the branch spec
+    /// emits the picker's own `activated` signal instead.
+    readonly property var    branchPickerItem:  repoPage.branchPickerItem
+
+    // Detail views. "" when the tabs are showing.
+    readonly property string openThread: repoPage.openThread
+    readonly property string openCommit: repoPage.openCommit
 
     /// Open a repository object directly (deep links and testing).
     function openRepoExternal(repo) {

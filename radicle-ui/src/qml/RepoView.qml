@@ -53,9 +53,70 @@ Item {
     /// True while any detail view is covering the tabs.
     readonly property bool showingDetail: openThreadId !== "" || openCommitSha !== ""
 
-    /// Counts the UI tests assert on.
+    /// State the end-to-end UI specs assert on. Kept here, and re-exported by
+    /// Main.qml, because a spec's `state:` expressions evaluate against the
+    /// app's QML root and cannot reach into a StackLayout child by id.
+    ///
+    /// These are readonly aliases of state that already exists; nothing here
+    /// is a second implementation of anything, so a spec asserting on them is
+    /// asserting on what the UI itself uses.
     readonly property int treeCount:   source.entryCount
     readonly property int commitCount: commits.count
+    readonly property int issueCount:  issues.count
+    readonly property int patchCount:  patches.count
+    /// Which state filter the Patches tab is on ("open"/"merged"/…).
+    readonly property string patchStatus: patches.status
+
+    // ---- source tab / sync ----
+    readonly property bool   syncing:         source.syncing
+    readonly property real   syncProgress:    source.syncProgress
+    readonly property bool   syncedOnce:      source.syncedOnce
+    readonly property bool   updateAvailable: syncButton.updateAvailable
+    /// The sync button's label, read off the Text item that actually renders
+    /// it rather than recomputed from the same inputs. Recomputing would let a
+    /// spec assert "the label says Re-sync" and still pass with the button's
+    /// own binding deleted — the assertion would be checking a copy of the
+    /// logic instead of the button.
+    readonly property string syncLabel: syncLabelText.text
+    /// The SourceTab itself, so an end-to-end spec can reach the real
+    /// `lastSyncedCommit` and the real `checkForUpdate()`.
+    ///
+    /// The "Update" state is only reachable when the branch head has moved
+    /// past the commit captured at the last sync, which cannot be arranged
+    /// against a public repository on demand. Rather than add a test-only
+    /// hook that fakes the outcome, the spec sets the real property the real
+    /// comparison reads and then calls the real poll — so the request, the
+    /// parse, the comparison and the re-label are all genuinely exercised.
+    readonly property var sourceTabItem: source
+    /// Directory the file tree is showing; "" is the repository root.
+    readonly property string treePath:        source.path
+    /// Path of the file open in the viewer; "" while the README is showing.
+    readonly property string selectedFile:    source.selectedFile
+    /// What the viewer pane is titled — the README's path until a file is
+    /// clicked, then that file's path.
+    readonly property string fileTitle:       source.viewerTitle
+    /// Length rather than the text itself: a spec only needs to know that
+    /// content arrived, and a whole blob in a report is noise.
+    readonly property int    fileBodyLength:  source.viewerBodyLength
+
+    // ---- branch ----
+    readonly property int    branchCount:  branchPicker.count
+    readonly property string branchLabel:  branchPicker.displayText
+    /// The picker itself, so an end-to-end spec can emit its `activated`
+    /// signal — which is exactly what a click on a popup delegate emits.
+    ///
+    /// A ComboBox's list lives in a Popup, i.e. a separate window, and the
+    /// inspector's snapshot is scoped to the app's own item tree, so those
+    /// delegates cannot be addressed by objectName the way every other
+    /// control here can. Emitting the real signal keeps `onActivated` — the
+    /// handler under test — in the path; assigning `branch` directly would
+    /// skip it and prove nothing about the picker.
+    readonly property var branchPickerItem: branchPicker
+
+    /// True while a detail view (issue/patch thread, or a commit) covers the
+    /// tabs — the spec's way of asserting a row click actually opened it.
+    readonly property string openThread: openThreadId
+    readonly property string openCommit: openCommitSha
 
     onRidChanged: {
         tab = 0;
@@ -218,6 +279,8 @@ Item {
                     }
 
                     Text {
+                        id: syncLabelText
+                        objectName: "syncLabel"
                         anchors.centerIn: parent
                         text: source.syncing
                               ? Math.round(source.syncProgress * 100) + "%"
