@@ -1,0 +1,149 @@
+# End-to-end UI test: switching branches.
+#
+#   npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/branches.yaml
+#
+# See browse.yaml's header for how to run these at all (inspector-enabled
+# Basecamp, portable .lgx, --variant linux-amd64) and why assertions prefer
+# `state:` over `text:`.
+#
+# What this file is for: BranchPicker.qml is the only piece of navigation in
+# the app whose correctness depends on state surviving a repository change.
+# `RepoView.branch` is a live binding to the repo's defaultBranch that a pick
+# replaces with a plain value, and onRidChanged restores the binding with
+# Qt.binding() rather than copying today's value. A component test can check
+# that in isolation; only a real run proves the picker is populated from a real
+# seed's refs map and that a pick actually re-fetches the tree and commits.
+#
+# Why the picks are driven through the picker's own `activated` signal rather
+# than a click: BranchPicker is a ComboBox, and its list lives in a Popup that
+# is a separate window. sitometres' snapshot is scoped to the app's item tree,
+# so the popup's delegates are not addressable as controls. Emitting
+# `activated(index)` is what a click on a delegate does — it is the signal
+# ComboBox itself emits, and `onActivated` is the handler under test — so this
+# still exercises the real handler rather than assigning `branch` directly,
+# which would bypass everything this spec exists to check.
+
+app: radicle_ui
+with: [radicle]
+timeout: 30s
+
+steps:
+  - name: the app opens
+    open: radicle_ui
+
+  - name: it becomes ready
+    wait_for:
+      state: "root.ready === true"
+    timeout: 45s
+
+  - name: repositories arrive from the seed node
+    wait_for:
+      state: "root.repoCount > 0"
+    timeout: 60s
+
+  - name: open the first repository
+    click: { objectName: "repoRow", nth: 0 }
+
+  - name: its source tree loads
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+    timeout: 60s
+
+  # The picker fetches on rid change, via ListBranches — which the core module
+  # answers out of getRepo()'s refs map rather than a dedicated endpoint. If
+  # that reuse ever breaks, the dropdown is empty and this is where it shows.
+  - name: the branch picker is populated from the repo's refs
+    wait_for:
+      state: "root.branchCount > 0"
+    timeout: 60s
+
+  # The repo opens on its default branch, and the picker must be SHOWING that
+  # rather than whatever ComboBox's currentIndex happens to default to. This is
+  # the assertion that fails if syncSelection() stops running.
+  - name: it opens on the default branch, and the picker says so
+    expect:
+      state:
+        - "root.repoBranch === root.repoDefaultBranch"
+        - "root.repoBranch !== ''"
+        - "root.branchLabel === root.repoBranch"
+
+  # Pick the LAST branch in the list. Deliberately not index 0 — that is very
+  # often the default branch itself, and "switch to the branch you are already
+  # on" is a no-op that would let a broken switch pass unnoticed.
+  #
+  # A repository with only one branch cannot demonstrate a switch at all. That
+  # is not treated as a skip (a skipped step in CI is a false green): the pick
+  # still runs, and the assertions that follow are written as invariants that
+  # must hold either way — the picker and `branch` agree, and the tree reloads.
+  - name: pick the last branch through the picker's own activated handler
+    eval: >-
+      (function () {
+        var p = root.branchPickerItem;
+        p.activated(p.count - 1);
+        return p.count;
+      })()
+
+  # Whatever the pick was, `branch` must equal what the picker now displays.
+  # This is the invariant that the Qt.binding() dance exists to preserve, and
+  # it holds whether or not the branch actually changed.
+  - name: the branch and the picker agree after the pick
+    wait_for:
+      state: "root.branchLabel === root.repoBranch"
+    timeout: 30s
+
+  # Source and Commits are branch-scoped and must refetch. The tree is cleared
+  # by onBranchChanged and repopulated from the new branch, so a non-zero
+  # treeCount here proves the reload completed rather than leaving the pane
+  # empty — the visible symptom if the reset were done without the refetch.
+  - name: the source tree reloads for the branch now selected
+    wait_for:
+      state: "root.treeCount > 0"
+    timeout: 60s
+    expect:
+      calls_succeed: true
+
+  - name: no error surfaced while switching branches
+    expect:
+      state: "root.navError === ''"
+
+  # The regression this guards: `branch` used to be assigned rather than
+  # re-bound on a repo change, so a branch picked on one repository carried its
+  # NAME into the next one — silently wrong, since two repos rarely share
+  # branch names on purpose. Going back and opening a different repository must
+  # land on THAT repo's default branch.
+  - name: go back to the repository list
+    click: { objectName: "backButton" }
+
+  - name: back returns to the repository list
+    wait_for:
+      state: "root.navView === 'repos'"
+    timeout: 20s
+
+  - name: open a different repository
+    click: { objectName: "repoRow", nth: 1 }
+
+  - name: the second repository loads
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+    timeout: 60s
+
+  # The heart of it: the new repo shows its OWN default branch, not the name
+  # picked on the previous one. Asserting equality with defaultBranch rather
+  # than inequality with the old name, because the two repos could legitimately
+  # share a branch name — "it equals this repo's default" is the property that
+  # is actually required.
+  - name: the new repository is on its own default branch, not the previous pick
+    wait_for:
+      state:
+        - "root.repoDefaultBranch !== ''"
+        - "root.repoBranch === root.repoDefaultBranch"
+    timeout: 30s
+
+  - name: and its picker is showing that branch too
+    wait_for:
+      state: "root.branchLabel === root.repoBranch"
+    timeout: 30s

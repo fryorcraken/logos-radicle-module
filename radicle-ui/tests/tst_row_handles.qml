@@ -35,6 +35,7 @@ import "../src/qml" as Ui
  * resolver's own deduplication would mean reimplementing it here.
  */
 Item {
+    id: root
     width: 900
     height: 700
 
@@ -64,6 +65,16 @@ Item {
                              { name: "README.md", kind: "blob", path: "README.md" }] });
         else if (method === "GetReadme")
             onOk({ path: "README.md", content: "hello" });
+        else if (method === "GetIssue" || method === "GetPatch")
+            onOk({ id: "i1", title: "One", state: { status: "open" },
+                   author: { alias: "someone" }, discussion: [] });
+        else if (method === "GetCommit")
+            onOk({ commit: { id: "0123456789abcdef0123456789abcdef01234567",
+                             summary: "One", author: { name: "A" },
+                             committer: { time: 1700000000 } },
+                   diff: { files: [] } });
+        else if (method === "ListBranches")
+            onOk({ items: [{ name: "main", head: "abc" }] });
         else onOk({ items: [], hasMore: false });
     }
 
@@ -74,6 +85,23 @@ Item {
     Ui.PatchesTab { id: patches; anchors.fill: parent; app: parent; rid: "rad:zTEST" }
     Ui.SourceTab  { id: source;  anchors.fill: parent; app: parent
                     rid: "rad:zTEST"; branch: "main" }
+
+    // The single buttons live on these three. Given an explicit size of their
+    // own rather than anchors.fill, and parented into a separate container, so
+    // they cannot perturb the layout the list components above are realising
+    // their delegates into — sharing `parent` with them made every ListView
+    // size to zero and render no rows at all.
+    Item {
+        width: 900
+        height: 700
+        Ui.RepoView   { id: repoView; width: 900; height: 700
+                        app: root }
+        Ui.ThreadView { id: thread;   width: 900; height: 700
+                        app: root; rid: "rad:zTEST"; kind: "Issues"; itemId: "i1" }
+        Ui.CommitView { id: commit;   width: 900; height: 700
+                        app: root; rid: "rad:zTEST"
+                        sha: "0123456789abcdef0123456789abcdef01234567" }
+    }
 
     /// Every descendant carrying `name` as its objectName.
     function findAllByName(node, name, out) {
@@ -141,6 +169,36 @@ Item {
             // fileRow is new with the end-to-end source spec; pinned here so
             // it cannot regress to the delegate the way repoRow had.
             check(source, "fileRow", 2);
+        }
+
+        /*
+         * The same rule for the single buttons, where getting it wrong is
+         * worse than being unaddressable.
+         *
+         * `syncButton` was declared on its Rectangle. The ancestor search
+         * therefore climbed to the header RowLayout and took the FIRST mouse
+         * handler under it — the back button's. A spec clicking "syncButton"
+         * reported a successful click and navigated to the repository list,
+         * so sync.yaml's first attempt failed with "syncing never became
+         * true" while the real symptom was that the sync button cannot be
+         * clicked by a spec at all.
+         *
+         * `backButton` had the identical shape and worked only because it
+         * happens to be the first handler in that header — correct by sibling
+         * order, which is not a property worth relying on.
+         */
+        function test_single_button_handles_are_on_their_mouse_areas() {
+            repoView.rid = "rad:zTEST";
+            repoView.active = true;
+            wait(50);
+            check(repoView, "backButton", 1);
+            check(repoView, "syncButton", 1);
+        }
+
+        function test_detail_view_back_buttons_are_on_their_mouse_areas() {
+            // Both detail views had the same shape as the two above.
+            check(thread, "threadBackButton", 1);
+            check(commit, "commitBackButton", 1);
         }
     }
 }

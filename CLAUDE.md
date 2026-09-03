@@ -415,6 +415,24 @@ ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
 
 Drop all of this once sitometres also probes the `.elf`.
 
+### Testing a branch from a worktree: do not use `lgs basecamp`
+
+`lgs basecamp install` and `launch` read `scaffold.toml`, and its
+`[basecamp.modules]` entries are **absolute paths into the main tree**
+(`path:/…/radicle-logos-module/radicle`). Run from a worktree they therefore
+build and install `main`'s code, not the branch you are testing — and they say
+nothing about it, so the run looks fine while the change under test was never
+loaded. One agent in this session lost time to exactly that.
+
+From a worktree, build the worktree's own flakes and launch the pinned binary
+yourself: `nix build '.#lgx-portable'` in each module directory (the UI one
+with `--override-input radicle path:../radicle`), then point `--basecamp` at
+the copied bundle. That is what the commands in this section already do.
+
+Possible follow-up, not done: make `lgs` worktree-aware — a `--flake` override,
+or relative module paths in `scaffold.toml` — so the tool does the right thing
+from any checkout instead of needing this note.
+
 Stage the **portable** modules, and say so explicitly:
 
 ```bash

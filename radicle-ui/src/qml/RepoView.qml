@@ -198,7 +198,6 @@ Item {
                 spacing: Theme.gap
 
                 Rectangle {
-                    objectName: "backButton"
                     Layout.preferredWidth: 68
                     Layout.preferredHeight: 28
                     radius: Theme.radius
@@ -215,6 +214,14 @@ Item {
                     }
                     MouseArea {
                         id: backMouse
+                        // Same move as syncButton below. This one HAPPENED to
+                        // work from the Rectangle — the back button is the
+                        // first handler in the header, so the ancestor search
+                        // landed on it by luck — but it was one reordering
+                        // away from the same silent misfire, and relying on
+                        // sibling order for which control a click hits is not
+                        // something to leave in place once it is understood.
+                        objectName: "backButton"
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
@@ -250,7 +257,6 @@ Item {
                 // browsing afterwards needs no further requests.
                 Rectangle {
                     id: syncButton
-                    objectName: "syncButton"
                     // "Update available" is a colour/label change only — the
                     // button stays exactly as clickable as always. Re-syncing
                     // is never wrong, just sometimes unnecessary, so this
@@ -295,6 +301,20 @@ Item {
 
                     MouseArea {
                         id: syncMouse
+                        // On the MouseArea, not the Rectangle above — and this
+                        // one was not merely unaddressable but actively
+                        // dangerous.
+                        //
+                        // A selector resolves a non-clickable node by climbing
+                        // to a clickable ancestor, then by searching each
+                        // ancestor's DESCENDANTS for a mouse handler — never
+                        // the node's own. The sync button's nearest ancestor
+                        // is the header RowLayout, whose first handler in tree
+                        // order belongs to the BACK BUTTON. So a spec clicking
+                        // "syncButton" reported a successful click and
+                        // navigated to the repository list instead, which read
+                        // as "the sync never started".
+                        objectName: "syncButton"
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor

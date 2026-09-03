@@ -75,7 +75,6 @@ Item {
                 spacing: Theme.gap
 
                 Rectangle {
-                    objectName: "threadBackButton"
                     Layout.preferredWidth: 68
                     Layout.preferredHeight: 28
                     radius: Theme.radius
@@ -90,6 +89,10 @@ Item {
                     }
                     MouseArea {
                         id: backMouse
+                        // On the MouseArea: see RepoView.qml's backButton for
+                        // why naming the Rectangle makes which control a click
+                        // reaches depend on sibling order.
+                        objectName: "threadBackButton"
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor

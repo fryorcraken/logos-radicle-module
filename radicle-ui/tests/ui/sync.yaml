@@ -1,0 +1,197 @@
+# End-to-end UI test: the sync button and its three idle states.
+#
+#   npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/sync.yaml
+#
+# See browse.yaml's header for how to run these at all.
+#
+# The sync button is the one control in the app whose LABEL is its whole
+# interface: "Download All" before a repository has ever been synced, a
+# percentage while one is running, "Re-sync" once one has completed, and
+# "Update" once a poll finds the branch head has moved past the last synced
+# commit. Nothing else tells the user which of those situations they are in.
+#
+# So this spec asserts on `root.syncLabel`, which is read off the Text item
+# that actually renders the label rather than recomputed from the same inputs
+# (see RepoView.qml). Asserting on a recomputation would pass with the
+# button's own binding deleted.
+#
+# Sync pulls EVERY file in the repository, and which repository the seed lists
+# first is not this spec's to choose — a full download was measured at over
+# five minutes. So this spec proves the button is wired to syncAll() and
+# cancelSync() and that real requests go out, and leaves the completion
+# transition to tst_repo_switch.qml, which can drive finishSyncIfDone()
+# directly. See the comment at the cancel step for the reasoning.
+
+app: radicle_ui
+with: [radicle]
+timeout: 30s
+
+steps:
+  - name: the app opens
+    open: radicle_ui
+
+  - name: it becomes ready
+    wait_for:
+      state: "root.ready === true"
+    timeout: 45s
+
+  - name: repositories arrive from the seed node
+    wait_for:
+      state: "root.repoCount > 0"
+    timeout: 60s
+
+  - name: open the first repository
+    click: { objectName: "repoRow", nth: 0 }
+
+  - name: its source tree loads
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+    timeout: 60s
+
+  # A freshly opened repository has never been synced, so the button must
+  # offer the first-download wording. This is the state that makes the cost of
+  # a full download visible before the user commits to it — it used to always
+  # read "Sync" regardless.
+  - name: an unsynced repository offers Download All
+    expect:
+      state:
+        - "root.syncedOnce === false"
+        - "root.syncing === false"
+        - "root.updateAvailable === false"
+        - "root.syncLabel === 'Download All'"
+
+  - name: start the sync
+    click: { objectName: "syncButton" }
+
+  # Two things at once: the click reached syncAll(), and the button switched to
+  # its in-progress rendering. The label becomes a percentage, so asserting it
+  # is no longer any of the three idle words proves the Text swapped over.
+  - name: the button goes into its in-progress state
+    wait_for:
+      state:
+        - "root.syncing === true"
+        - "root.syncLabel !== 'Download All'"
+        - "root.syncLabel !== 'Re-sync'"
+        - "root.syncLabel !== 'Update'"
+    timeout: 30s
+
+  # Sync walks the whole tree breadth-first, so syncQueued can jump ahead of
+  # syncDone and the RAW ratio can fall. syncProgress is a ceiling over that
+  # ratio precisely so the bar never visibly regresses — the bug reported live.
+  # A component test pins the monotonicity with a synthetic reply order; this
+  # only checks the value stays in range against a real repository, which is
+  # the cheap end-to-end half of the same property.
+  - name: progress stays within range while syncing
+    expect:
+      state:
+        - "root.syncProgress >= 0"
+        - "root.syncProgress <= 1"
+
+  # ---- cancelling --------------------------------------------------------
+  #
+  # The same button cancels while a sync is running, which nothing else tests.
+  #
+  # Waiting for a real sync to COMPLETE is deliberately not done here: it
+  # downloads every directory and every blob in whichever repository the seed
+  # happens to list first, which was measured at over five minutes and is
+  # unbounded in principle. A spec whose runtime depends on the size of a
+  # repository nobody chose is a spec that will eventually time out in CI for
+  # reasons unrelated to the code.
+  #
+  # So the completion transition — syncedOnce, the "Re-sync" label, and
+  # syncProgress reaching 1 — is left to tst_repo_switch.qml, which drives
+  # finishSyncIfDone() directly and can assert the whole sequence of progress
+  # values rather than just the endpoint. What only a real run can prove, and
+  # what is proved above and below, is that the button is wired to syncAll()
+  # and cancelSync() at all, and that real requests go out.
+  - name: click the button again to cancel
+    click: { objectName: "syncButton" }
+
+  # cancelSync() bumps syncEpoch, which orphans every request already in
+  # flight so their replies cannot touch a later sync's counters.
+  - name: the sync stops
+    wait_for:
+      state: "root.syncing === false"
+    timeout: 30s
+
+  # An interrupted sync must NOT claim completion: syncedOnce is set in
+  # finishSyncIfDone(), never in cancelSync(), precisely so the button does
+  # not offer "Re-sync" for a repository that was never fully downloaded.
+  - name: a cancelled sync does not claim to have completed
+    expect:
+      state:
+        - "root.syncedOnce === false"
+        - "root.syncLabel === 'Download All'"
+
+  - name: no error surfaced during the sync
+    expect:
+      state: "root.navError === ''"
+
+  # ---- the "Update" state -------------------------------------------------
+  #
+  # updateAvailable is set by checkForUpdate(), which compares the branch head
+  # reported by a fresh ListBranches against lastSyncedCommit. Driving that
+  # honestly end-to-end would mean waiting for someone to push to a public
+  # repository, so instead the comparison is given something to find: the
+  # last-synced commit is set to a value the real head cannot equal, and the
+  # REAL checkForUpdate() is then invoked against the REAL seed.
+  #
+  # What that does and does not prove is worth being precise about. It does not
+  # prove the app notices a genuine upstream push. It does prove the whole
+  # mechanism either side of that: the poll issues a real ListBranches to a
+  # real seed, the reply is parsed, the head is compared, the flag flips, and
+  # the button re-labels and re-colours from it. The comparison itself — head
+  # equal means no update, head different means update — is what the component
+  # tests in tst_staleness.qml pin down, including both pollEpoch guards.
+  # Two properties are set, because the button's idle label is a function of
+  # both: syncedOnce decides "Download All" vs "Re-sync", and updateAvailable
+  # overrides either with "Update". A sync that completed would have set both;
+  # this run cancelled instead, so they are set here to stand in for it.
+  - name: stand in for a completed sync of an older commit
+    eval: >-
+      (function () {
+        var s = root.sourceTabItem;
+        s.syncedOnce = true;
+        s.lastSyncedCommit = "0000000000000000000000000000000000000000";
+        return s.lastSyncedCommit;
+      })()
+
+  # Before any poll runs there is nothing to report, so the flag must still be
+  # clear and the label must be the plain post-sync one. This is what makes
+  # the next step's transition meaningful rather than a value that was already
+  # true.
+  - name: the button reads Re-sync until a poll actually runs
+    expect:
+      state:
+        - "root.updateAvailable === false"
+        - "root.syncLabel === 'Re-sync'"
+
+  - name: run the staleness poll against the real seed
+    eval: "root.sourceTabItem.checkForUpdate()"
+
+  # The flag flips only if a real reply came back and the heads differed.
+  - name: the poll finds the branch has moved on
+    wait_for:
+      state: "root.updateAvailable === true"
+    timeout: 60s
+
+  - name: and the button says so
+    expect:
+      state: "root.syncLabel === 'Update'"
+
+  # The explicit requirement behind this feature: "Update" is a colour and a
+  # label, never a gate. Re-syncing is never wrong, just sometimes unnecessary,
+  # so the button must stay exactly as clickable in this state as in any other.
+  # Clicking it here is the assertion — a disabled control would fail to
+  # resolve as clickable, and a guarded onClicked would leave syncing false.
+  - name: the Update state does not stop the button being clicked
+    click: { objectName: "syncButton" }
+
+  - name: clicking it starts a real sync and clears the stale flag
+    wait_for:
+      state:
+        - "root.syncing === true"
+        - "root.updateAvailable === false"
+    timeout: 30s
