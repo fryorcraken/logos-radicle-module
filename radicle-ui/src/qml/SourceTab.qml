@@ -58,7 +58,21 @@ Item {
     property int syncEpoch: 0
     property int syncQueued: 0
     property int syncDone: 0
-    readonly property real syncProgress: syncQueued > 0 ? syncDone / syncQueued : 0
+    // syncQueued grows as the tree is discovered breadth-first, so the raw
+    // ratio can drop after a reply whose own children turn out to add more
+    // to the denominator than they immediately finish — reported live as
+    // the progress bar jumping backwards mid-sync. syncProgress is a ceiling
+    // over the raw ratio, updated explicitly (see bumpSyncProgress()) rather
+    // than computed inline, so the displayed value only ever advances.
+    property real syncProgress: 0
+
+    function bumpSyncProgress() {
+        var raw = syncQueued > 0 ? syncDone / syncQueued : 0;
+        if (raw > syncProgress) syncProgress = raw;
+    }
+    /// True once a sync has completed for this repository, so the idle button
+    /// label can read "first download" vs "refresh" differently.
+    property bool syncedOnce: false
 
     /// True while a directory listing is in flight.
     property bool treeLoading: false
@@ -81,6 +95,8 @@ Item {
         syncing = false;
         syncQueued = 0;
         syncDone = 0;
+        syncProgress = 0;
+        syncedOnce = false;
         treeLoading = false;
         treeLoaded = false;
         viewer.title = "";
@@ -271,6 +287,7 @@ Item {
         syncing = true;
         syncQueued = 0;
         syncDone = 0;
+        syncProgress = 0;
         syncDir("", syncEpoch);
     }
 
@@ -344,7 +361,11 @@ Item {
     }
 
     function finishSyncIfDone() {
-        if (syncing && syncDone >= syncQueued) syncing = false;
+        bumpSyncProgress();
+        if (syncing && syncDone >= syncQueued) {
+            syncing = false;
+            syncedOnce = true;
+        }
     }
 
     function goUp() {

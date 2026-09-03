@@ -2,10 +2,10 @@
 
 ## Status — 2026-09-03
 
-### Uncommitted work in the tree
+### What landed this session
 
-Everything below is edited but **not committed, not built, not in Basecamp**.
-Run the gates, rebuild both modules, then commit.
+All of the below is committed. Next step is pushing to both remotes, then
+the release/catalog work — see the ordered list further down.
 
 - **`remoteGetCommit` / `localGetCommit` wired through.** They were implemented
   in the core module and URL-tested, but missing from `radicle_ui.rep`, so no
@@ -19,8 +19,73 @@ Run the gates, rebuild both modules, then commit.
   patch detail views. The `StackLayout` detail indices are now named
   (`threadIndex`, `commitIndex`) instead of a hardcoded `4`, so inserting a tab
   cannot silently point at the wrong child.
-- **Three bugs from the architecture review**, each with the reasoning in a
-  comment at the site:
+- **The commit-row click bug is fixed — and it was a test bug, not a delegate
+  bug.** `CommitsTab.qml` and `IssuesTab.qml` were structurally identical at
+  the delegate (the MouseArea declared after the RowLayout in both, once
+  aligned). The actual cause: in `tst_clicks.qml`, `commits` and `issues`
+  overlap (`anchors.fill: parent` on both) and `commits` is `visible: false`
+  by default so the issues click test doesn't hit a commits row underneath.
+  `TestCase.mouseClick` cannot deliver a synthetic event into an invisible
+  item's children, so the commit-row click test always failed regardless of
+  the delegate. Fix: the test now flips `commits.visible = true` for the
+  duration of that one test, then restores it. All 63 (now 70, see below)
+  component tests pass.
+- **`tst_clicks.qml` (new in the prior session)** — the first test here that
+  issues a real `mouseClick` rather than emitting a signal by hand. This is
+  what caught the test bug above in the first place.
+- **Icon: transparent background, white Noto-Emoji alien glyph.** Went
+  through several attempts this session:
+  1. Transparent Noto-Emoji alien — showed inside a solid green tile in
+     Basecamp's sidebar.
+  2. Opaque white-background/purple-glyph version, on the theory the tile
+     colour was showing through transparency — the green tile was still
+     there, unchanged, because that theory was wrong.
+  3. Investigated instead of guessing further. The green tile is an accent
+     colour Basecamp/the module catalog assigns per module — it lives in a
+     `color` field in the *catalog's* `logos-repo.json` (the fork at
+     `fryorcraken/logos-modules`, set up as part of this session — see below),
+     not in this repo's `metadata.json` and not something baked into the PNG.
+     So: standard dock-icon pattern — fully transparent background, bold
+     white glyph, so it reads correctly on whatever accent tile colour the
+     catalog assigns. Tried a hand-drawn simplified silhouette instead of the
+     emoji glyph at this point — rejected on sight, went back to the real
+     👾 emoji.
+  4. **Final: the real Noto-Emoji 👾 glyph, rendered white, transparent
+     background** — same PIL method as before (`NotoEmoji-Regular.ttf`, not
+     the COLRv1 variant, thickened via `ImageFilter.MaxFilter`, 95% canvas
+     fill), just white fill instead of the original blue.
+  **Regenerate rather than hand-edit** — there's no checked-in generator
+  script; write one ad hoc from this description if you need to tweak it
+  again. Confirmed rendering with no QML/resource errors and confirmed
+  visually acceptable in a live Basecamp.
+  **If a deliberate accent colour is wanted instead of the green default,
+  that's set in the catalog's `logos-repo.json`, not here.**
+- **Sync progress bar could visibly regress — fixed.** Reported live: the
+  Download All button went from ~90% back to ~50% mid-download. Root cause:
+  `syncQueued`/`syncDone` count nodes as the tree is discovered
+  breadth-first, so `syncQueued` can jump up (a directory's reply reveals
+  several new children) faster than `syncDone` catches up, dropping the raw
+  ratio. Fixed by making `SourceTab.syncProgress` a value that only ever
+  advances — updated explicitly in `finishSyncIfDone()` (`bumpSyncProgress()`
+  keeps the max of the current value and the fresh ratio) instead of being a
+  live binding recomputed on every read, and reset to 0 in both `reset()` and
+  at the start of `syncAll()`. Regression test in `tst_repo_switch.qml`
+  (`test_sync_progress_never_goes_backwards`) reproduces the exact shape that
+  triggered it — a root file completing before a sibling directory's larger
+  contents are discovered — and asserts the sequence of progress values seen
+  after each reply is non-decreasing and ends at 100%.
+- **Sync button relabelled.** Idle-state label now reads "Download All" the
+  first time a repository is opened (never synced) and "Re-sync" once a sync
+  has completed for it, instead of always saying "Sync" — makes the
+  first-time full-download cost visible before the user commits to it.
+  Backed by a new `SourceTab.syncedOnce` bool: set on `finishSyncIfDone()`
+  (not on `cancelSync()`, so an interrupted sync doesn't falsely claim
+  completion), cleared in `reset()` so switching repositories doesn't carry
+  over another repo's synced state. Tooltip text updated to match
+  ("Re-download every file to refresh the local cache" when already synced).
+  Covered by three new tests in `tst_repo_switch.qml`.
+- **Four bugs from architecture review, same class each time**, each with
+  the reasoning in a comment at the site:
   - `nav.busy` was a boolean where concurrent requests are the norm, so the
     first reply cleared the strip while others were in flight. Now a counter.
     It also cleared `nav.error` on every request start, which meant a later
@@ -31,55 +96,109 @@ Run the gates, rebuild both modules, then commit.
   - `SourceTab`'s sync counters were incremented by replies from a previous
     repository, so a fresh sync could report itself finished while still
     fetching. Requests now carry a `syncEpoch`.
-- **`tst_clicks.qml` (new)** — the first test here that issues a real
-  `mouseClick` rather than emitting a signal by hand.
-- **Icon** is now the Radicle alien. The first attempt drew it on its own
-  rounded tile with padding, which left a tiny glyph inside Basecamp's *own*
-  tile — so it is now transparent and fills 95% of the canvas, with the strokes
-  thickened (`ImageFilter.MaxFilter`) so the outline survives being scaled down
-  to sidebar size. **Regenerate rather than hand-edit**: it is produced from
-  Noto Emoji with PIL, and the colour font renders as an empty glyph through
-  PIL, so use `NotoEmoji-Regular.ttf`, not `Noto-COLRv1.ttf`. Not yet seen in
-  Basecamp — needs the rebuild in step 2 below to confirm the size reads well.
+  - **`CommitsTab.fetch()` had no staleness guard at all** — found by this
+    session's own architecture-review pass, not live. Unlike `IssuesTab`/
+    `PatchesTab`'s `fetch()`, it didn't capture `wantRid`/`wantBranch` before
+    the async call, so a reply landing after the user switched repos or
+    branches would populate the new repo's list with the old repo's commits
+    and flip `loading`/`hasMore` for a screen that had already moved on. Now
+    matches the `IssuesTab`/`PatchesTab` guard shape. Regression test:
+    `tst_repo_switch.qml::test_a_stale_commits_reply_is_dropped_after_switching_repos`,
+    using a new deferred-reply fake backend (`deferredApp`) that lets the
+    test hold a reply, switch `rid`, then deliver it and assert it's dropped.
 
-### One failing test — a real bug, not a flaky test
+### Two independent reviews before cutting the release
 
-`tst_clicks.qml::test_a_commit_row_click_activates_it` fails. Issue rows click
-fine; commit rows do not, despite `CommitsTab.qml` and `IssuesTab.qml` looking
-structurally identical at the delegate. **Diff the two delegates carefully** —
-the difference is subtle and is the actual bug. 62 of 63 component tests pass.
+Ran a test-coverage review and an architecture review (both read-only,
+separate subagents) as a pre-release check. Findings, and what was done with
+each:
 
-This test earning its keep is the point: the earlier "click" test emitted the
-signal directly, so deleting `onClicked` left it passing. See the rule below.
+- **Acted on now:** the `CommitsTab.fetch()` staleness gap above — same bug
+  class as four prior fixes, small and mechanical, so fixed in this pass
+  rather than deferred.
+- **Deferred, not blocking:** `Main.qml`'s `nav.busy`/`nav.error` counter
+  logic has no dedicated test (only incidental coverage via layout tests);
+  `SourceTab.syncEpoch`'s actual race (a stale reply arriving *after* a new
+  sync starts) is only exercised under a synchronous fake backend that can't
+  trigger the false path; `CommitView.qml` (320 lines, the diff renderer) has
+  no test file at all; `PatchesTab.qml`'s `threadRow` click has no coverage
+  in `tst_clicks.qml`, unlike issue and commit rows; `radicle_impl.cpp`'s
+  `local*` methods aren't unit-tested for the *shape* of their "unavailable"
+  error; the end-to-end spec (`browse.yaml`) never exercises the file tree,
+  blob viewer, README, or patches flows, despite those being shipped
+  features. None of these are regressions from this session's work — they're
+  pre-existing gaps the coverage review surfaced. Worth a follow-up pass,
+  not a release blocker.
+- **Architectural note for M2, not urgent now:** `Main.qml`'s `call()`
+  hardcodes `"remote" + method` — every QML caller is wired to the `remote*`
+  source with no way to choose `local*`, even though the core module's
+  `local*` surface is already fully implemented and forwarded. Fine today
+  (there's no local-node UI yet), but when M2 adds one, every call site
+  threading through `Main.qml.call()` will need a `source` parameter added.
+  Cheaper to add that parameter now (default `"remote"`, no behaviour
+  change) than to retrofit it across seven files once M2 lands.
+- **Flagged, not actioned:** `IssuesTab.qml`/`PatchesTab.qml` are near-
+  identical (same fetch/cache/pagination shape, differing only in the status
+  list and backend method name) — real duplication, but CLAUDE.md's stance
+  against premature abstraction means this waits for a second bugfix
+  divergence or a third consumer before extracting a shared component.
+
+All gates pass (syntax, QML component tests, core module unit tests), and
+both modules have been rebuilt and confirmed loading with no errors in a
+live `alice` Basecamp profile (checked the log for QML/import failures —
+none — and confirmed "Successfully loaded UI module: radicle_ui").
+
+### M1.1 — proposed next milestone, not started
+
+Two feature requests came up live while dogfooding M1 in Basecamp. Neither is
+in scope for M1 (browse-only, no branch concept beyond the default) or M2
+(local-node browsing). Scoping notes so whoever picks this up doesn't have to
+re-derive the reasoning:
+
+- **Branch switching.** The "main" chip in `RepoView.qml` (next to the Sync
+  button) is currently a static, non-interactive label reading
+  `page.defaultBranch` — there is no branch-switching feature anywhere in the
+  codebase today. Needs: a way to list a repo's branches/refs (check whether
+  the seed HTTP API already exposes this — `radicle/src/radicle_impl.h` is
+  the core module's API surface), a picker UI, and `SourceTab`/`CommitsTab`/
+  etc. re-pointing their `branch` property and resetting cached state the
+  same way a repo switch does today.
+- **Detect when a re-sync is worth doing.** Right now "Re-sync" (post-first-
+  sync idle label, see above) is always the same colour/affordance regardless
+  of whether the remote has moved since the last sync — there's no signal
+  telling the user whether re-syncing would actually fetch anything new.
+  Proposed shape from the conversation that raised it: periodically check the
+  remote's HEAD (a lightweight call, not a full sync) — every ~5 minutes was
+  suggested as a starting point — and compare against the commit captured at
+  the last completed sync; if they differ, give the button a distinct
+  "update available" colour/state rather than disabling/enabling it outright,
+  since the button's clickability shouldn't depend on this (re-syncing is
+  never wrong, just sometimes unnecessary). Needs the last-synced commit
+  captured somewhere in `SourceTab` (there's currently no such field — only
+  `syncedOnce`, a bool) and a lightweight polling mechanism that respects
+  `syncEpoch`/repo-switch semantics the same way `syncAll()` does, so a stale
+  poll reply from a previous repository can't flip the indicator for the
+  wrong repo.
 
 ### What is left, in order
 
-1. **Fix the commit-row click**, then run the gates:
-   `radicle-ui/tests/check-qml-syntax.sh` and
-   `radicle-ui/tests/run-qml-tests.sh` (both take no arguments and set
-   `QT_QPA_PLATFORM` themselves).
-2. **Rebuild and reload Basecamp** to confirm commit detail and diffs render,
-   and that the alien icon now reads at sidebar size (it was too small before;
-   the fix is in the tree but has never been seen running):
-   `cd radicle-ui && nix build '.#lgx' --override-input radicle path:../radicle`,
-   then `lgs basecamp launch alice --log-file --quiet`. Verify it is up with
-   `ps -eo comm | grep -i logosbasecamp` — the process is named
-   `.LogosBasecamp`, and the log file is stale between runs, so a log grep will
-   happily report a Basecamp that is not running.
-3. **Commit and push** to both remotes: `git push origin main` and
+1. **Commit and push** to both remotes: `git push origin main` and
    `git push rad main`.
-4. **Release CI**: `ci.yml` already has a `release` job attaching `.lgx`
+2. **Release CI**: `ci.yml` already has a `release` job attaching `.lgx`
    artefacts on a `v*` tag, but it has never run. Check it produces both
    portable and `-dev` variants.
-5. **Cut the first release** and confirm the assets are attached.
-6. **Register in the catalog.** The fork already exists at
+3. **Cut the first release** and confirm the assets are attached.
+4. **Register in the catalog.** The fork already exists at
    `fryorcraken/logos-modules` (from `logos-co/logos-modules-release-base`).
    Still to do: edit its `logos-repo.json` (replace every `CHANGE-ME`, point
    `indexUrl` at the fork), run `./scripts/add-module.sh` for this repo, then
    run its **Release all modules** workflow.
-7. **Hand over the catalog URL** for prod Basecamp:
+5. **Hand over the catalog URL** for prod Basecamp:
    `https://raw.githubusercontent.com/fryorcraken/logos-modules/main/logos-repo.json`
-   — unverified until step 6 is done.
+   — unverified until step 4 is done.
+
+**M2 (local-node browsing) is explicitly out of scope until the user has
+reviewed the M1 work above** — do not start it unprompted.
 
 ### M1 gaps closed, and what M1 is
 

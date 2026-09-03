@@ -93,11 +93,17 @@ Item {
             var row = findByName(commits, "commitRow");
             verify(row !== null, "no commitRow delegate was rendered");
 
+            // commits and issues overlap (both anchors.fill: parent), and
+            // stay hidden by default so issues' own click test does not hit
+            // a commits row instead. mouseClick cannot reach an invisible
+            // item's children, so this test needs the tab shown for real.
+            commits.visible = true;
             var seen = "";
             function grab(sha) { seen = sha; }
             commits.commitActivated.connect(grab);
             mouseClick(row, row.width / 2, row.height / 2);
             commits.commitActivated.disconnect(grab);
+            commits.visible = false;
 
             compare(seen, "0123456789abcdef0123456789abcdef01234567",
                     "clicking a commit row must activate it");

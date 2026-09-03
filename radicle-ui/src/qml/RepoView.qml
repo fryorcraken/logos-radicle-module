@@ -178,7 +178,7 @@ Item {
                         anchors.centerIn: parent
                         text: source.syncing
                               ? Math.round(source.syncProgress * 100) + "%"
-                              : "Sync"
+                              : (source.syncedOnce ? "Re-sync" : "Download All")
                         color: source.syncing ? Theme.accent : Theme.text
                         font.pixelSize: Theme.fontMd
                     }
@@ -196,7 +196,9 @@ Item {
                     ToolTip.text: source.syncing
                                   ? "Cancel — " + source.syncDone + " of "
                                     + source.syncQueued + " fetched"
-                                  : "Download every file so browsing is instant"
+                                  : (source.syncedOnce
+                                     ? "Re-download every file to refresh the local cache"
+                                     : "Download every file so browsing is instant")
                 }
 
                 // Branch chip.

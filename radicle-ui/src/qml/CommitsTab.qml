@@ -37,14 +37,22 @@ Item {
 
     function fetch() {
         if (!app || rid === "") return;
+        var wantRid = rid, wantBranch = branch;
         tab.loading = true;
         app.call("ListCommits", [rid, branch, page_, 50], function (data) {
+            // Drop a reply for a repo or branch the user has already left —
+            // otherwise it would populate the new repo's list and flip
+            // loading/hasMore for a repo that is no longer showing.
+            if (tab.rid !== wantRid || tab.branch !== wantBranch) return;
             tab.loading = false; tab.loadedOnce = true;
             var items = data.items || [];
             for (var i = 0; i < items.length; i++)
                 commits.append({ c: items[i] });
             tab.hasMore = !!data.hasMore;
-        }, function () { tab.loading = false; tab.loadedOnce = true; });
+        }, function () {
+            if (tab.rid !== wantRid || tab.branch !== wantBranch) return;
+            tab.loading = false; tab.loadedOnce = true;
+        });
     }
 
     ListView {
@@ -63,18 +71,6 @@ Item {
             height: Theme.rowHeight
             color: rowMouse.containsMouse ? Theme.surfaceAlt : Theme.bg
             Behavior on color { ColorAnimation { duration: Theme.animFast } }
-
-            // Declared before the content so it sits underneath in z-order and
-            // the RowLayout's own items do not swallow the click. The other
-            // clickable rows in this app follow the same order.
-            MouseArea {
-                id: rowMouse
-                objectName: "commitRow"
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: tab.commitActivated(c.id)
-            }
 
             RowLayout {
                 anchors.fill: parent
@@ -130,6 +126,17 @@ Item {
                 color: Theme.border
             }
 
+            // Matches IssuesTab's delegate order (content, then MouseArea).
+            // The actual click-dead bug was in the test, not z-order: see
+            // tst_clicks.qml — mouseClick cannot reach an invisible item.
+            MouseArea {
+                id: rowMouse
+                objectName: "commitRow"
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: tab.commitActivated(c.id)
+            }
         }
 
         footer: Item {
