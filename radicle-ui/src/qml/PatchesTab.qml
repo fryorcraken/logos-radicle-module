@@ -19,6 +19,9 @@ Item {
     property bool loading: false
     property bool loadedOnce: false
 
+    /// Emitted when a row is activated, so RepoView can open the detail view.
+    signal itemActivated(string id)
+
     readonly property var states: ["open", "merged", "archived", "draft"]
 
     ListModel { id: items }
@@ -191,7 +194,14 @@ Item {
                     color: Theme.border
                 }
 
-                MouseArea { id: rowMouse; anchors.fill: parent; hoverEnabled: true }
+                MouseArea {
+                    id: rowMouse
+                    objectName: "threadRow"
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: tab.itemActivated(item.id)
+                }
             }
 
             footer: Item {

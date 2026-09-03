@@ -33,6 +33,10 @@ Item {
     property int tab: 0
     property var loadedTabs: ({})
 
+    /// When set, the detail view for one issue or patch replaces the tabs.
+    property string openThreadId: ""
+    property string openThreadKind: "Issues"
+
     /// Counts the UI tests assert on.
     readonly property int treeCount:   source.entryCount
     readonly property int commitCount: commits.count
@@ -43,6 +47,7 @@ Item {
         // Drop every tab's contents up front. Without this, switching repos
         // left the previous repo's commits/issues/patches on screen under the
         // new repo's header until each tab was re-opened.
+        openThreadId = "";
         source.reset();
         commits.reset();
         issues.reset();
@@ -213,6 +218,8 @@ Item {
         // ---- tabs (fixed height) ----
         SectionTabs {
             Layout.fillWidth: true
+            visible: page.openThreadId === ""
+            Layout.preferredHeight: visible ? Theme.tabHeight : 0
             current: page.tab
             tabs: [
                 { label: "Source",  count: -1 },
@@ -227,12 +234,40 @@ Item {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: page.tab
+            // The detail view replaces the tab bodies rather than sitting
+            // beside them, so the repository header above stays put.
+            currentIndex: page.openThreadId !== "" ? 4 : page.tab
 
             SourceTab  { id: source;  app: page.app; rid: page.rid; branch: page.defaultBranch }
             CommitsTab { id: commits; app: page.app; rid: page.rid; branch: page.defaultBranch }
-            IssuesTab  { id: issues;  app: page.app; rid: page.rid }
-            PatchesTab { id: patches; app: page.app; rid: page.rid }
+
+            IssuesTab {
+                id: issues
+                app: page.app
+                rid: page.rid
+                onItemActivated: function (id) {
+                    page.openThreadKind = "Issues";
+                    page.openThreadId = id;
+                }
+            }
+
+            PatchesTab {
+                id: patches
+                app: page.app
+                rid: page.rid
+                onItemActivated: function (id) {
+                    page.openThreadKind = "Patches";
+                    page.openThreadId = id;
+                }
+            }
+
+            ThreadView {
+                app: page.app
+                rid: page.rid
+                kind: page.openThreadKind
+                itemId: page.openThreadId
+                onBack: page.openThreadId = ""
+            }
         }
     }
 }

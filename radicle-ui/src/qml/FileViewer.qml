@@ -72,19 +72,19 @@ Rectangle {
         }
     }
 
-    Text {
-        anchors.centerIn: parent
-        visible: viewer.loading
-        text: "Loading…"
-        color: Theme.textDim
-        font.pixelSize: Theme.fontLg
-    }
-
-    Text {
-        anchors.centerIn: parent
-        visible: !viewer.loading && viewer.body === ""
-        text: "Select a file"
-        color: Theme.textFaint
-        font.pixelSize: Theme.fontLg
+    // Same treatment as the repository and file lists: pulsing dots while a
+    // request is in flight, and a distinct message once one has completed with
+    // nothing to show. A bare "Loading…" here read as a different, lesser kind
+    // of waiting than everywhere else in the app.
+    LoadingState {
+        anchors.fill: parent
+        loading: viewer.loading
+        // A file pane has no "loaded but empty" state to report: before a
+        // selection there is simply nothing to show, which the emptyText
+        // covers.
+        loaded: true
+        count: viewer.body === "" ? 0 : 1
+        emptyText: "Select a file"
+        loadingText: "Loading file…"
     }
 }
