@@ -132,6 +132,35 @@ jobs:
           export QT_QPA_PLATFORM=offscreen
           sh radicle-ui/tests/run-qml-tests.sh
 
+  # The end-to-end UI specs need a Basecamp built with the QML inspector (a
+  # compile-time feature, off in shipping builds), so running them in CI means
+  # building Basecamp first — minutes, not seconds. Validating the specs is
+  # cheap, though, and catches schema mistakes before anyone runs them.
+  ui-specs:
+    name: UI spec validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Specs parse against the sitometres schema
+        run: |
+          set -eu
+          npm install --no-save --silent @paradoxcomputer/sitometres yaml
+          for spec in radicle-ui/tests/ui/*.yaml; do
+            node - "$spec" <<'JS'
+          import { readFileSync } from "node:fs";
+          import { parse } from "yaml";
+          import { validateSpec } from "@paradoxcomputer/sitometres";
+          const path = process.argv[2];
+          const spec = validateSpec(parse(readFileSync(path, "utf8")), path);
+          console.log(`${path}: ok (${spec.steps.length} steps)`);
+          JS
+          done
+
   build:
     name: Build LGX
     runs-on: ubuntu-latest
