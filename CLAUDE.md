@@ -148,12 +148,67 @@ both modules have been rebuilt and confirmed loading with no errors in a
 live `alice` Basecamp profile (checked the log for QML/import failures —
 none — and confirmed "Successfully loaded UI module: radicle_ui").
 
-### M1.1 — proposed next milestone, not started
+### M1.1 — implemented on a branch, not yet merged to main
 
-Two feature requests came up live while dogfooding M1 in Basecamp. Neither is
-in scope for M1 (browse-only, no branch concept beyond the default) or M2
-(local-node browsing). Scoping notes so whoever picks this up doesn't have to
-re-derive the reasoning:
+All three items below are done, on branch `worktree-agent-a42af4ef65b0dcc3b`
+in a separate worktree — not on this `main`, and not pushed anywhere. Not
+merged pending human review. All four test-layer gates that can run without a
+live Basecamp are green: `check-qml-syntax.sh`, `run-qml-tests.sh` (13 files,
+118 tests), and `cd radicle && nix build '.#checks.x86_64-linux.unit-tests'`
+(34 tests). The sitometres end-to-end spec was not run or updated — it needs
+a live Basecamp build, which was out of scope for that session, and it still
+does not exercise branch switching or the sync button at all (pre-existing
+gap, see "The end-to-end spec passes" above).
+
+What landed, roughly in the order it was built:
+
+- **Test-coverage follow-up**, done first to build context on the codebase's
+  patterns. `NavState.qml` — the `nav.busy`/`nav.error` counter/latch logic —
+  pulled out of `Main.qml` into its own component (same shape as
+  `ListCache.qml`) so it is directly testable; `tst_nav.qml` added.
+  `tst_sync_epoch.qml` added, using a deferred-reply fake backend (the
+  technique `CommitsTab`'s staleness test already used) to actually trigger
+  `SourceTab.syncEpoch`'s stale-reply-after-a-new-sync-starts path, which a
+  synchronously-replying fake structurally cannot exercise. `tst_clicks.qml`
+  gained `PatchesTab`'s `threadRow`. Writing `tst_commitview.qml` (previously
+  no test file existed) found two real, previously unnoticed bugs in
+  `CommitView.qml`, both fixed in the same change: the view rendered as a
+  completely blank pane (its own `property var data` shadowed `Item`'s
+  built-in default `data` property, silently breaking child-item parenting —
+  caught by rendering the item and checking the grabbed image wasn't a flat
+  colour), and the back button was unreachable for any commit with an empty
+  diff (`LoadingState`'s overlay was keyed on `files.length` rather than "did
+  a commit load", unlike `ThreadView`'s equivalent).
+- **Branch switching.** The seed API had no dedicated branch-listing
+  endpoint, but `getRepo()`'s response already carries the full refs map
+  (`resolveSha()` already read it) — `SeedClient::listBranches()` reuses that
+  one request. Wired through `remoteListBranches`/`localListBranches` (the
+  latter the standard "no local backend" error, matching every other
+  `local*` method), the `.rep`, and the backend forwarders, with unit tests
+  in `test_seed_client.cpp`. UI: `BranchPicker.qml` (same
+  dependency-injection shape as `SeedPicker.qml`, not editable — branches are
+  a closed set), replacing the static branch chip in `RepoView.qml`.
+  `RepoView.branch` is a live binding to `defaultBranch` that a pick
+  overrides; switching repository re-binds it via `Qt.binding()` (not a
+  one-shot copy) so a branch picked on one repo cannot leak its name into a
+  different repo; switching branch resets and reloads only `SourceTab`/
+  `CommitsTab` (the two tabs that are actually branch-scoped — Issues/
+  Patches are repository-wide COBs). `tst_branch_switch.qml` added.
+- **Sync staleness detection.** `SourceTab` gained `lastSyncedCommit` (the
+  branch head captured when a sync completes, via the same `ListBranches`
+  call branch switching added) and `checkForUpdate()`, a lightweight poll on
+  a five-minute `Timer`, guarded by a new `pollEpoch` mirroring `syncEpoch`'s
+  role. The sync button gets a third visual state ("Update", in
+  `Theme.warn`) alongside "Download All"/"Re-sync"/in-progress — colour and
+  label only, `onClicked` untouched, so re-syncing stays exactly as
+  clickable in every state. `tst_staleness.qml` added, including two tests
+  using a deferred-reply fake to prove the `pollEpoch` guard against a poll
+  reply arriving after a repo/branch switch — confirmed to fail before the
+  guard, per the regression-test-first rule.
+
+Original scoping notes below, left as written at the time (branch listing
+turned out to need no new seed HTTP endpoint, just reuse of `getRepo()` —
+narrower than "check whether the API already exposes this" implied):
 
 - **Branch switching.** The "main" chip in `RepoView.qml` (next to the Sync
   button) is currently a static, non-interactive label reading
