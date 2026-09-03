@@ -15,13 +15,23 @@ import "../src/qml" as Ui
  * cancelSync()/reset()), and only THEN have its original reply let through.
  */
 Item {
-    // A fake backend that queues every call and only answers when the test
-    // tells it to. Requests are FIFO per call, so the test can target "the
-    // first GetTree" by index.
+    // A fake backend that queues every GetTree/GetBlob call and only answers
+    // when the test tells it to. Requests are FIFO per call, so the test can
+    // target "the first GetTree" by index.
+    //
+    // ListBranches is answered immediately, out of band, rather than queued:
+    // syncAll() now makes one such call up front (to record the branch head
+    // it is syncing to, for the staleness check in tst_staleness.qml) that
+    // has nothing to do with what this file is pinning — queuing it too
+    // would shift every index below by one for no reason relevant here.
     QtObject {
         id: deferredApp
         property var pending: []
         function call(method, args, onOk, onFail) {
+            if (method === "ListBranches") {
+                onOk({ items: [{ name: "main", head: "" }], default: "main" });
+                return;
+            }
             pending.push({ method: method, args: args, onOk: onOk, onFail: onFail });
         }
         function deliver(index, entries) {

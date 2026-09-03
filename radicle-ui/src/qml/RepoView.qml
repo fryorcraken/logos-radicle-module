@@ -188,12 +188,21 @@ Item {
                 // Sync: pull the whole repository into the local cache so
                 // browsing afterwards needs no further requests.
                 Rectangle {
+                    id: syncButton
                     objectName: "syncButton"
+                    // "Update available" is a colour/label change only — the
+                    // button stays exactly as clickable as always. Re-syncing
+                    // is never wrong, just sometimes unnecessary, so this
+                    // must never gate onClicked below.
+                    readonly property bool updateAvailable:
+                        !source.syncing && source.updateAvailable
                     Layout.preferredWidth: 92
                     Layout.preferredHeight: 26
                     radius: Theme.radius
                     color: syncMouse.containsMouse ? Theme.surfaceAlt : "transparent"
-                    border.color: source.syncing ? Theme.accent : Theme.border
+                    border.color: source.syncing ? Theme.accent
+                                : updateAvailable  ? Theme.warn
+                                                    : Theme.border
                     border.width: 1
                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
 
@@ -212,8 +221,12 @@ Item {
                         anchors.centerIn: parent
                         text: source.syncing
                               ? Math.round(source.syncProgress * 100) + "%"
-                              : (source.syncedOnce ? "Re-sync" : "Download All")
-                        color: source.syncing ? Theme.accent : Theme.text
+                              : (syncButton.updateAvailable ? "Update"
+                                 : source.syncedOnce         ? "Re-sync"
+                                                              : "Download All")
+                        color: source.syncing ? Theme.accent
+                             : syncButton.updateAvailable ? Theme.warn
+                                                           : Theme.text
                         font.pixelSize: Theme.fontMd
                     }
 
@@ -230,9 +243,11 @@ Item {
                     ToolTip.text: source.syncing
                                   ? "Cancel — " + source.syncDone + " of "
                                     + source.syncQueued + " fetched"
-                                  : (source.syncedOnce
-                                     ? "Re-download every file to refresh the local cache"
-                                     : "Download every file so browsing is instant")
+                                  : syncButton.updateAvailable
+                                    ? "The remote has new commits — re-sync to fetch them"
+                                    : (source.syncedOnce
+                                       ? "Re-download every file to refresh the local cache"
+                                       : "Download every file so browsing is instant")
                 }
 
                 // Branch picker: which branch Source and Commits show.
