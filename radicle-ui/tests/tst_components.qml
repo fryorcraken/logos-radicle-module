@@ -13,17 +13,6 @@ Item {
     width: 800
     height: 600
 
-    // ---- SegmentedControl: which source is selected -------------------
-
-    Ui.SegmentedControl {
-        id: sources
-        options: [
-            { key: "remote", label: "Any repo" },
-            { key: "local",  label: "My node", enabled: false,
-              disabledReason: "No local Radicle node detected" }
-        ]
-        current: "remote"
-    }
 
     // ---- SectionTabs: which tab is selected ---------------------------
 
@@ -59,30 +48,6 @@ Item {
         property bool armed: false
     }
 
-    TestCase {
-        name: "SegmentedControl"
-        when: windowShown
-
-        function test_reports_the_current_selection() {
-            compare(sources.current, "remote");
-        }
-
-        function test_selecting_a_segment_emits_its_key() {
-            var seen = [];
-            function grab(key) { seen.push(key); }
-            sources.picked.connect(grab);
-            sources.picked("local");
-            sources.picked.disconnect(grab);
-            compare(seen.length, 1);
-            compare(seen[0], "local");
-        }
-
-        function test_options_carry_their_disabled_reason() {
-            // A disabled source must explain itself rather than just not work.
-            compare(sources.options[1].enabled, false);
-            verify(sources.options[1].disabledReason.length > 0);
-        }
-    }
 
     TestCase {
         name: "SectionTabs"
@@ -214,6 +179,27 @@ Item {
             picker.reload();
             compare(attempts, 2);
             compare(picker.count, 2);
+        }
+
+        function test_a_typed_endpoint_is_normalised_before_use() {
+            // Users paste a host, a full URL, or a URL with /api/v1 already on
+            // it; the module appends /api/v1 itself, so all three must end up
+            // as the same origin.
+            var chosen = [];
+            function grab(u) { chosen.push(u); }
+            picker.seedChosen.connect(grab);
+
+            picker.editText = "seed.example.com";
+            picker.accepted();
+            picker.editText = "https://other.example.com/";
+            picker.accepted();
+            picker.editText = "https://third.example.com/api/v1";
+            picker.accepted();
+
+            picker.seedChosen.disconnect(grab);
+            compare(chosen[0], "https://seed.example.com");
+            compare(chosen[1], "https://other.example.com");
+            compare(chosen[2], "https://third.example.com");
         }
 
         function test_an_empty_reply_leaves_it_retryable() {

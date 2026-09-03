@@ -41,8 +41,10 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    property string source: "remote"          // "remote" | "local"
-    readonly property bool localUsable: !!caps.localAvailable
+    // Only the remote (seed-node) source exists. Local-node browsing needs a
+    // backend that is not written yet, and a disabled control for it was a
+    // placeholder that looked like a broken feature.
+    readonly property string source: "remote"
 
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
@@ -80,7 +82,7 @@ Item {
     /// Source-routed backend call. `method` is the suffix after remote/local.
     function call(method, args, onOk, onFail) {
         if (!backend) return;
-        var name = (root.source === "local" ? "local" : "remote") + method;
+        var name = "remote" + method;
         if (typeof backend[name] !== "function") {
             nav.error = "unsupported operation: " + name;
             if (onFail) onFail();
@@ -207,20 +209,6 @@ Item {
                         font.bold: true
                     }
 
-                    SegmentedControl {
-                        objectName: "sourceSwitch"
-                        current: root.source
-                        options: [
-                            { key: "remote", label: "Any repo" },
-                            { key: "local",  label: "My node",
-                              enabled: root.localUsable,
-                              disabledReason: "No local Radicle node detected" }
-                        ]
-                        onPicked: function (key) {
-                            if (root.source === key) return;
-                            root.source = key;
-                            nav.reset();
-                        }
                     }
 
                     SeedPicker {
@@ -248,9 +236,7 @@ Item {
                         id: searchField
                         visible: nav.view === "repos"
                         Layout.preferredWidth: 260
-                        placeholder: root.source === "local"
-                                     ? "Filter your repositories"
-                                     : "Search repositories"
+                        placeholder: "Search repositories"
                         onAccepted: repoList.reload()
                     }
                 }

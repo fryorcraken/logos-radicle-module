@@ -49,6 +49,13 @@ Item {
     /// Entries in the current directory — read by the UI tests.
     readonly property int entryCount: entries.count
 
+    /// Sync: walk the whole tree up front and pull every file into the cache,
+    /// so navigation afterwards is instant rather than a request per click.
+    property bool syncing: false
+    property int syncQueued: 0
+    property int syncDone: 0
+    readonly property real syncProgress: syncQueued > 0 ? syncDone / syncQueued : 0
+
     /// True while a directory listing is in flight.
     property bool treeLoading: false
     /// True once a listing has completed at least once for this repo.
@@ -64,6 +71,9 @@ Item {
         treeCache = ({});
         inFlight = ({});
         entries.clear();
+        syncing = false;
+        syncQueued = 0;
+        syncDone = 0;
         treeLoading = false;
         treeLoaded = false;
         viewer.title = "";
@@ -234,6 +244,78 @@ Item {
                 viewer.body = body;
             }
         }, function () { delete inFlight[pkey]; });
+    }
+
+    /// Fetch every directory and file in the repository into the local cache.
+    /// Directories are walked breadth-first; each blob is fetched once and
+    /// stored under the same key an on-demand click would use, so a synced
+    /// repo needs no further requests to browse.
+    function syncAll() {
+        if (!app || rid === "" || syncing) return;
+        syncing = true;
+        syncQueued = 0;
+        syncDone = 0;
+        syncDir("");
+    }
+
+    function cancelSync() {
+        syncing = false;
+    }
+
+    function syncDir(dirPath) {
+        if (!syncing) return;
+        syncQueued++;
+        var wantRid = rid;
+        var tkey = cacheKey(dirPath);
+
+        var handle = function (list) {
+            syncDone++;
+            if (!syncing || tab.rid !== wantRid) return;
+            for (var i = 0; i < list.length; i++) {
+                var e = list[i];
+                if (e.kind === "tree") syncDir(e.path);
+                else                   syncBlob(e);
+            }
+            finishSyncIfDone();
+        };
+
+        if (treeCache[tkey] !== undefined) {
+            handle(treeCache[tkey]);
+            return;
+        }
+        app.call("GetTree", [rid, branch, dirPath], function (data) {
+            var list = data.entries || [];
+            treeCache[tkey] = list;
+            handle(list);
+        }, function () { syncDone++; finishSyncIfDone(); });
+    }
+
+    function syncBlob(entry) {
+        if (!syncing) return;
+        var bkey = cacheKey(entry.path);
+        if (blobCache[bkey] !== undefined || inFlight[bkey]) return;
+
+        syncQueued++;
+        inFlight[bkey] = true;
+        var wantRid = rid;
+        app.call("GetBlob", [rid, branch, entry.path], function (data) {
+            delete inFlight[bkey];
+            syncDone++;
+            if (tab.rid === wantRid) {
+                blobCache[bkey] = data.binary
+                    ? "(binary file — " + (data.name || entry.name) + ")"
+                    : (data.content || "");
+            }
+            finishSyncIfDone();
+        }, function () {
+            delete inFlight[bkey];
+            syncDone++;
+            finishSyncIfDone();
+        });
+    }
+
+    function finishSyncIfDone() {
+        if (syncing && syncDone >= syncQueued) syncing = false;
     }
 
     function goUp() {

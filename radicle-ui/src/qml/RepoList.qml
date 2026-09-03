@@ -43,9 +43,7 @@ Item {
 
     function fetch() {
         if (!app) return;
-        // Remote takes a search query; local takes a scope. Same shape back.
-        var args = app.source === "local" ? ["all", page_, 50]
-                                          : [page.query, page_, 50];
+        var args = [page.query, page_, 50];
         page.loading = true;
         app.call("ListRepos", args, function (data) {
             page.loading = false;
@@ -218,9 +216,7 @@ Item {
         loading: page.loading
         loaded: page.loadedOnce
         count: repos.count
-        emptyText: (page.app && page.app.source === "local")
-                   ? "No local repositories found"
-                   : "No repositories matched"
+        emptyText: "No repositories matched"
         loadingText: "Loading repositories…"
     }
 }

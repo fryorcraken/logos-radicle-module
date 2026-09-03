@@ -135,6 +135,54 @@ Item {
                     }
                 }
 
+                // Sync: pull the whole repository into the local cache so
+                // browsing afterwards needs no further requests.
+                Rectangle {
+                    objectName: "syncButton"
+                    Layout.preferredWidth: 92
+                    Layout.preferredHeight: 26
+                    radius: Theme.radius
+                    color: syncMouse.containsMouse ? Theme.surfaceAlt : "transparent"
+                    border.color: source.syncing ? Theme.accent : Theme.border
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+
+                    // Fills left-to-right as files are fetched.
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width * source.syncProgress
+                        radius: Theme.radius
+                        visible: source.syncing
+                        color: Qt.rgba(0.35, 0.65, 1.0, 0.18)
+                    }
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: source.syncing
+                              ? Math.round(source.syncProgress * 100) + "%"
+                              : "Sync"
+                        color: source.syncing ? Theme.accent : Theme.text
+                        font.pixelSize: Theme.fontMd
+                    }
+
+                    MouseArea {
+                        id: syncMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: source.syncing ? source.cancelSync() : source.syncAll()
+                    }
+
+                    ToolTip.visible: syncMouse.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: source.syncing
+                                  ? "Cancel — " + source.syncDone + " of "
+                                    + source.syncQueued + " fetched"
+                                  : "Download every file so browsing is instant"
+                }
+
                 // Branch chip.
                 Rectangle {
                     visible: page.defaultBranch !== ""

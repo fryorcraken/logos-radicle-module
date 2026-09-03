@@ -17,9 +17,13 @@ ComboBox {
 
     signal seedChosen(string url)
 
-    implicitWidth: 220
+    implicitWidth: 260
     textRole: "label"
     valueRole: "url"
+
+    // Editable so any radicle-httpd endpoint can be browsed, not just the
+    // built-in list — type a host or URL and press Enter.
+    editable: true
 
     model: ListModel { id: seedModel }
 
@@ -65,6 +69,18 @@ ComboBox {
             control.seedChosen(url);
     }
 
+    /// Accept a typed endpoint. Bare hosts get https:// so "seed.example.com"
+    /// works as well as the full URL, and a trailing /api/v1 is trimmed since
+    /// the module appends it itself.
+    onAccepted: {
+        var url = editText.trim();
+        if (url === "") return;
+        if (url.indexOf("://") === -1) url = "https://" + url;
+        url = url.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+        if (url !== control.currentSeed)
+            control.seedChosen(url);
+    }
+
     implicitHeight: 30
 
     background: Rectangle {
@@ -73,14 +89,16 @@ ComboBox {
         border.color: control.activeFocus ? Theme.accent : Theme.border
         border.width: 1
     }
-    contentItem: Text {
+    contentItem: TextInput {
         leftPadding: Theme.gapSm
         rightPadding: 24
-        text: control.displayText
-        color: control.currentIndex >= 0 ? Theme.text : Theme.textFaint
+        text: control.editable ? control.editText : control.displayText
+        color: Theme.text
         font.pixelSize: Theme.fontMd
         verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideRight
+        selectByMouse: true
+        clip: true
+        onAccepted: control.accepted()
     }
     delegate: ItemDelegate {
         required property var model
