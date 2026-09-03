@@ -397,12 +397,20 @@ and running those scripts by absolute path.
 
 ## This is a scaffold-managed project — reach for `lgs` first
 
-`scaffold.toml` at the root is a `logos-scaffold` (`lgs`, 0.3.0) config, and
-both modules are captured in it as `[modules.radicle]` / `[modules.radicle_ui]`
-with `role = "project"`. That means the build, install, launch and dev-shell
-paths all have an `lgs` verb, and reaching straight for `nix build` skips the
-part scaffold does for you — resolving each module's flake ref, ordering the
-two builds by dependency, and deriving the sibling `--override-input`.
+`scaffold.toml` at the root is a `logos-scaffold` (`lgs`) config, and both
+modules are captured in it as `[modules.radicle]` / `[modules.radicle_ui]` with
+`role = "project"`. That means the build, install, launch and dev-shell paths
+all have an `lgs` verb, and reaching straight for `nix build` skips the part
+scaffold does for you — resolving each module's flake ref, ordering the two
+builds by dependency, and deriving the sibling `--override-input`.
+
+**Version:** everything below needs `lgs` **v0.3.0 or newer** — that release
+introduced the top-level `[modules.*]` schema this repo uses (v0.2.0 keyed them
+under `[basecamp.modules.*]`) along with `develop`, `build`, `run` and `paths`.
+The machine this was written on runs a master build, which also self-reports
+`0.3.0`; master is a handful of fix commits ahead of the tag and adds no
+subcommands, so the tagged v0.3.0 is enough. `lgs --version` cannot distinguish
+the two — if a command here is missing, you are on v0.2.0 or older.
 
 | Instead of | Run |
 |---|---|
@@ -425,25 +433,23 @@ also stays on explicit `nix build` calls on purpose: it needs per-step
 `--out-link` names and `--print-build-logs`, and per-sub-flake jobs give useful
 matrix parallelism. Do not convert `.github/workflows/`.
 
-### The bundled `basecamp` skill is stale — do not trust it over this file
+### Your local `basecamp` skill copy may be a stale v0.2.0 one
 
 `lgs init` generates `.claude/skills/`, `.cursor/` and `AGENTS.md`, and
-`.gitignore` excludes all three: they are regenerated, not checked in, so
-hand-edits there do not survive and cannot be reviewed in a PR. As of
-scaffold 0.3.0 the shipped `basecamp` skill is behind the CLI in two ways
-worth knowing, because it will actively mislead you:
+`.gitignore` excludes all three — they are regenerated, not checked in. That
+means the copy on your disk is whatever `lgs init` last wrote, and it does not
+refresh itself when you upgrade `lgs`.
 
-- It documents the schema as `[basecamp.modules.<name>]` throughout, including
-  its own activation criteria. The real 0.3.0 schema — and what this repo's
-  `scaffold.toml` uses — is top-level `[modules.<name>]`. `lgs basecamp
-  develop --help` confirms it. `lgs init` migrates the legacy keys.
-- It omits `develop`, `build`, `run` and `paths` entirely, so it reads as if
-  `install` / `launch` / `build-portable` were the whole verb set and raw
-  `nix` were the only way to do anything else. The table above is the current
-  surface; `lgs basecamp --help` is authoritative.
+The copy on this machine is a **v0.2.0-era** one: it documents the schema as
+`[basecamp.modules.<name>]` throughout (including its own activation criteria)
+and omits `develop`, `build`, `run` and `paths`, so it reads as if `install` /
+`launch` / `build-portable` were the whole verb set and raw `nix` the only way
+to do anything else. That is exactly backwards for this repo.
 
-Fixing this belongs upstream in logos-scaffold's shipped skill template, not
-here — there is nothing in this repo to patch.
+**Upstream is already correct** — logos-scaffold's v0.3.0 skill has the
+`[modules.*]` schema and all ten subcommands, so there is nothing to report.
+Re-run `lgs init` to refresh the local copy. Until then, prefer this file, and
+treat `lgs basecamp --help` as authoritative over either.
 
 ### If you are working in a git worktree
 
@@ -630,29 +636,31 @@ Stage the **portable** modules, and say so explicitly:
 
 ```bash
 lgs basecamp build-portable
-# artefacts: .scaffold/basecamp/portable/<NN>-<module>.lgx (symlinks, wiped each run)
-# then, from the repo root, with both .lgx copied into dist/
+# both modules land in .scaffold/basecamp/portable/ as <NN>-<module>.lgx
+# then point sitometres at that directory and pass:
 --variant linux-amd64
 ```
 
-**Why the copy into `dist/`.** There is no `--dist` flag; sitometres takes one
-`--app-dir` search root (default: cwd) and discovers `<app-dir>/dist/*.lgx`.
-This is a monorepo, so the two modules build into two separate sub-flake
-`result-*` symlinks and no pre-existing directory holds both — and both must be
-discoverable, because `browse.yaml` declares `with: [radicle]`. Collecting them
-into one directory is the whole reason for the copy.
+**No copying into `dist/` is needed** — and this used to say otherwise, so it
+is worth being explicit about why. sitometres has no `--dist` flag. It takes a
+single `--app-dir` search root (default: cwd) and looks for `.lgx` beneath it.
+Both modules must be findable from that one root, because `browse.yaml`
+declares `with: [radicle]`. The old instructions built each module separately —
+two sub-flake `result-*` symlinks, no single directory holding both — so they
+copied the pair into `dist/` purely to collect them. That was the entire reason
+for the copy, and `build-portable` already does the collecting.
 
-`lgs basecamp build-portable` already collects both into one directory, so it
-may remove the copy outright — but its filenames carry an `<NN>-` prefix and
-its entries are symlinks into `/nix/store`, and whether discovery tolerates
-either is unverified. Confirm with a real run before rewriting this block;
-getting it wrong fails silently, as a spec timing out on step 1.
+Confirmed by a real run rather than inferred: sitometres consumes
+`.scaffold/basecamp/portable/` as-is. It follows the `/nix/store` symlinks and
+is not confused by the `<NN>-` load-order prefix in the filenames — the two
+details most likely to have broken it. Do not "fix" this back into a copy step.
 
-This replaces the two hand-written `nix build '.#lgx-portable'` calls this
-section used to prescribe. It builds both `role = "project"` modules in
-dependency order and **derives the `--override-input radicle path:<abs>`
-itself**, by reading `radicle-ui/flake.nix` — which is why that input must stay
-on one line:
+Nothing on the sitometres side blocks this. The only sitometres bug still
+worked around here is the inspector probe above.
+
+`build-portable` builds both `role = "project"` modules in dependency order and
+**derives the `--override-input radicle path:<abs>` itself**, by reading
+`radicle-ui/flake.nix` — which is why that input must stay on one line:
 
 ```nix
 radicle.url = "path:../radicle";
