@@ -9,18 +9,6 @@ pin = "35d8df0d031315219f94d1546ceb862b0e5b208f"
 source = "https://github.com/logos-co/spel.git"
 pin = "1db7c5f8af3165318f9046c13ab185e24773fd59"
 
-[repos.basecamp]
-source = "https://github.com/logos-co/logos-basecamp.git"
-pin = "aa237766baf61404e12da86b7303cb41065464c9"
-build = "nix-flake"
-attr = "app"
-
-[repos.lgpm]
-source = "github:logos-co/logos-package-manager"
-pin = "202af6fa0f0f4493bc59c8a609dff9326f78a18d"
-build = "nix-flake"
-attr = "cli"
-
 [modules.radicle]
 flake = "path:./radicle#lgx"
 role = "project"
@@ -49,12 +37,17 @@ version = "0.4.1"
 
 # QtRO module sockets live under XDG_RUNTIME_DIR/TMPDIR. A unix socket path is
 # capped at 108 bytes (sun_path), and scaffold's default in-profile `xdg-tmp`
-# under this project path came to 88 chars — every module then segfaulted at
-# "Failed to register module for remote access" (signal 11), basecamp's own
-# bundled modules included. macOS gets a short /tmp/lgs-<profile> by default;
-# Linux does not, so set it explicitly.
+# is 88 chars under this project path — the socket name then overflowed and
+# every module segfaulted at "Failed to register module for remote access",
+# basecamp's own bundled ones included. macOS gets a short /tmp/lgs-<profile>
+# by default; Linux keeps the long in-profile path, so set it explicitly.
+#
+# It must be the session's real runtime dir, not just any short path: Qt finds
+# the Wayland compositor socket (wayland-0) through XDG_RUNTIME_DIR, so a
+# private dir like /tmp/lgs-alice starts basecamp with no display and it exits
+# immediately.
 [basecamp.profiles.alice]
-runtime_dir = "/tmp/lgs-alice"
+runtime_dir = "/run/user/1000"
 
 [basecamp.profiles.bob]
-runtime_dir = "/tmp/lgs-bob"
+runtime_dir = "/run/user/1000"
