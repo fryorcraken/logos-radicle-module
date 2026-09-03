@@ -3,179 +3,215 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
 
-// Repository browser. Under the remote source this searches every repo the
-// seed replicates; under the local source it lists this machine's own repos,
-// private ones included.
+/*
+ * Repository browser. Under "Any repo" this searches every repo the seed
+ * replicates; under "My node" it lists this machine's own repos, private ones
+ * included.
+ */
 Item {
     id: page
+
+    /// Injected by Main.qml: owns backend call routing and source selection.
+    property var app: null
 
     property string query: ""
     property int page_: 0
     property bool hasMore: false
     property bool loading: false
+    property bool loadedOnce: false
 
     signal repoActivated(var repo)
 
-    /// Injected by Main.qml: owns backend call routing and source selection.
-    property var app: null
+    /// Rows currently listed — read by the UI tests.
+    readonly property int count: repos.count
 
     ListModel { id: repos }
 
     function reload() {
         page_ = 0;
         repos.clear();
+        loadedOnce = false;
         fetch();
     }
 
     function fetch() {
         if (!app) return;
         // Remote takes a search query; local takes a scope. Same shape back.
-        var args = app.source === "local"
-                 ? ["all", page_, 50]
-                 : [page.query, page_, 50];
+        var args = app.source === "local" ? ["all", page_, 50]
+                                          : [page.query, page_, 50];
         page.loading = true;
         app.call("ListRepos", args, function (data) {
             page.loading = false;
+            page.loadedOnce = true;
             var items = data.items || [];
             for (var i = 0; i < items.length; i++)
                 repos.append({ repo: items[i] });
             page.hasMore = !!data.hasMore;
         }, function () {
             page.loading = false;
+            page.loadedOnce = true;
         });
     }
 
-    ScrollView {
+    ListView {
+        id: list
         anchors.fill: parent
+        model: repos
         clip: true
+        spacing: 0
+        // Keep rows alive around the viewport so scrolling does not re-create
+        // (and visibly re-lay-out) delegates constantly.
+        cacheBuffer: Theme.rowHeight * 12
+        boundsBehavior: Flickable.StopAtBounds
 
-        ListView {
-            id: list
-            model: repos
-            spacing: 1
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            delegate: ItemDelegate {
-                required property var repo
-                required property int index
+        delegate: Rectangle {
+            required property var repo
+            required property int index
 
-                width: list.width
-                height: 68
+            objectName: "repoRow"
+            width: list.width
+            height: Theme.rowHeight
+            color: mouse.containsMouse ? Theme.surfaceAlt : Theme.bg
+            Behavior on color { ColorAnimation { duration: Theme.animFast } }
 
-                onClicked: page.repoActivated(repo)
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.gap
+                anchors.rightMargin: Theme.gap
+                spacing: Theme.gap
 
-                background: Rectangle {
-                    color: parent.hovered ? Theme.panelAlt : Theme.bg
+                Avatar {
+                    seed: repo.rid
+                    size: 32
+                    Layout.alignment: Qt.AlignVCenter
                 }
 
-                contentItem: RowLayout {
-                    spacing: Theme.pad
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
 
-                    // Local identicon — the QML sandbox blocks remote images.
-                    Rectangle {
-                        Layout.preferredWidth: 34
-                        Layout.preferredHeight: 34
-                        radius: Theme.radius
-                        color: R.tint(repo.rid)
-                        Label {
-                            anchors.centerIn: parent
-                            text: R.initial(R.repoName(repo))
-                            color: "#0d1117"
+                    RowLayout {
+                        spacing: Theme.gapSm
+                        Layout.fillWidth: true
+
+                        Text {
+                            text: R.repoName(repo)
+                            color: Theme.text
+                            font.pixelSize: Theme.fontLg
                             font.bold: true
+                            elide: Text.ElideRight
+                            Layout.maximumWidth: 320
                         }
+
+                        StatusBadge {
+                            status: (repo.visibility && repo.visibility.type === "private")
+                                    ? "private" : ""
+                        }
+
+                        Item { Layout.fillWidth: true }
                     }
 
-                    ColumnLayout {
+                    Text {
+                        text: R.repoDescription(repo)
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        elide: Text.ElideRight
                         Layout.fillWidth: true
-                        spacing: 2
+                        visible: text !== ""
+                    }
+                }
 
-                        RowLayout {
-                            spacing: Theme.gap
-                            Label {
-                                text: R.repoName(repo)
+                // Right-hand stats. Fixed widths so the column does not
+                // shimmy as counts change between rows.
+                RowLayout {
+                    spacing: Theme.gapLg
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Repeater {
+                        model: [
+                            { label: "issues",  value: R.projectMeta(repo).issues
+                                                       ? R.projectMeta(repo).issues.open : -1 },
+                            { label: "patches", value: R.projectMeta(repo).patches
+                                                       ? R.projectMeta(repo).patches.open : -1 },
+                            { label: "seeds",   value: repo.seeding !== undefined
+                                                       ? repo.seeding : -1 }
+                        ]
+                        delegate: ColumnLayout {
+                            required property var modelData
+                            visible: modelData.value >= 0
+                            spacing: 0
+                            Layout.preferredWidth: 52
+                            Text {
+                                text: modelData.value >= 0 ? modelData.value : ""
                                 color: Theme.text
-                                font.pixelSize: 14
-                                font.bold: true
+                                font.pixelSize: Theme.fontMd
+                                horizontalAlignment: Text.AlignHCenter
+                                Layout.fillWidth: true
                             }
-                            Rectangle {
-                                visible: repo.visibility && repo.visibility.type === "private"
-                                color: Theme.warn
-                                radius: 3
-                                implicitWidth: privateLabel.width + 8
-                                implicitHeight: 15
-                                Label {
-                                    id: privateLabel
-                                    anchors.centerIn: parent
-                                    text: "private"
-                                    color: "#0d1117"
-                                    font.pixelSize: 9
-                                    font.bold: true
-                                }
-                            }
-                        }
-
-                        Label {
-                            text: R.repoDescription(repo)
-                            color: Theme.textDim
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                            visible: text !== ""
-                        }
-
-                        RowLayout {
-                            spacing: Theme.pad
-                            Label {
-                                text: R.short(repo.rid, 12)
-                                color: Theme.textDim
-                                font.pixelSize: 10
-                                font.family: Theme.mono
-                            }
-                            Label {
-                                readonly property var m: R.projectMeta(repo)
-                                visible: m.issues !== undefined
-                                text: (m.issues ? m.issues.open : 0) + " issues"
-                                color: Theme.textDim
-                                font.pixelSize: 10
-                            }
-                            Label {
-                                readonly property var m: R.projectMeta(repo)
-                                visible: m.patches !== undefined
-                                text: (m.patches ? m.patches.open : 0) + " patches"
-                                color: Theme.textDim
-                                font.pixelSize: 10
-                            }
-                            Label {
-                                visible: repo.seeding !== undefined
-                                text: repo.seeding + " seeding"
-                                color: Theme.textDim
-                                font.pixelSize: 10
+                            Text {
+                                text: modelData.label
+                                color: Theme.textFaint
+                                font.pixelSize: Theme.fontXs
+                                horizontalAlignment: Text.AlignHCenter
+                                Layout.fillWidth: true
                             }
                         }
                     }
                 }
             }
 
-            // Paging: one more page when the user reaches the end.
-            footer: Item {
-                width: list.width
-                height: page.hasMore ? 44 : 0
-                visible: page.hasMore
-                Button {
-                    anchors.centerIn: parent
-                    text: "Load more"
-                    onClicked: { page.page_++; page.fetch(); }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width; height: 1
+                color: Theme.border
+            }
+
+            MouseArea {
+                id: mouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: page.repoActivated(repo)
+            }
+        }
+
+        footer: Item {
+            width: list.width
+            height: page.hasMore ? 52 : 0
+            visible: page.hasMore
+            Button {
+                anchors.centerIn: parent
+                text: "Load more"
+                onClicked: { page.page_++; page.fetch(); }
+                background: Rectangle {
+                    implicitWidth: 110; implicitHeight: 28
+                    radius: Theme.radius
+                    color: parent.hovered ? Theme.surfaceAlt : Theme.surface
+                    border.color: Theme.border
+                    border.width: 1
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: Theme.text
+                    font.pixelSize: Theme.fontMd
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
             }
         }
     }
 
-    // Empty state, distinct from "still loading".
-    Label {
+    // Empty state — only after a load has actually completed, so it never
+    // flashes over a list that is still arriving.
+    Text {
         anchors.centerIn: parent
-        visible: repos.count === 0 && !page.loading
+        visible: repos.count === 0 && page.loadedOnce && !page.loading
         text: (page.app && page.app.source === "local")
               ? "No local repositories found"
               : "No repositories matched"
         color: Theme.textDim
+        font.pixelSize: Theme.fontLg
     }
 }

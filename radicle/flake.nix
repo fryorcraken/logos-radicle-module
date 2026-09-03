@@ -1,5 +1,5 @@
 {
-  description = "Minimal Logos Module - Example using logos-module-builder";
+  description = "Radicle core module — seed-node and local-node repository access";
 
   inputs = {
     logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.6";
@@ -10,5 +10,8 @@
       src = ./.;
       configFile = ./metadata.json;
       flakeInputs = inputs;
+      tests = {
+        dir = ./tests;
+      };
     };
 }

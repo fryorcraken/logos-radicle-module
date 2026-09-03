@@ -1,0 +1,84 @@
+# End-to-end UI test, run with sitometres:
+#
+#   npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml
+#
+# Unlike the component tests, this drives the REAL Basecamp host: real clicks
+# through Basecamp's QML inspector, the real QtRO transport, and the real
+# `radicle` core module. It proves the wiring the component tests cannot reach.
+#
+# Requires a Basecamp built WITH the QML inspector (it is a compile-time
+# feature and is off in the shipping AppImage):
+#   cd logos-basecamp && nix build .#default
+#
+# Assertions prefer `state:` over `text:` deliberately. `text:` reads
+# properties rather than pixels, so it also matches items that are loaded but
+# hidden — a cached StackLayout page keeps answering for a screen the user has
+# navigated away from. `state:` asks the app what it thinks is true.
+
+app: radicle_ui
+
+steps:
+  # --- the app opens at all ------------------------------------------------
+  - name: opens on the repository list
+    wait_for:
+      state: "root.ready === true"
+      timeout: 30000
+
+  # --- source selection is unambiguous -------------------------------------
+  - name: starts on the remote source
+    state: "root.source === 'remote'"
+
+  # --- the seed dropdown is populated (regression) --------------------------
+  # It used to come up empty: the picker loaded only from
+  # Component.onCompleted, which ran before the parent assigned fetchSeeds.
+  - name: the seed picker has entries
+    wait_for:
+      state: "root.seedCount >= 3"
+      timeout: 20000
+
+  # --- listing repositories over the network -------------------------------
+  - name: lists repositories from the seed
+    wait_for:
+      state: "root.repoCount > 0"
+      timeout: 45000
+    calls:
+      - radicle_ui.remoteListRepos
+
+  # --- opening a repository ------------------------------------------------
+  - name: opening a repository shows its source tree
+    click: { objectName: "repoRow", nth: 0 }
+    wait_for:
+      state: "root.navView === 'repo' && root.treeCount > 0"
+      timeout: 45000
+    calls:
+      - radicle_ui.remoteGetRepo
+      - radicle_ui.remoteGetTree
+    no_warnings: true
+
+  - name: the source tab is the one selected
+    state: "root.repoTab === 0"
+
+  # --- switching sections --------------------------------------------------
+  - name: switching to commits loads them
+    click: { objectName: "sectionTab", nth: 1 }
+    wait_for:
+      state: "root.repoTab === 1 && root.commitCount > 0"
+      timeout: 45000
+    calls:
+      - radicle_ui.remoteListCommits
+
+  - name: switching to issues loads them
+    click: { objectName: "sectionTab", nth: 2 }
+    wait_for:
+      state: "root.repoTab === 2"
+      timeout: 45000
+    calls:
+      - radicle_ui.remoteListIssues
+
+  # --- going back ----------------------------------------------------------
+  - name: back returns to the repository list
+    click: { objectName: "backButton" }
+    wait_for:
+      state: "root.navView === 'repos'"
+      timeout: 15000
+    screenshot: "repo-list"

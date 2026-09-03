@@ -58,6 +58,26 @@ identical, so a view can render either without branching.
 Every method returns a JSON string; failures are always `{"error":"..."}`.
 See `radicle/src/radicle_impl.h` for the full contract.
 
+## Tests
+
+Three layers, each covering what the one below cannot:
+
+| Layer | Command | Covers |
+|---|---|---|
+| Core module unit tests | `cd radicle && nix build '.#test'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
+| QML component tests | `sh radicle-ui/tests/run-qml-tests.sh` | Selection state, fixed chrome heights, the seed-picker load ordering |
+| End-to-end UI tests | `npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml` | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
+
+The unit tests drive `SeedClient` through an injected transport, so they assert
+on the exact URLs built without touching the network. Two of them exist purely
+because the live API is unforgiving about details that are invisible until they
+fail: path parameters must be full 40-char SHAs, and the tree root needs a
+trailing slash that subpaths must not have.
+
+The sitometres layer needs a Basecamp built with the QML inspector, which is a
+compile-time feature that is off in the shipping AppImage:
+`cd logos-basecamp && nix build .#default`.
+
 ## Status
 
 Browsing any public repository over a seed node works: repository search,

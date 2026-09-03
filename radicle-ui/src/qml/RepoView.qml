@@ -3,7 +3,12 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "Radicle.js" as R
 
-// One repository: source tree, commits, issues and patches.
+/*
+ * One repository: source tree, commits, issues and patches.
+ *
+ * Chrome (header + tab bar) has fixed heights from Theme, so switching tabs
+ * changes only the content area — the header never moves.
+ */
 Item {
     id: page
 
@@ -19,8 +24,11 @@ Item {
     readonly property string defaultBranch: repo ? (R.project(repo).defaultBranch || "") : ""
 
     property int tab: 0
-
     property var loadedTabs: ({})
+
+    /// Counts the UI tests assert on.
+    readonly property int treeCount:   source.entryCount
+    readonly property int commitCount: commits.count
 
     onRidChanged: {
         tab = 0;
@@ -28,9 +36,10 @@ Item {
         maybeLoad();
     }
 
-    // The page can receive a rid before it becomes visible, and `active`
-    // can flip before the rid arrives. Load on whichever happens last.
+    // The page can receive a rid before it becomes visible, and `active` can
+    // flip before the rid arrives. Load on whichever happens last.
     onActiveChanged: maybeLoad()
+    onTabChanged: maybeLoad()
 
     function maybeLoad() {
         if (active && rid !== "") loadTab(tab);
@@ -47,124 +56,112 @@ Item {
         else if (index === 3) patches.load();
     }
 
-    onTabChanged: maybeLoad()
-
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        // Header.
+        // ---- header (fixed height) ----
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 60
-            color: Theme.panel
+            Layout.preferredHeight: Theme.headerHeight
+            color: Theme.surface
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: Theme.pad
-                anchors.rightMargin: Theme.pad
-                spacing: Theme.pad
+                anchors.leftMargin: Theme.gap
+                anchors.rightMargin: Theme.gap
+                spacing: Theme.gap
 
-                Button {
-                    text: "‹ Back"
-                    onClicked: page.back()
-                    background: Rectangle {
-                        color: parent.hovered ? Theme.panelAlt : "transparent"
-                        radius: Theme.radius
-                        border.color: Theme.border
-                        border.width: 1
-                    }
-                    contentItem: Text {
-                        text: parent.text
+                Rectangle {
+                    objectName: "backButton"
+                    Layout.preferredWidth: 68
+                    Layout.preferredHeight: 28
+                    radius: Theme.radius
+                    color: backMouse.containsMouse ? Theme.surfaceAlt : "transparent"
+                    border.color: Theme.border
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: Theme.animFast } }
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "‹  Back"
                         color: Theme.text
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                        font.pixelSize: Theme.fontMd
+                    }
+                    MouseArea {
+                        id: backMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: page.back()
                     }
                 }
+
+                Avatar { seed: page.rid; size: 30; Layout.alignment: Qt.AlignVCenter }
 
                 ColumnLayout {
                     spacing: 1
-                    Label {
+                    Layout.fillWidth: true
+
+                    Text {
                         text: page.repo ? R.repoName(page.repo) : ""
                         color: Theme.text
-                        font.pixelSize: 15
+                        font.pixelSize: Theme.fontLg
                         font.bold: true
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
-                    Label {
+                    Text {
                         text: page.rid
-                        color: Theme.textDim
-                        font.pixelSize: 10
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fontXs
                         font.family: Theme.mono
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
                     }
                 }
 
-                Item { Layout.fillWidth: true }
-
-                Label {
+                // Branch chip.
+                Rectangle {
                     visible: page.defaultBranch !== ""
-                    text: page.defaultBranch
-                    color: Theme.textDim
-                    font.pixelSize: 11
-                    font.family: Theme.mono
-                }
-            }
-        }
-
-        // Tab bar.
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 36
-            color: Theme.bg
-
-            Row {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.pad
-                spacing: 4
-
-                Repeater {
-                    model: [
-                        { label: "Source" },
-                        { label: "Commits" },
-                        { label: "Issues",  count: page.meta.issues  ? page.meta.issues.open  : -1 },
-                        { label: "Patches", count: page.meta.patches ? page.meta.patches.open : -1 }
-                    ]
-                    delegate: Button {
-                        required property var modelData
-                        required property int index
-                        height: 36
-                        checkable: true
-                        checked: page.tab === index
-                        onClicked: page.tab = index
-                        background: Rectangle {
-                            color: "transparent"
-                            Rectangle {
-                                anchors.bottom: parent.bottom
-                                width: parent.width
-                                height: 2
-                                color: parent.parent.checked ? Theme.accent : "transparent"
-                            }
-                        }
-                        contentItem: Text {
-                            text: modelData.label
-                                  + (modelData.count >= 0 ? "  " + modelData.count : "")
-                            color: parent.checked ? Theme.text : Theme.textDim
-                            font.pixelSize: 12
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
+                    Layout.preferredWidth: branchText.implicitWidth + 20
+                    Layout.preferredHeight: 22
+                    radius: Theme.radiusPill
+                    color: Theme.surfaceAlt
+                    border.color: Theme.border
+                    border.width: 1
+                    Text {
+                        id: branchText
+                        anchors.centerIn: parent
+                        text: page.defaultBranch
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.mono
                     }
                 }
             }
 
             Rectangle {
                 anchors.bottom: parent.bottom
-                width: parent.width
-                height: 1
+                width: parent.width; height: 1
                 color: Theme.border
             }
         }
 
+        // ---- tabs (fixed height) ----
+        SectionTabs {
+            Layout.fillWidth: true
+            current: page.tab
+            tabs: [
+                { label: "Source",  count: -1 },
+                { label: "Commits", count: -1 },
+                { label: "Issues",  count: page.meta.issues  ? page.meta.issues.open  : -1 },
+                { label: "Patches", count: page.meta.patches ? page.meta.patches.open : -1 }
+            ]
+            onPicked: function (i) { page.tab = i; }
+        }
+
+        // ---- content ----
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true

@@ -7,12 +7,16 @@ import "Radicle.js" as R
  * Radicle browser.
  *
  * The view holds no Radicle logic: every call is a pass-through to the
- * radicle_ui backend, which forwards to the `radicle` core module. QML's job
- * is navigation and rendering.
+ * radicle_ui backend (C++/QtRO), which forwards to the `radicle` core module.
+ * QML does navigation and rendering only.
  *
  * Two sources, kept visibly distinct because they answer different questions:
- *   Remote — any public repo on a seed node, no local install needed.
- *   Local  — this machine's own node, including private repos.
+ *   Any repo — any public repo on a seed node, no local node needed.
+ *   My node  — this machine's own node, including private repos.
+ *
+ * Layout rule: the top bar, status strip and repo chrome have FIXED heights
+ * from Theme, and both screens live in a StackLayout that fills what is left.
+ * Nothing below the chrome reflows when a request starts or a screen changes.
  */
 Item {
     id: root
@@ -29,8 +33,7 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    // "remote" | "local"
-    property string source: "remote"
+    property string source: "remote"          // "remote" | "local"
     readonly property bool localUsable: !!caps.localAvailable
 
     onCapsJsonChanged: {
@@ -56,8 +59,7 @@ Item {
         if (ready) nav.reset();
     }
 
-    /// Single entry point for backend calls, so every view gets the same
-    /// source routing and the same error handling.
+    /// Source-routed backend call. `method` is the suffix after remote/local.
     function call(method, args, onOk, onFail) {
         if (!backend) return;
         var name = (root.source === "local" ? "local" : "remote") + method;
@@ -84,7 +86,7 @@ Item {
         });
     }
 
-    /// Neutral calls that exist on the backend without a source prefix.
+    /// Source-neutral call (getCapabilities, listKnownSeeds, setRemoteSeed).
     function callPlain(method, args, onOk) {
         if (!backend) return;
         logos.watch(backend[method].apply(backend, args), function (text) {
@@ -93,7 +95,20 @@ Item {
         }, function () {});
     }
 
-    /// Open a repository object directly (used for deep links and testing).
+    // ---- test-observable state -------------------------------------------
+    // Read by the UI tests (radicle-ui/tests/ui/*.yaml). Cheap bindings that
+    // say what the app believes is true, so assertions do not have to infer it
+    // from rendered text.
+    readonly property string navView: nav.view
+    readonly property bool   navBusy:  nav.busy
+    readonly property string navError: nav.error
+    readonly property int    repoCount: repoList.count
+    readonly property int    seedCount: seedPicker.count
+    readonly property int    repoTab:   repoPage.tab
+    readonly property int    treeCount: repoPage.treeCount
+    readonly property int    commitCount: repoPage.commitCount
+
+    /// Open a repository object directly (deep links and testing).
     function openRepoExternal(repo) {
         if (repo && repo.rid) nav.openRepo(repo);
     }
@@ -109,24 +124,14 @@ Item {
         property string error: ""
 
         function reset() {
-            view = "repos";
-            rid = "";
-            repo = null;
-            error = "";
+            view = "repos"; rid = ""; repo = null; error = "";
             repoList.reload();
         }
-
         function openRepo(r) {
-            rid = r.rid;
-            repo = r;
-            view = "repo";
+            rid = r.rid; repo = r; view = "repo";
         }
-
         function back() {
-            view = "repos";
-            rid = "";
-            repo = null;
-            error = "";
+            view = "repos"; rid = ""; repo = null; error = "";
         }
     }
 
@@ -140,67 +145,44 @@ Item {
             anchors.fill: parent
             spacing: 0
 
-            // Top bar: source switch, seed picker, search.
+            // ---- top bar (fixed height) ----
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 52
-                color: Theme.panel
+                Layout.preferredHeight: Theme.barHeight
+                color: Theme.surface
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: Theme.pad
-                    anchors.rightMargin: Theme.pad
+                    anchors.leftMargin: Theme.gap
+                    anchors.rightMargin: Theme.gap
                     spacing: Theme.gap
 
-                    Label {
+                    Text {
                         text: "Radicle"
                         color: Theme.text
-                        font.pixelSize: 16
+                        font.pixelSize: Theme.fontXl
                         font.bold: true
                     }
 
-                    // Source switch. Local is disabled (with a reason) rather
-                    // than hidden, so the capability is discoverable.
-                    Row {
-                        spacing: 0
-                        Repeater {
-                            model: [
-                                { key: "remote", label: "Any repo" },
-                                { key: "local",  label: "My node" }
-                            ]
-                            delegate: Button {
-                                required property var modelData
-                                text: modelData.label
-                                checkable: true
-                                checked: root.source === modelData.key
-                                enabled: modelData.key === "remote" || root.localUsable
-                                ToolTip.visible: hovered && !enabled
-                                ToolTip.text: "No local Radicle node detected"
-                                onClicked: {
-                                    if (root.source === modelData.key) return;
-                                    root.source = modelData.key;
-                                    nav.reset();
-                                }
-                                background: Rectangle {
-                                    color: parent.checked ? Theme.accent
-                                         : (parent.enabled ? Theme.panelAlt : Theme.panel)
-                                    radius: Theme.radius
-                                    border.color: Theme.border
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: parent.checked ? "#0d1117"
-                                         : (parent.enabled ? Theme.text : Theme.textDim)
-                                    font.pixelSize: 12
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                            }
+                    SegmentedControl {
+                        objectName: "sourceSwitch"
+                        current: root.source
+                        options: [
+                            { key: "remote", label: "Any repo" },
+                            { key: "local",  label: "My node",
+                              enabled: root.localUsable,
+                              disabledReason: "No local Radicle node detected" }
+                        ]
+                        onPicked: function (key) {
+                            if (root.source === key) return;
+                            root.source = key;
+                            nav.reset();
                         }
                     }
 
                     SeedPicker {
+                        id: seedPicker
+                        objectName: "seedPicker"
                         visible: root.source === "remote"
                         currentSeed: root.caps.remoteSeed || ""
                         fetchSeeds: function (cb) {
@@ -215,47 +197,32 @@ Item {
 
                     Item { Layout.fillWidth: true }
 
-                    TextField {
+                    FilterField {
                         id: searchField
                         visible: nav.view === "repos"
-                        Layout.preferredWidth: 240
-                        placeholderText: root.source === "local"
-                                         ? "Filter your repositories"
-                                         : "Search repositories"
-                        color: Theme.text
-                        background: Rectangle {
-                            color: Theme.panelAlt
-                            radius: Theme.radius
-                            border.color: searchField.activeFocus ? Theme.accent : Theme.border
-                            border.width: 1
-                        }
+                        Layout.preferredWidth: 260
+                        placeholder: root.source === "local"
+                                     ? "Filter your repositories"
+                                     : "Search repositories"
                         onAccepted: repoList.reload()
                     }
                 }
-            }
 
-            // Status strip: busy / error / where you are.
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: visible ? 26 : 0
-                visible: nav.busy || nav.error !== ""
-                color: nav.error !== "" ? "#3d1d1d" : Theme.panelAlt
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.pad
-                    spacing: Theme.gap
-                    Label {
-                        text: nav.error !== "" ? nav.error : "Loading…"
-                        color: nav.error !== "" ? Theme.bad : Theme.textDim
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width; height: 1
+                    color: Theme.border
                 }
             }
 
-            // Body.
+            // ---- status strip (always present, fixed height) ----
+            StatusStrip {
+                Layout.fillWidth: true
+                busy: nav.busy
+                error: nav.error
+            }
+
+            // ---- body ----
             StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -269,6 +236,7 @@ Item {
                 }
 
                 RepoView {
+                    id: repoPage
                     app: root
                     rid: nav.rid
                     repo: nav.repo
@@ -283,10 +251,11 @@ Item {
             anchors.fill: parent
             visible: !root.ready
             color: Theme.bg
-            Label {
+            Text {
                 anchors.centerIn: parent
                 text: "Connecting to the Radicle module…"
                 color: Theme.textDim
+                font.pixelSize: Theme.fontLg
             }
         }
     }

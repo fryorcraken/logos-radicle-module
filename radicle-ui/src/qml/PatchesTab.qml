@@ -11,143 +11,134 @@ Item {
     property string status: "open"
     property int page_: 0
     property bool hasMore: false
+    property bool loading: false
+    property bool loadedOnce: false
 
     readonly property var states: ["open", "merged", "archived", "draft"]
 
     ListModel { id: items }
 
     function load() {
-        page_ = 0;
-        items.clear();
-        fetch();
+        page_ = 0; items.clear(); loadedOnce = false; fetch();
     }
 
     function fetch() {
         if (!app || rid === "") return;
+        tab.loading = true;
         app.call("ListPatches", [rid, tab.status, page_, 50], function (data) {
+            tab.loading = false; tab.loadedOnce = true;
             var list = data.items || [];
             for (var i = 0; i < list.length; i++)
                 items.append({ item: list[i] });
             tab.hasMore = !!data.hasMore;
-        });
-    }
-
-    function colorFor(s) {
-        if (s === "open")     return Theme.good;
-        if (s === "merged")   return Theme.merged;
-        if (s === "draft")    return Theme.textDim;
-        if (s === "archived") return Theme.warn;
-        return Theme.bad;
+        }, function () { tab.loading = false; tab.loadedOnce = true; });
     }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        // State filter.
-        Rectangle {
+        FilterChips {
             Layout.fillWidth: true
-            Layout.preferredHeight: 34
-            color: Theme.bg
-            Row {
-                anchors.verticalCenter: parent.verticalCenter
-                x: Theme.pad
-                spacing: 6
-                Repeater {
-                    model: tab.states
-                    delegate: Button {
-                        required property string modelData
-                        height: 22
-                        checkable: true
-                        checked: tab.status === modelData
-                        onClicked: { tab.status = modelData; tab.load(); }
-                        background: Rectangle {
-                            color: parent.checked ? Theme.panelAlt : "transparent"
-                            radius: 11
-                            border.color: parent.checked ? Theme.border : "transparent"
-                            border.width: 1
-                        }
-                        contentItem: Text {
-                            leftPadding: 8
-                            rightPadding: 8
-                            text: modelData
-                            color: parent.checked ? Theme.text : Theme.textDim
-                            font.pixelSize: 11
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-                }
-            }
+            states: tab.states
+            current: tab.status
+            onPicked: function (s) { tab.status = s; tab.load(); }
         }
 
-        ScrollView {
+        ListView {
+            id: list
             Layout.fillWidth: true
             Layout.fillHeight: true
+            model: items
             clip: true
+            spacing: 0
+            cacheBuffer: Theme.rowHeight * 12
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            ListView {
-                model: items
-                spacing: 1
+            delegate: Rectangle {
+                required property var item
+                width: list.width
+                height: Theme.rowHeight
+                color: rowMouse.containsMouse ? Theme.surfaceAlt : Theme.bg
+                Behavior on color { ColorAnimation { duration: Theme.animFast } }
 
-                delegate: Rectangle {
-                    required property var item
-                    width: ListView.view.width
-                    height: 56
-                    color: Theme.bg
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.gap
+                    anchors.rightMargin: Theme.gap
+                    spacing: Theme.gap
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.pad
-                        anchors.rightMargin: Theme.pad
-                        spacing: Theme.pad
+                    Avatar {
+                        seed: item.author ? (item.author.id || "") : ""
+                        size: 26
+                        Layout.alignment: Qt.AlignVCenter
+                    }
 
-                        Rectangle {
-                            Layout.preferredWidth: 8
-                            Layout.preferredHeight: 8
-                            radius: 4
-                            color: tab.colorFor(R.statusOf(item))
-                        }
-
-                        ColumnLayout {
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Text {
+                            text: item.title || "(untitled)"
+                            color: Theme.text
+                            font.pixelSize: Theme.fontMd
+                            elide: Text.ElideRight
                             Layout.fillWidth: true
-                            spacing: 2
-                            Label {
-                                text: item.title || "(untitled)"
-                                color: Theme.text
-                                font.pixelSize: 13
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-                            Label {
-                                text: R.short(item.id, 7)
-                                      + " · " + R.authorName(item.author)
-                                      + " · " + R.statusOf(item)
-                                color: Theme.textDim
-                                font.pixelSize: 10
-                            }
+                        }
+                        Text {
+                            text: R.short(item.id, 7) + " · " + R.authorName(item.author)
+                            color: Theme.textFaint
+                            font.pixelSize: Theme.fontXs
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
                         }
                     }
 
-                    Rectangle {
-                        anchors.bottom: parent.bottom
-                        width: parent.width
-                        height: 1
-                        color: Theme.border
+                    StatusBadge {
+                        status: R.statusOf(item)
+                        Layout.alignment: Qt.AlignVCenter
                     }
                 }
 
-                footer: Item {
-                    width: parent ? parent.width : 0
-                    height: tab.hasMore ? 44 : 0
-                    visible: tab.hasMore
-                    Button {
-                        anchors.centerIn: parent
-                        text: "Load more"
-                        onClicked: { tab.page_++; tab.fetch(); }
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width; height: 1
+                    color: Theme.border
+                }
+
+                MouseArea { id: rowMouse; anchors.fill: parent; hoverEnabled: true }
+            }
+
+            footer: Item {
+                width: list.width
+                height: tab.hasMore ? 52 : 0
+                visible: tab.hasMore
+                Button {
+                    anchors.centerIn: parent
+                    text: "Load more"
+                    onClicked: { tab.page_++; tab.fetch(); }
+                    background: Rectangle {
+                        implicitWidth: 110; implicitHeight: 28
+                        radius: Theme.radius
+                        color: parent.hovered ? Theme.surfaceAlt : Theme.surface
+                        border.color: Theme.border; border.width: 1
+                    }
+                    contentItem: Text {
+                        text: parent.text; color: Theme.text
+                        font.pixelSize: Theme.fontMd
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
                     }
                 }
             }
         }
+    }
+
+    Text {
+        anchors.centerIn: parent
+        visible: items.count === 0 && tab.loadedOnce && !tab.loading
+        text: "No patches"
+        color: Theme.textDim
+        font.pixelSize: Theme.fontLg
     }
 }

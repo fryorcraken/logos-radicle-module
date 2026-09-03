@@ -17,3 +17,7 @@ generated_code/
 .claude/
 .cursor/
 AGENTS.md
+
+# test run output
+radicle-ui/tests/out.txt
+radicle-ui/tests/results.txt

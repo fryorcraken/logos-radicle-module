@@ -1,0 +1,228 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+# A push that lands while an earlier run is still going supersedes it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast structural checks. These need no Nix and no Qt, so they fail in
+  # seconds rather than after a full toolchain build.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: metadata.json is valid and self-consistent
+        run: |
+          set -eu
+          for dir in radicle radicle-ui; do
+            meta="$dir/metadata.json"
+            python3 - "$meta" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          with open(path) as fh:
+              meta = json.load(fh)
+
+          for key in ("name", "version", "type", "main"):
+              assert key in meta, f"{path}: missing '{key}'"
+
+          # `name` is used as a C identifier by the generated glue.
+          name = meta["name"]
+          assert name.isidentifier(), f"{path}: name '{name}' is not a valid C identifier"
+
+          if meta["type"] == "core":
+              # Basecamp resolves a core module's entry point as <name>_plugin.
+              assert meta["main"] == f"{name}_plugin", \
+                  f"{path}: main must be '{name}_plugin', got '{meta['main']}'"
+
+          if meta["type"] == "ui_qml":
+              # A ui_qml plugin with no `view` is silently skipped by basecamp
+              # — the app appears in the sidebar and clicking it does nothing.
+              assert meta.get("view"), f"{path}: ui_qml requires 'view'"
+              assert meta.get("icon"), f"{path}: ui_qml requires 'icon'"
+
+          print(f"{path}: ok ({meta['type']})")
+          PY
+          done
+
+      - name: UI declares the core module as a dependency
+        run: |
+          python3 - <<'PY'
+          import json
+          core = json.load(open("radicle/metadata.json"))["name"]
+          ui   = json.load(open("radicle-ui/metadata.json"))
+          assert core in ui["dependencies"], \
+              f"radicle-ui must declare '{core}' in dependencies"
+          print(f"ok: radicle-ui depends on {core}")
+          PY
+
+      - name: no QML component shadows a Qt built-in
+        run: |
+          set -eu
+          # A local Foo.qml whose name matches a QtQuick(.Controls) type is
+          # silently ignored — the built-in wins and the failure surfaces much
+          # later as "Cannot assign to non-existent property".
+          reserved="TabBar SearchField Button Label TextField ComboBox ScrollView
+                    StackView Page Pane Frame Control Popup Menu Dialog Slider
+                    Switch CheckBox RadioButton ToolBar SpinBox Drawer Action
+                    Item Text Rectangle Image Row Column Grid Flow Repeater"
+          fail=0
+          for f in radicle-ui/src/qml/*.qml; do
+            n=$(basename "$f" .qml)
+            for r in $reserved; do
+              if [ "$n" = "$r" ]; then
+                echo "::error file=$f::'$n' shadows the Qt built-in type of the same name — rename it"
+                fail=1
+              fi
+            done
+          done
+          [ "$fail" -eq 0 ] && echo "ok: no shadowed component names"
+
+      - name: every QML file importing layouts declares the import
+        run: |
+          set -eu
+          fail=0
+          for f in radicle-ui/src/qml/*.qml; do
+            if grep -qE '\b(ColumnLayout|RowLayout|GridLayout|StackLayout|Layout\.)' "$f" \
+               && ! grep -q 'import QtQuick.Layouts' "$f"; then
+              echo "::error file=$f::uses a Layout type without 'import QtQuick.Layouts'"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "ok: layout imports present"
+
+  qml:
+    name: QML lint and component tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
+            qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-templates qml6-module-qttest \
+            qml6-module-qtqml-workerscript libgl1-mesa-dev
+
+      - name: qmllint
+        run: |
+          set -eu
+          cd radicle-ui/src/qml
+          # qmllint exits non-zero on warnings too; only errors should fail CI.
+          out=$(qmllint6 -I . *.qml 2>&1 || qmllint -I . *.qml 2>&1 || true)
+          echo "$out"
+          if echo "$out" | grep -qiE '^.*:[0-9]+:[0-9]+: (error|Error)'; then
+            echo "::error::qmllint reported errors"
+            exit 1
+          fi
+
+      - name: Component tests
+        run: |
+          export QT_QPA_PLATFORM=offscreen
+          sh radicle-ui/tests/run-qml-tests.sh
+
+  build:
+    name: Build LGX
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Unit tests for the core module's logic (URL building, ref resolution,
+      # pagination, error shapes, local-profile detection).
+      - name: Core module tests
+        run: cd radicle && nix build '.#test' -L --out-link result-test || \
+             nix flake check -L
+
+      - name: Build core module (dev + portable)
+        run: |
+          cd radicle
+          nix build '.#lgx'          --out-link result-lgx
+          nix build '.#lgx-portable' --out-link result-lgx-portable
+
+      - name: Build UI module (dev + portable)
+        run: |
+          cd radicle-ui
+          nix build '.#lgx'          --override-input radicle path:../radicle --out-link result-lgx
+          nix build '.#lgx-portable' --override-input radicle path:../radicle --out-link result-lgx-portable
+
+      # The `view` field must survive packaging: without it basecamp skips the
+      # plugin silently. This is the check that would have caught the app
+      # appearing in the sidebar and doing nothing when clicked.
+      - name: Packaged manifest keeps its ui_qml entry points
+        run: |
+          set -eu
+          for variant in result-lgx result-lgx-portable; do
+            tar xzf radicle-ui/$variant/*.lgx -O manifest.json > /tmp/m.json
+            python3 - <<'PY'
+          import json
+          m = json.load(open("/tmp/m.json"))
+          assert m.get("view"), "packaged manifest lost its 'view' — basecamp will skip this plugin"
+          assert m.get("main"), "packaged manifest lost its 'main'"
+          assert m.get("icon"), "packaged manifest lost its 'icon'"
+          print("ok:", m["name"], "view =", m["view"])
+          PY
+          done
+
+      - name: Stage artifacts
+        run: |
+          set -eu
+          mkdir -p dist
+          cp radicle/result-lgx-portable/*.lgx    dist/
+          cp radicle-ui/result-lgx-portable/*.lgx dist/
+          # Dev variants get a -dev suffix; they resolve libraries from the
+          # host nix store and only work with a basecamp built from source.
+          for f in radicle/result-lgx/*.lgx radicle-ui/result-lgx/*.lgx; do
+            base=$(basename "$f" .lgx)
+            cp "$f" "dist/${base}-dev.lgx"
+          done
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radicle-lgx-bundle
+          path: dist/*.lgx
+
+  release:
+    name: Release
+    needs: [lint, qml, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: radicle-lgx-bundle
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.lgx
+          generate_release_notes: true
+          body: |
+            Radicle browser modules for Logos Basecamp.
+
+            | file | install into |
+            |---|---|
+            | `logos-radicle-module-lib.lgx` | basecamp AppImage (portable) |
+            | `logos-radicle_ui-module.lgx` | basecamp AppImage (portable) |
+            | `*-dev.lgx` | a basecamp built from source (`lgs basecamp`) |
+
+            Install the core module first, then the UI.

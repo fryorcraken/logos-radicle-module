@@ -1,8 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <string>
+
+#include "http_client.h"
 
 namespace radicle {
 
@@ -17,8 +20,15 @@ namespace radicle {
  */
 class SeedClient {
 public:
+    /// Fetches a URL and returns its body. Injectable so tests can drive the
+    /// client without a network; production uses the Qt HTTP client.
+    using Transport = std::function<HttpResponse(const std::string& url)>;
+
     /// `seedUrl` is an origin such as "https://seed.radicle.xyz" (no /api/v1).
     explicit SeedClient(std::string seedUrl = "https://seed.radicle.xyz");
+
+    /// Replace the transport. Passing an empty function restores the default.
+    void setTransport(Transport transport);
 
     void setSeedUrl(const std::string& seedUrl);
     const std::string& seedUrl() const { return m_seedUrl; }
@@ -61,6 +71,7 @@ private:
     /// GET `path` under /api/v1 and parse. Returns {"error":...} on failure.
     nlohmann::json getJson(const std::string& path);
 
+    Transport m_transport;
     std::string m_seedUrl;
     std::string m_apiVersion;
     std::string m_nid;

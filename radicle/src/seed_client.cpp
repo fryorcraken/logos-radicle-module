@@ -89,6 +89,11 @@ SeedClient::SeedClient(std::string seedUrl)
 {
 }
 
+void SeedClient::setTransport(Transport transport)
+{
+    m_transport = std::move(transport);
+}
+
 void SeedClient::setSeedUrl(const std::string& seedUrl)
 {
     m_seedUrl = trimTrailingSlash(seedUrl);
@@ -100,7 +105,7 @@ void SeedClient::setSeedUrl(const std::string& seedUrl)
 nlohmann::json SeedClient::getJson(const std::string& path)
 {
     const std::string url = m_seedUrl + "/api/v1" + path;
-    const HttpResponse res = httpGet(url);
+    const HttpResponse res = m_transport ? m_transport(url) : httpGet(url);
 
     if (!res.ok) {
         m_reachable = false;
