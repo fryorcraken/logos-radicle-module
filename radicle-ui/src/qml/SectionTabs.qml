@@ -41,8 +41,6 @@ Item {
                 required property var modelData
                 required property int index
 
-                objectName: "sectionTab"
-
                 readonly property bool selected: control.current === index
 
                 width: inner.implicitWidth + 28
@@ -103,6 +101,10 @@ Item {
 
                 MouseArea {
                     id: mouse
+                    // Named here, not on the delegate: UI tests select by
+                    // objectName AND clickability, and the delegate Item is
+                    // not clickable — only one element matched instead of four.
+                    objectName: "sectionTab"
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor

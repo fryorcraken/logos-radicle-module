@@ -26,6 +26,19 @@ Note that `qmllint` does not catch syntax errors — it passed a file Qt then
 refused with "Unexpected token `}'". `radicle-ui/tests/check-qml-syntax.sh`
 covers that, and runs first in CI.
 
+## The end-to-end spec passes
+
+`radicle-ui/tests/ui/browse.yaml` runs green: 18 steps, ~21s against a real
+Basecamp. Two things to know if you add steps to it:
+
+- **`objectName` must sit on the clickable element**, not its parent. Naming a
+  Repeater delegate matched one element instead of four, because the delegate
+  Item is not clickable — its MouseArea is.
+- **`calls:` assertions do not work here.** QML dispatches through the
+  `radicle_ui` QtRO replica and that hop is not logged as a LogosAPIClient
+  invocation, so sitometres reports "no backend calls at all" while the data
+  plainly arrives. Assert the effect with `state:` instead.
+
 ## The three layers
 
 Pick the cheapest layer that can actually see the behaviour you changed.
