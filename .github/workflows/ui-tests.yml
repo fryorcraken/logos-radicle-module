@@ -8,22 +8,24 @@ name: UI tests
 # needs the network for every step, where every job in ci.yml is seconds to a
 # few minutes. So it runs on pushes to main (post-merge) and on demand.
 #
-# Whether it could also run on `pull_request` is a live question rather than a
-# settled one. Measured from run 33712429609, the whole job was 8m21s, not the
-# "tens of minutes" this comment used to claim:
+# Whether it could also run on `pull_request` is now a live question rather
+# than a settled one, because the "tens of minutes" this comment used to claim
+# was never true. Measured end to end, all 18 spec steps passing in both:
 #
-#   install nix + apt          ~20s
-#   build Basecamp             ~6m00s   (~4.5m substituter downloads,
-#                                        ~1.5m actually compiling Basecamp)
-#   build both modules         ~1m10s
-#   run the spec               ~20s
+#                          cold (33712429609)   warm (33714298503)
+#   whole job                        8m43s              3m14s
+#   build Basecamp                   6m00s              1m21s
+#   paths from substituters            676                  0
 #
-# So the cold cost is dominated by downloading the closure, not by compiling,
-# and that is the part a working store cache removes. Once the cache below is
-# confirmed to restore, a warm run should be a few minutes, which is plausibly
-# PR-affordable. Do not move this to `pull_request` on that estimate alone —
-# check a real warm run's timing first, and note that PRs from forks get their
-# own isolated cache scope and would therefore always run cold.
+# The cold cost is dominated by pulling the closure (~4.5m of that 6m; only
+# ~1.5m is Basecamp actually compiling), and a restored store removes it
+# outright — the warm run downloaded nothing at all. 3m14s is comfortably
+# PR-affordable, and the fast layers in ci.yml already cost a couple of minutes.
+#
+# Two caveats before anyone moves this to `pull_request`. Cache scoping: a PR
+# branch can read main's cache, but a PR from a FORK gets its own isolated
+# scope and would always run cold, i.e. ~9m. And the first run after any
+# BASECAMP_REV bump is cold by construction, since the rev is in the key.
 #
 # ─── why Basecamp is BUILT and not fetched ──────────────────────────────────
 # sitometres attaches to Basecamp's QML inspector. That is a compile-time
