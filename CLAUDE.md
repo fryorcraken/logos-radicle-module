@@ -87,6 +87,18 @@ to; do not assume the old pin still applies to the new version line.
   avoids owning a SQLite file's lifecycle/location entirely. The real `rad`
   CLI's on-disk cache (`~/.radicle/cache/cobs.db`) is a read-through
   optimization for its own use, not a dependency other readers need.
+- **Correction, verified against docs.rs for 0.25.1: there is no public
+  `radicle::test` module, and no `fixtures` or `rad_util` helper.** An earlier
+  draft of this note claimed those were available for building test profiles;
+  they are crate-internal (heartwood's own tests use them via `#[cfg(test)]`),
+  so they cannot be pulled in as an external dev-dependency. The public
+  modules are: `cli, cob, collections, explorer, git, identity, io, node,
+  prelude, profile, rad, serde_ext, sql, storage, version, web`. Build
+  fixtures through the public API instead — `Profile::init(Home, Alias,
+  Option<Passphrase>, Seed)` creates a keystore and storage root, and
+  `rad::init(&Repository, ProjectName, &str, BranchName, Visibility, &impl
+  Signer, &impl WriteStorage)` pushes a git working copy into it as a real
+  Radicle repo. That is what `rust-ffi/tests/local_storage.rs` does.
 - Net effect: **COB reading is not the separate subsystem it looked like
   from the outside.** No `automerge` crate knowledge needed, no custom
   signature-verification code to write — `Issue`/`Patch` (the replayed
