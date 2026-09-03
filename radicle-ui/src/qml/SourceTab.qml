@@ -52,6 +52,10 @@ Item {
     /// Sync: walk the whole tree up front and pull every file into the cache,
     /// so navigation afterwards is instant rather than a request per click.
     property bool syncing: false
+    /// Bumped whenever a sync starts, is cancelled, or the repository
+    /// changes. Every in-flight request carries the epoch it began under and
+    /// ignores its own reply once that epoch has moved on.
+    property int syncEpoch: 0
     property int syncQueued: 0
     property int syncDone: 0
     readonly property real syncProgress: syncQueued > 0 ? syncDone / syncQueued : 0
@@ -71,6 +75,9 @@ Item {
         treeCache = ({});
         inFlight = ({});
         entries.clear();
+        // Orphan any sync still running for the previous repository, so its
+        // replies cannot corrupt the counters of a sync started here.
+        syncEpoch++;
         syncing = false;
         syncQueued = 0;
         syncDone = 0;
@@ -260,29 +267,37 @@ Item {
     /// repo needs no further requests to browse.
     function syncAll() {
         if (!app || rid === "" || syncing) return;
+        syncEpoch++;
         syncing = true;
         syncQueued = 0;
         syncDone = 0;
-        syncDir("");
+        syncDir("", syncEpoch);
     }
 
     function cancelSync() {
+        // Bumping the epoch orphans every request already in flight, so their
+        // replies cannot touch the counters of a later sync.
+        syncEpoch++;
         syncing = false;
     }
 
-    function syncDir(dirPath) {
-        if (!syncing) return;
+    function syncDir(dirPath, epoch) {
+        if (!syncing || epoch !== syncEpoch) return;
         syncQueued++;
-        var wantRid = rid;
         var tkey = cacheKey(dirPath);
 
         var handle = function (list) {
+            // Count only while this reply still belongs to the running sync.
+            // Counting unconditionally let a previous repository's replies
+            // push syncDone past syncQueued, so a fresh sync reported itself
+            // finished while it was still fetching.
+            if (epoch !== syncEpoch) return;
             syncDone++;
-            if (!syncing || tab.rid !== wantRid) return;
+            if (!syncing) return;
             for (var i = 0; i < list.length; i++) {
                 var e = list[i];
-                if (e.kind === "tree") syncDir(e.path);
-                else                   syncBlob(e);
+                if (e.kind === "tree") syncDir(e.path, epoch);
+                else                   syncBlob(e, epoch);
             }
             finishSyncIfDone();
         };
@@ -295,28 +310,34 @@ Item {
             var list = data.entries || [];
             treeCache[tkey] = list;
             handle(list);
-        }, function () { syncDone++; finishSyncIfDone(); });
+        }, function () {
+            if (epoch !== syncEpoch) return;
+            syncDone++;
+            finishSyncIfDone();
+        });
     }
 
-    function syncBlob(entry) {
-        if (!syncing) return;
+    function syncBlob(entry, epoch) {
+        if (!syncing || epoch !== syncEpoch) return;
         var bkey = cacheKey(entry.path);
         if (blobCache[bkey] !== undefined || inFlight[bkey]) return;
 
         syncQueued++;
         inFlight[bkey] = true;
-        var wantRid = rid;
         app.call("GetBlob", [rid, branch, entry.path], function (data) {
             delete inFlight[bkey];
+            // The cache key already carries the rid, so storing a late reply
+            // is harmless and saves a refetch; only the counters are epoch
+            // sensitive.
+            blobCache[bkey] = data.binary
+                ? "(binary file — " + (data.name || entry.name) + ")"
+                : (data.content || "");
+            if (epoch !== syncEpoch) return;
             syncDone++;
-            if (tab.rid === wantRid) {
-                blobCache[bkey] = data.binary
-                    ? "(binary file — " + (data.name || entry.name) + ")"
-                    : (data.content || "");
-            }
             finishSyncIfDone();
         }, function () {
             delete inFlight[bkey];
+            if (epoch !== syncEpoch) return;
             syncDone++;
             finishSyncIfDone();
         });

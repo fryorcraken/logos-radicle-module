@@ -62,6 +62,11 @@ QString RadicleUiBackend::remoteListCommits(QString rid, QString sha, int page, 
     return modules().radicle.remoteListCommits(rid, sha, page, perPage);
 }
 
+QString RadicleUiBackend::remoteGetCommit(QString rid, QString sha)
+{
+    return modules().radicle.remoteGetCommit(rid, sha);
+}
+
 QString RadicleUiBackend::remoteListIssues(QString rid, QString status, int page, int perPage)
 {
     return modules().radicle.remoteListIssues(rid, status, page, perPage);
@@ -112,6 +117,11 @@ QString RadicleUiBackend::localGetReadme(QString rid, QString sha)
 QString RadicleUiBackend::localListCommits(QString rid, QString sha, int page, int perPage)
 {
     return modules().radicle.localListCommits(rid, sha, page, perPage);
+}
+
+QString RadicleUiBackend::localGetCommit(QString rid, QString sha)
+{
+    return modules().radicle.localGetCommit(rid, sha);
 }
 
 QString RadicleUiBackend::localListIssues(QString rid, QString status, int page, int perPage)

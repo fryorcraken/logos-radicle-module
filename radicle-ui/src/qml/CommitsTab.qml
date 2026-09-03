@@ -18,6 +18,9 @@ Item {
     property bool loading: false
     property bool loadedOnce: false
 
+    /// Emitted when a row is activated, so RepoView can open the commit view.
+    signal commitActivated(string sha)
+
     ListModel { id: commits }
 
     /// Commits currently listed — read by the UI tests.
@@ -60,6 +63,18 @@ Item {
             height: Theme.rowHeight
             color: rowMouse.containsMouse ? Theme.surfaceAlt : Theme.bg
             Behavior on color { ColorAnimation { duration: Theme.animFast } }
+
+            // Declared before the content so it sits underneath in z-order and
+            // the RowLayout's own items do not swallow the click. The other
+            // clickable rows in this app follow the same order.
+            MouseArea {
+                id: rowMouse
+                objectName: "commitRow"
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: tab.commitActivated(c.id)
+            }
 
             RowLayout {
                 anchors.fill: parent
@@ -115,7 +130,6 @@ Item {
                 color: Theme.border
             }
 
-            MouseArea { id: rowMouse; anchors.fill: parent; hoverEnabled: true }
         }
 
         footer: Item {

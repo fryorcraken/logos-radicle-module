@@ -88,19 +88,23 @@ Item {
             if (onFail) onFail();
             return;
         }
-        nav.busy = true;
-        nav.error = "";
+        // Deliberately does NOT clear nav.error on the way in. Clearing on
+        // every request start meant a later request erased an earlier one's
+        // error, so during a sync — dozens of parallel fetches — an error was
+        // effectively unobservable. Errors clear on success, and on navigation.
+        nav.inflight++;
         logos.watch(backend[name].apply(backend, args), function (text) {
-            nav.busy = false;
+            nav.inflight--;
             var r = R.parse(text);
             if (r.ok) {
+                nav.error = "";
                 onOk(r.data);
             } else {
                 nav.error = r.error;
                 if (onFail) onFail();
             }
         }, function (err) {
-            nav.busy = false;
+            nav.inflight--;
             nav.error = String(err);
             if (onFail) onFail();
         });
@@ -110,10 +114,9 @@ Item {
     /// keeping the old data under the new seed's name.
     function setSeed(url) {
         if (!backend) return;
-        nav.busy = true;
-        nav.error = "";
+        nav.inflight++;
         logos.watch(backend.setRemoteSeed(url), function (text) {
-            nav.busy = false;
+            nav.inflight--;
             var r = R.parse(text);
             if (r.ok) {
                 nav.reset();
@@ -126,7 +129,7 @@ Item {
                 seedPicker.syncSelection();
             }
         }, function (err) {
-            nav.busy = false;
+            nav.inflight--;
             nav.error = String(err);
         });
     }
@@ -165,11 +168,16 @@ Item {
         property string view: "repos"      // repos | repo
         property string rid: ""
         property var repo: null
-        property bool busy: false
+        // A counter, not a flag. Concurrent requests are the norm here —
+        // SourceTab.load() fires two, syncAll() fires dozens — and with a
+        // boolean the first reply to land cleared the strip while the rest
+        // were still in flight.
+        property int inflight: 0
+        readonly property bool busy: inflight > 0
         property string error: ""
 
         function reset() {
-            view = "repos"; rid = ""; repo = null; error = "";
+            view = "repos"; rid = ""; repo = null; error = ""; inflight = 0;
             repoList.reload();
         }
         function openRepo(r) {

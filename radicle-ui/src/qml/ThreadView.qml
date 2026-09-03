@@ -38,15 +38,18 @@ Item {
 
         loading = true;
         var wantId = itemId;
+        var wantRid = rid;
         app.call(view.method, [rid, itemId], function (data) {
             // Drop a reply for something the user has already navigated away
-            // from — the same guard the file viewer needs.
-            if (view.itemId !== wantId) return;
+            // from — the same guard every other loader here uses. Both halves
+            // matter: without the rid check, switching repository mid-load
+            // paints the old repository's issue under the new one's header.
+            if (view.itemId !== wantId || view.rid !== wantRid) return;
             view.loading = false;
             view.loadedOnce = true;
             view.item = data;
         }, function () {
-            if (view.itemId !== wantId) return;
+            if (view.itemId !== wantId || view.rid !== wantRid) return;
             view.loading = false;
             view.loadedOnce = true;
         });

@@ -36,6 +36,16 @@ Item {
     /// When set, the detail view for one issue or patch replaces the tabs.
     property string openThreadId: ""
     property string openThreadKind: "Issues"
+    /// When set, the commit detail view replaces the tabs.
+    property string openCommitSha: ""
+
+    /// Positions of the detail views in the StackLayout below, named so that
+    /// inserting a tab cannot silently point currentIndex at the wrong child.
+    readonly property int threadIndex: 4
+    readonly property int commitIndex: 5
+
+    /// True while any detail view is covering the tabs.
+    readonly property bool showingDetail: openThreadId !== "" || openCommitSha !== ""
 
     /// Counts the UI tests assert on.
     readonly property int treeCount:   source.entryCount
@@ -48,6 +58,7 @@ Item {
         // left the previous repo's commits/issues/patches on screen under the
         // new repo's header until each tab was re-opened.
         openThreadId = "";
+        openCommitSha = "";
         source.reset();
         commits.reset();
         issues.reset();
@@ -218,7 +229,7 @@ Item {
         // ---- tabs (fixed height) ----
         SectionTabs {
             Layout.fillWidth: true
-            visible: page.openThreadId === ""
+            visible: !page.showingDetail
             Layout.preferredHeight: visible ? Theme.tabHeight : 0
             current: page.tab
             tabs: [
@@ -234,12 +245,23 @@ Item {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            // The detail view replaces the tab bodies rather than sitting
-            // beside them, so the repository header above stays put.
-            currentIndex: page.openThreadId !== "" ? 4 : page.tab
+            // Detail views replace the tab bodies rather than sitting beside
+            // them, so the repository header above stays put. The indices are
+            // named rather than written as literals: inserting a tab used to
+            // silently point the detail view at the wrong child.
+            currentIndex: page.openThreadId !== "" ? page.threadIndex
+                        : page.openCommitSha !== "" ? page.commitIndex
+                        : page.tab
 
             SourceTab  { id: source;  app: page.app; rid: page.rid; branch: page.defaultBranch }
-            CommitsTab { id: commits; app: page.app; rid: page.rid; branch: page.defaultBranch }
+
+            CommitsTab {
+                id: commits
+                app: page.app
+                rid: page.rid
+                branch: page.defaultBranch
+                onCommitActivated: function (sha) { page.openCommitSha = sha; }
+            }
 
             IssuesTab {
                 id: issues
@@ -267,6 +289,13 @@ Item {
                 kind: page.openThreadKind
                 itemId: page.openThreadId
                 onBack: page.openThreadId = ""
+            }
+
+            CommitView {
+                app: page.app
+                rid: page.rid
+                sha: page.openCommitSha
+                onBack: page.openCommitSha = ""
             }
         }
     }

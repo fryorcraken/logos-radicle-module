@@ -38,6 +38,7 @@ public:
     QString remoteGetBlob(QString rid, QString sha, QString path) override;
     QString remoteGetReadme(QString rid, QString sha) override;
     QString remoteListCommits(QString rid, QString sha, int page, int perPage) override;
+    QString remoteGetCommit(QString rid, QString sha) override;
     QString remoteListIssues(QString rid, QString status, int page, int perPage) override;
     QString remoteGetIssue(QString rid, QString id) override;
     QString remoteListPatches(QString rid, QString status, int page, int perPage) override;
@@ -50,6 +51,7 @@ public:
     QString localGetBlob(QString rid, QString sha, QString path) override;
     QString localGetReadme(QString rid, QString sha) override;
     QString localListCommits(QString rid, QString sha, int page, int perPage) override;
+    QString localGetCommit(QString rid, QString sha) override;
     QString localListIssues(QString rid, QString status, int page, int perPage) override;
     QString localGetIssue(QString rid, QString id) override;
     QString localListPatches(QString rid, QString status, int page, int perPage) override;

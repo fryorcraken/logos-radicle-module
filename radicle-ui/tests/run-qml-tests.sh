@@ -13,6 +13,11 @@
 # while testing nothing.
 set -eu
 
+# Headless by default, set once here rather than prefixed onto every
+# invocation: the tests never need a display, and a caller should not have to
+# remember the variable.
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
+
 here=$(cd "$(dirname "$0")" && pwd)
 qml_dir="$here/../src/qml"
 require=${REQUIRE_QML_TESTS:-0}
@@ -62,7 +67,7 @@ import QtTest
 TestCase { name: "Smoke"; function test_ok() { compare(1 + 1, 2); } }
 SMOKE
 
-if ! QT_QPA_PLATFORM=offscreen "$runner" -input "$smoke/tst_smoke.qml" >/dev/null 2>&1; then
+if ! "$runner" -input "$smoke/tst_smoke.qml" >/dev/null 2>&1; then
     no_runner "$runner cannot run even a trivial test (wrong Qt major version?)"
 fi
 
@@ -72,6 +77,6 @@ echo "qml tests: using $runner"
 status=0
 for spec in "$here"/tst_*.qml; do
     echo "--- $(basename "$spec")"
-    QT_QPA_PLATFORM=offscreen "$runner" -input "$spec" -import "$qml_dir" || status=1
+    "$runner" -input "$spec" -import "$qml_dir" || status=1
 done
 exit "$status"
