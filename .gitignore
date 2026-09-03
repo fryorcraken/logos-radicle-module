@@ -18,6 +18,9 @@ generated_code/
 .cursor/
 AGENTS.md
 
+# agent scratch space
+tmp/
+
 # test run output
 radicle-ui/tests/out.txt
 radicle-ui/tests/results.txt
