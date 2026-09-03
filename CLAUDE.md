@@ -196,6 +196,22 @@ re-derive the reasoning:
   staleness guard" would make the guard correct everywhere at once, instead
   of needing a dedicated regression test per component (as `CommitsTab`
   needed this session).
+- **Repo header actions, mirroring Radicle Desktop's own repo view.** Two
+  screenshots from `app.radicle.xyz` supplied by the user show a small
+  action cluster next to the repo header: a link/share dropdown ("Open on
+  app.radicle.xyz", "Copy link to app.radicle.xyz", "Copy repository ID")
+  and a checkout affordance that expands to show `rad checkout rad:<id>`
+  with a copy button, alongside `Private`/`Public` and `Delegates N/M`
+  badges. For this module: "Open on app.radicle.xyz" and the delegate
+  count both need data this module may not fetch today — check what
+  `remoteGetRepo`/`localGetRepo` already return before assuming a new API
+  call is needed. "Copy repository ID" and "Copy link" are clipboard-only,
+  no new data. The `rad checkout` command line is pure string templating
+  from the `rid` this module already has — no new API surface, just a
+  small UI affordance. Note this was added to CLAUDE.md after the M1.1
+  worktree agent's task was already dispatched — if its current session is
+  still active, this is follow-up scope for a later pass, not something to
+  interrupt in-flight work for.
 
 ### M1 shipped — status as of 2026-09-03
 
