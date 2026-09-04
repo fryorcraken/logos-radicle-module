@@ -53,6 +53,7 @@ class RadicleUi
     // HTTP 405, so a remote* counterpart could only ever fail. Gate any UI
     // affordance for these on capabilities.canWriteLocal — see radicle_impl.h.
     SLOT(QString localCommentOnIssue(QString rid, QString id, QString body))
+    SLOT(QString localCreateIssue(QString rid, QString title, QString description))
 
     // Auto-synced summary of what the module can currently do, so the view can
     // show/hide the local source without an explicit round-trip on startup.

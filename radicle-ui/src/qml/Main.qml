@@ -248,6 +248,12 @@ Item {
     /// repo, or with no signing key — because that is the one that loses text.
     readonly property bool composerVisible: repoPage.composerVisible
 
+    /// The "New issue" affordance and its form. Same reasoning: the failure
+    /// worth catching from outside is the button appearing where its form
+    /// could not be submitted.
+    readonly property bool canCreateIssue: repoPage.canCreateIssue
+    readonly property bool newIssueOpen:   repoPage.newIssueOpen
+
     /// Open a repository object directly (deep links and testing).
     function openRepoExternal(repo) {
         if (repo && repo.rid) nav.openRepo(repo);

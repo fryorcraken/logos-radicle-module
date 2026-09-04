@@ -338,3 +338,10 @@ std::string RadicleImpl::localCommentOnIssue(const std::string& rid, const std::
     if (!local().available()) return localUnavailable();
     return localWriter().commentOnIssue(rid, id, body);
 }
+
+std::string RadicleImpl::localCreateIssue(const std::string& rid, const std::string& title,
+                                          const std::string& description)
+{
+    if (!local().available()) return localUnavailable();
+    return localWriter().createIssue(rid, title, description);
+}

@@ -44,20 +44,30 @@ Item {
     property string openThreadKind: "Issues"
     /// When set, the commit detail view replaces the tabs.
     property string openCommitSha: ""
+    /// When true, the new-issue form replaces the tabs.
+    property bool composingIssue: false
 
     /// Positions of the detail views in the StackLayout below, named so that
     /// inserting a tab cannot silently point currentIndex at the wrong child.
     readonly property int threadIndex: 4
     readonly property int commitIndex: 5
+    readonly property int newIssueIndex: 6
 
     /// True while any detail view is covering the tabs.
     readonly property bool showingDetail: openThreadId !== "" || openCommitSha !== ""
+                                          || composingIssue
 
     /// Whether the comment box is on screen. Re-exported for the UI specs,
     /// which cannot reach into a StackLayout child by id — and this is the one
     /// piece of state worth asserting from outside, because "the box appeared
     /// when it should not have" is the failure that loses a user's text.
     readonly property bool composerVisible: thread.commentable
+
+    /// Whether the "New issue" button is offered, and whether its form is up.
+    /// Same reasoning as composerVisible: the failure worth catching from
+    /// outside is the affordance appearing where it cannot work.
+    readonly property bool canCreateIssue: newIssueButton.visible
+    readonly property bool newIssueOpen: composingIssue
 
     /// State the end-to-end UI specs assert on. Kept here, and re-exported by
     /// Main.qml, because a spec's `state:` expressions evaluate against the
@@ -143,6 +153,12 @@ Item {
         // new repo's header until each tab was re-opened.
         openThreadId = "";
         openCommitSha = "";
+        // A half-written issue belongs to the repository it was written
+        // against. Leaving the form up across a repo switch would let it be
+        // filed against a different repo than the one the user was looking at
+        // when they started typing.
+        composingIssue = false;
+        newIssue.reset();
         source.reset();
         commits.reset();
         issues.reset();
@@ -407,18 +423,68 @@ Item {
         }
 
         // ---- tabs (fixed height) ----
-        SectionTabs {
+        RowLayout {
             Layout.fillWidth: true
             visible: !page.showingDetail
             Layout.preferredHeight: visible ? Theme.tabHeight : 0
-            current: page.tab
-            tabs: [
-                { label: "Source",  count: -1 },
-                { label: "Commits", count: -1 },
-                { label: "Issues",  count: page.meta.issues  ? page.meta.issues.open  : -1 },
-                { label: "Patches", count: page.meta.patches ? page.meta.patches.open : -1 }
-            ]
-            onPicked: function (i) { page.tab = i; }
+            spacing: 0
+
+            SectionTabs {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                current: page.tab
+                tabs: [
+                    { label: "Source",  count: -1 },
+                    { label: "Commits", count: -1 },
+                    { label: "Issues",  count: page.meta.issues  ? page.meta.issues.open  : -1 },
+                    { label: "Patches", count: page.meta.patches ? page.meta.patches.open : -1 }
+                ]
+                onPicked: function (i) { page.tab = i; }
+            }
+
+            // ---- New issue ----
+            // Offered only on the Issues tab, only while browsing the local
+            // source, and only when a write could actually succeed. The last
+            // of those three is the one that matters: `canWrite` is a real
+            // probe for a signing key, and a button that opens a form whose
+            // submit cannot work would waste whatever the user typed into it.
+            //
+            // The source check is not defensive duplication of the backend's
+            // refusal — a repo open from a seed may not exist in local storage
+            // at all, so there would be nothing to file against.
+            Rectangle {
+                id: newIssueButton
+                visible: page.tab === 2
+                         && page.app !== null
+                         && page.app.source === "local"
+                         && page.app.canWrite
+                Layout.preferredWidth: visible ? 104 : 0
+                Layout.preferredHeight: 28
+                Layout.rightMargin: visible ? Theme.gap : 0
+                Layout.alignment: Qt.AlignVCenter
+                radius: Theme.radius
+                color: newIssueMouse.containsMouse ? Theme.accent : Theme.accentSoft
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "New issue"
+                    color: Theme.textOnAccent
+                    font.pixelSize: Theme.fontMd
+                    font.bold: true
+                }
+
+                MouseArea {
+                    id: newIssueMouse
+                    // On the MouseArea, not the Rectangle — see backButton
+                    // above for why naming the parent makes which control a
+                    // click reaches depend on sibling order.
+                    objectName: "newIssueButton"
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: page.composingIssue = true
+                }
+            }
         }
 
         // ---- content ----
@@ -429,7 +495,8 @@ Item {
             // them, so the repository header above stays put. The indices are
             // named rather than written as literals: inserting a tab used to
             // silently point the detail view at the wrong child.
-            currentIndex: page.openThreadId !== "" ? page.threadIndex
+            currentIndex: page.composingIssue ? page.newIssueIndex
+                        : page.openThreadId !== "" ? page.threadIndex
                         : page.openCommitSha !== "" ? page.commitIndex
                         : page.tab
 
@@ -483,6 +550,39 @@ Item {
                 rid: page.rid
                 sha: page.openCommitSha
                 onBack: page.openCommitSha = ""
+            }
+
+            NewIssueForm {
+                id: newIssue
+                objectName: "newIssueForm"
+                app: page.app
+                rid: page.rid
+                canWrite: page.app ? page.app.canWrite : false
+                unavailableReason: page.app ? page.app.writeUnavailableReason : ""
+
+                onCancelled: {
+                    page.composingIssue = false;
+                    newIssue.reset();
+                }
+
+                onCreated: function (id) {
+                    page.composingIssue = false;
+
+                    // Drop the cached page before reloading. IssuesTab is
+                    // cache-first, so a plain load() would serve the list from
+                    // before the create and the new issue would simply not be
+                    // there — a "working" screen showing stale data, which is
+                    // the failure mode this codebase keeps re-learning.
+                    issues.reset();
+                    issues.load();
+
+                    // Open what was just created, so the user lands on their
+                    // issue rather than hunting for it in the list.
+                    if (id !== "") {
+                        page.openThreadKind = "Issues";
+                        page.openThreadId = id;
+                    }
+                }
             }
         }
     }

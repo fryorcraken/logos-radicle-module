@@ -166,6 +166,11 @@ QString RadicleUiBackend::localCommentOnIssue(QString rid, QString id, QString b
     return modules().radicle.localCommentOnIssue(rid, id, body);
 }
 
+QString RadicleUiBackend::localCreateIssue(QString rid, QString title, QString description)
+{
+    return modules().radicle.localCreateIssue(rid, title, description);
+}
+
 // --- lifecycle -------------------------------------------------------------
 
 void RadicleUiBackend::onContextReady()

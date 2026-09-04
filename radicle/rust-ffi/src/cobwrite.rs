@@ -226,3 +226,80 @@ fn comment_on_issue_inner(home: &str, rid: &str, id: &str, body: &str) -> Result
     })
     .to_string())
 }
+
+/// Open a new issue.
+///
+/// `description` becomes the issue's root comment — that is how the crate
+/// models it, and it is why `get_issue` returns the description as
+/// `discussion[0].body` rather than as a field of its own.
+///
+/// Labels and assignees are not parameters. Both are real COB features, but
+/// assignment is by DID and needs a peer picker the module does not have, and
+/// neither is rendered anywhere today. Passing empty slices matches what the
+/// `New issue` modal in Radicle Desktop does before its "Add labels" /
+/// "Add assignees" buttons are used.
+///
+/// -> `{"id":"<issue id>","announced":bool[,"announceError":"…"]}`
+///
+/// Note `id` here is the **issue's** id, not an entry id — it is what a view
+/// passes straight back to `localGetIssue` to open what was just created.
+pub fn create_issue(home: &str, rid: &str, title: &str, description: &str) -> String {
+    match create_issue_inner(home, rid, title, description) {
+        Ok(v) => v,
+        Err(e) => error(e),
+    }
+}
+
+fn create_issue_inner(
+    home: &str,
+    rid: &str,
+    title: &str,
+    description: &str,
+) -> Result<String, String> {
+    // Validated before anything is opened, so a bad title costs no work and
+    // cannot half-create anything.
+    //
+    // `Title::new` rejects a title containing `\n` or `\r` outright — not
+    // merely trimming them. That is a live case rather than a theoretical one:
+    // pasting a line of text into a single-line field carries the newline with
+    // it, and the crate's error ("invalid characters in title") does not say
+    // which character or what to do, so it is translated here into something
+    // actionable.
+    let title = radicle::cob::Title::new(title).map_err(|e| match e {
+        radicle::cob::common::TitleError::EmptyTitle => "an issue needs a title".to_string(),
+        radicle::cob::common::TitleError::InvalidTitle => {
+            "an issue title must be a single line — remove the line break".to_string()
+        }
+    })?;
+
+    // The crate would accept an empty description and produce an issue whose
+    // thread opens with a blank comment. Refused for the same reason an empty
+    // comment body is: the UI disables its button too, and the two must agree
+    // on what counts as empty or the button offers what the write rejects.
+    if description.trim().is_empty() {
+        return Err("an issue needs a description".to_string());
+    }
+
+    let repo = open_repo_for_write(home, rid)?;
+    let signer = signer(home)?;
+
+    let id = {
+        let mut store = issue::Issues::open(&repo, WriteAs::new(&signer))
+            .map_err(|e| format!("could not open the issue store for writing: {e}"))?;
+        let mut cache = radicle::cob::cache::NoCache;
+
+        let issue = store
+            .create(title, description, &[], &[], [], &mut cache)
+            .map_err(|e| format!("could not create the issue: {e}"))?;
+        issue.id().to_string()
+    };
+
+    let announce_error = announce(home, rid);
+
+    Ok(json!({
+        "id": id,
+        "announced": announce_error.is_none(),
+        "announceError": announce_error,
+    })
+    .to_string())
+}

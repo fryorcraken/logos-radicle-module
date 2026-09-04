@@ -262,6 +262,46 @@ fn the_write_entry_points_are_guarded_too() {
         }),
     );
 
+    assert_is_error_json(
+        "create_issue(bad home)",
+        &call(|| unsafe {
+            radicle_local_ffi::radicle_local_create_issue(
+                home.as_ptr(),
+                rid.as_ptr(),
+                body.as_ptr(),
+                body.as_ptr(),
+            )
+        }),
+    );
+
+    // A title carrying the characters `Title::new` rejects, alongside a
+    // traversal-shaped rid: the validation runs before storage is opened, so
+    // this exercises the early-return path across the boundary.
+    let multiline = c("two\nlines");
+    assert_is_error_json(
+        "create_issue(multi-line title)",
+        &call(|| unsafe {
+            radicle_local_ffi::radicle_local_create_issue(
+                home.as_ptr(),
+                traversal.as_ptr(),
+                multiline.as_ptr(),
+                body.as_ptr(),
+            )
+        }),
+    );
+
+    assert_is_error_json(
+        "create_issue(all NULL)",
+        &call(|| unsafe {
+            radicle_local_ffi::radicle_local_create_issue(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        }),
+    );
+
     for (label, out) in [
         (
             "can_write(bad home)",

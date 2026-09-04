@@ -22,6 +22,14 @@ Item {
     /// Emitted when a row is activated, so RepoView can open the detail view.
     signal itemActivated(string id)
 
+    /// How many rows are showing. `RepoView.issueCount` and `Main.issueCount`
+    /// have read this since they were written — but the property did not
+    /// exist, so both were `undefined` and any spec asserting on them would
+    /// have compared against undefined rather than a number. Found by a
+    /// component test that needed the count; no spec asserted on it, which is
+    /// why nothing noticed. `CommitsTab` has had the equivalent all along.
+    readonly property int count: items.count
+
     readonly property var states: ["open", "closed"]
 
     ListModel { id: items }

@@ -22,6 +22,10 @@ Item {
     /// Emitted when a row is activated, so RepoView can open the detail view.
     signal itemActivated(string id)
 
+    /// How many rows are showing. Missing for the same reason and with the
+    /// same consequence as `IssuesTab.count` — see the note there.
+    readonly property int count: items.count
+
     readonly property var states: ["open", "merged", "archived", "draft"]
 
     ListModel { id: items }

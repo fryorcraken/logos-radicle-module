@@ -86,6 +86,15 @@ char* radicle_local_can_write(const char* home);
 char* radicle_local_comment_on_issue(const char* home, const char* rid,
                                      const char* id, const char* body);
 
+/// Opens a new issue. `description` becomes its root comment.
+///
+/// -> {"id":"<issue id>","announced":bool[,"announceError":"…"]}
+///
+/// The `id` is the ISSUE's id, not an entry id — a caller passes it straight
+/// to `radicle_local_get_issue` to open what was just created.
+char* radicle_local_create_issue(const char* home, const char* rid,
+                                 const char* title, const char* description);
+
 /// Releases a string returned by any of the above. Passing anything else, or
 /// freeing twice, is undefined behaviour — the same contract as `free()`.
 void radicle_free_string(char* s);
