@@ -205,6 +205,83 @@ fn pathological_inputs_return_json_rather_than_unwinding() {
     }
 }
 
+/// The write entry points must be guarded exactly as the reads are.
+///
+/// A write is the one place where an unwind could leave more than a dropped
+/// `git2` handle behind — it is mid-way through appending to a COB's operation
+/// DAG — so a new `extern "C"` function that forgot `guarded` would be the
+/// worst instance of the bug this file exists for, not a lesser one.
+///
+/// `can_write` is asserted separately because it deliberately does NOT return
+/// an error object when the answer is no: `{"canWrite":false,"reason":...}` is
+/// a successful answer to the question. The property under test here is only
+/// that the boundary survives and returns parseable JSON.
+#[test]
+fn the_write_entry_points_are_guarded_too() {
+    let home = c("/nonexistent/definitely/not/a/radicle/home");
+    let rid = c("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn");
+    let junk = c("not-an-oid-at-all");
+    let traversal = c("../../../etc/passwd");
+    let body = c("hello");
+
+    assert_is_error_json(
+        "comment_on_issue(junk id)",
+        &call(|| unsafe {
+            radicle_local_ffi::radicle_local_comment_on_issue(
+                home.as_ptr(),
+                rid.as_ptr(),
+                junk.as_ptr(),
+                body.as_ptr(),
+            )
+        }),
+    );
+
+    assert_is_error_json(
+        "comment_on_issue(traversal-shaped id)",
+        &call(|| unsafe {
+            radicle_local_ffi::radicle_local_comment_on_issue(
+                home.as_ptr(),
+                traversal.as_ptr(),
+                traversal.as_ptr(),
+                body.as_ptr(),
+            )
+        }),
+    );
+
+    // Every string argument NULL at once — the shape `read_str` maps to "",
+    // and the one a C caller produces most easily by mistake.
+    assert_is_error_json(
+        "comment_on_issue(all NULL)",
+        &call(|| unsafe {
+            radicle_local_ffi::radicle_local_comment_on_issue(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        }),
+    );
+
+    for (label, out) in [
+        (
+            "can_write(bad home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_can_write(home.as_ptr()) }),
+        ),
+        (
+            "can_write(NULL home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_can_write(std::ptr::null()) }),
+        ),
+    ] {
+        let v: serde_json::Value = serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("{label}: reply was not JSON: {e}\n{out}"));
+        assert_eq!(v["canWrite"], false, "{label}: got {out}");
+        assert!(
+            v["reason"].as_str().is_some(),
+            "{label}: a refusal must carry a reason: {out}"
+        );
+    }
+}
+
 /// `radicle_free_string(NULL)` is a documented no-op. Worth pinning because
 /// the C++ `take()` helper calls it on every reply, and a crash here would be
 /// a crash on the happy path.
