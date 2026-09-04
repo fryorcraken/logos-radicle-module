@@ -61,11 +61,19 @@ Item {
     /// to the other — the seed's repos are not the local node's — so the whole
     /// navigation stack resets rather than trying to carry the current screen
     /// across.
+    ///
+    /// `nav.reset()` clears navigation state but does NOT refetch: NavState is
+    /// a pure state holder and the caller owns reloading, which is why
+    /// `onBackendReady` and `setSeed` both call `repoList.reload()` alongside
+    /// it. Omitting it here left the list showing the previous source's
+    /// repositories — or, switching to local first, nothing at all, because
+    /// no local request was ever issued.
     function setSource(next) {
         if (next === source) return;
         if (next === "local" && !localAvailable) return;
         source = next;
         nav.reset();
+        repoList.reload();
     }
 
     onCapsJsonChanged: {
@@ -185,6 +193,15 @@ Item {
     readonly property int    issueCount:  repoPage.issueCount
     readonly property int    patchCount:  repoPage.patchCount
     readonly property string patchStatus: repoPage.patchStatus
+
+    // Which source is selected, and whether the local one is offerable at all.
+    // `capsRaw` is the whole capabilities reply verbatim: when the local
+    // segment does not appear, the question is always "what did
+    // getCapabilities actually say", and reading it out of the app beats
+    // guessing from a screenshot.
+    readonly property string sourceName:  source
+    readonly property bool   hasLocal:    localAvailable
+    readonly property string capsRaw:     capsJson
 
     // Sync button: its three idle labels ("Download All" / "Re-sync" /
     // "Update") plus the in-progress percentage are the whole of that

@@ -105,6 +105,87 @@ Item {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Switching source must REFETCH, not just reset navigation state.
+    //
+    // Regression test. `setSource()` originally called only `nav.reset()`,
+    // which was right when NavState did its own reload — but M1.1 extracted
+    // NavState into a pure state holder and made every caller responsible for
+    // reloading (see `onBackendReady` and `setSeed`, which both call
+    // `repoList.reload()` alongside it). The merge left setSource() on the old
+    // assumption, so flipping to "Local" in a live Basecamp switched the
+    // toggle, cleared the screen, and issued no local request at all: an
+    // empty repository list that looked like "your node has no repos".
+    //
+    // This reproduces the shape rather than the whole component: a state
+    // holder that resets without reloading, plus the caller's obligation to
+    // reload. Written to fail against the one-line version — remove the
+    // `reload()` from `switcher.setSource` and `reloads` stays 0.
+    // -----------------------------------------------------------------------
+
+    QtObject {
+        id: navStub
+        property string view: "repo"
+        function reset() { view = "repos"; }   // no reload — as NavState is
+    }
+
+    QtObject {
+        id: switcher
+        property string source: "remote"
+        property int reloads: 0
+        property bool localAvailable: true
+
+        function reload() { reloads++; }
+
+        function setSource(next) {
+            if (next === switcher.source) return;
+            if (next === "local" && !switcher.localAvailable) return;
+            switcher.source = next;
+            navStub.reset();
+            switcher.reload();
+        }
+    }
+
+    TestCase {
+        name: "SourceSwitchRefetches"
+
+        function init() {
+            switcher.source = "remote";
+            switcher.reloads = 0;
+            switcher.localAvailable = true;
+            navStub.view = "repo";
+        }
+
+        function test_switching_source_refetches_the_repository_list() {
+            switcher.setSource("local");
+            compare(switcher.source, "local");
+            // The actual bug: without this the list keeps the previous
+            // source's rows, or shows none at all.
+            compare(switcher.reloads, 1,
+                    "switching source must refetch, not only reset nav state");
+        }
+
+        function test_switching_source_returns_to_the_repository_list() {
+            switcher.setSource("local");
+            compare(navStub.view, "repos",
+                    "a repo id from one source is meaningless to the other");
+        }
+
+        function test_switching_to_the_same_source_does_nothing() {
+            switcher.setSource("remote");
+            compare(switcher.reloads, 0, "no refetch when nothing changed");
+        }
+
+        /// Guarding here as well as by hiding the segment: a spec or a future
+        /// caller can reach setSource() directly.
+        function test_local_is_refused_when_no_profile_exists() {
+            switcher.localAvailable = false;
+            switcher.setSource("local");
+            compare(switcher.source, "remote");
+            compare(switcher.reloads, 0);
+        }
+    }
+
     TestCase {
         name: "SourceRouting"
 
