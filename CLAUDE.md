@@ -126,13 +126,13 @@ one.
 
 ### M2.1 progress — wired end to end and proven against a real profile
 
-`radicle/rust-ffi/` is real and on a branch (PR #3). What is true today, so
-nobody re-derives it:
+`radicle/rust-ffi/` is real and merged to `main` (PR #3), shipped in 0.2.0.
+What is true today, so nobody re-derives it:
 
 - **The whole `local*` surface works**, matching the `remote*` JSON shapes as
   pinned by `test_seed_client.cpp`: repos, tree, blob, readme, commits +
   diffs, and COBs (issues/patches) via `Issues::open`/`Patches::open` +
-  `NoCache`. 29 tests pass via `cargo test`.
+  `NoCache`. 32 tests pass via `cargo test`.
 - **It is linked and called.** `radicle/CMakeLists.txt` links the staticlib
   (`find_library` so a missing archive fails at configure time with a
   sentence, not at link time with a wall of undefined symbols),
@@ -858,6 +858,45 @@ narrower than "check whether the API already exposes this" implied):
   still active, this is follow-up scope for a later pass, not something to
   interrupt in-flight work for.
 
+### M2.1 shipped — 0.2.0, status as of 2026-09-04
+
+M2.1 is: browse **your own** Radicle node, not just a seed's HTTP API. The
+`local*` surface that shipped in M1 returning `localUnavailable()`
+unconditionally now reads `~/.radicle` for real, through a Rust staticlib
+(`radicle/rust-ffi/`) linked into the core module behind `LocalReader`. All
+eleven methods work — repos, tree, blob, README, commits with diffs, and COBs
+(issues/patches) via `Issues::open`/`Patches::open` + `NoCache`, so reading
+needs no signer, no SQLite cache and no passphrase. The UI reaches it through a
+Seed/Local toggle (`SourceToggle.qml`), with method routing extracted into
+`SourceState.qml`; the local segment is *absent* rather than disabled when no
+profile exists. Two differences between the sources are handled rather than
+papered over: `listRepos`' first argument is a search query remotely but a
+scope locally, and the seed picker hides while browsing locally. The technical
+detail — the FFI decision, what the JSON shapes must be, and the clippy
+dead-code lesson — is at the top of this file and is the part worth reading
+before touching the crate.
+
+Gates run on `main` at `e1c6b64` before cutting 0.2.0, all green:
+
+| Gate | Result |
+|---|---|
+| `check-qml-syntax.sh` | ok — all files parse, braces balanced |
+| `run-qml-tests.sh` | 15 files, **148 passed**, 0 failed, 0 skipped |
+| core unit tests (`.#checks.x86_64-linux.unit-tests`) | **42 passed** (was 34 at 0.1.1; the `local_reader` FFI tests are the difference) |
+| `cargo test` in `radicle/rust-ffi/` | **32 passed**, 0 ignored |
+| `lgs basecamp build --variant all` | both modules, both variants |
+
+The Rust suite is a gate in its own right now: `ci.yml` runs `cargo fmt`,
+`cargo clippy --all-targets -- -D warnings` and `cargo test` on the crate, and
+the release job depends on it. Before that job existed, no workflow ran cargo
+at all, so a green CI run said nothing about the code holding every `local*`
+read.
+
+Not covered by any of the above, and deliberately so: `local.yaml`, the
+end-to-end spec for local browsing. It needs a real Radicle profile, which a CI
+runner does not have, so it is run by hand via `run-local-e2e.sh` (which passes
+`RAD_HOME` — see the section on it above) rather than skipped quietly in CI.
+
 ### M1 shipped — status as of 2026-09-03
 
 1. ✅ **Committed and pushed** to both remotes.
@@ -888,39 +927,19 @@ narrower than "check whether the API already exposes this" implied):
 5. ✅ **Catalog URL handed over** — ready to add to Basecamp:
    `https://raw.githubusercontent.com/fryorcraken/logos-modules/main/logos-repo.json`
 
-### M1.1 and M2.1 — in progress in separate worktrees
+### M1.1 and M2.1 — both merged to main
 
-Both started 2026-09-03, each in its own git worktree/branch, isolated from
-`main` and from each other:
+Both were developed in separate worktrees and are now on `main`:
 
 - **M1.1** (branch switching, sync staleness detection, the deferred
-  test-coverage follow-up from the pre-release review — see the M1.1 section
-  above for full scope): in progress. First commit landed —
-  `Main.qml`'s `nav.busy`/`nav.error` state extracted into a dedicated,
-  tested `NavState` component, closing the first deferred coverage gap via
-  structural extraction rather than just adding test cases (the
-  data-structure-over-logic principle noted above). Instructed to push and
-  open a draft PR once at a good stopping point, and to watch/fix its own
-  CI rather than leave it red.
-- **M2.1** (read-only local-node browsing — the `local*` API surface already
-  declared in `radicle_impl.h` is fully stubbed, returning
-  `localUnavailable()` unconditionally; `LocalStore` only does filesystem/
-  socket *detection*, no actual reading of `~/.radicle/storage`; there is no
-  Rust/FFI integration in this module at all yet). This is real, from-scratch
-  work — a new FFI boundary into the `radicle` crate, plus reading git-native
-  data (repos/trees/blobs/commits) and COBs (issues/patches, which need the
-  crate's COB machinery, not just git). Scoped as: design/scope first
-  (FFI approach, how COBs get read, whether full parity fits one session or
-  issues+patches become a flagged follow-up), then implement bottom-up
-  (Rust/C++ core proven with tests before any QML wiring). `Main.qml.call()`
-  already has the `source` parameter needed for QML call sites to eventually
-  pass `"local"` (added this session, see above). **M2.2** (write actions —
-  issues/patches/comments, a GitHub-Desktop-style workflow) is a planning
-  task for later, explicitly out of scope for the M2.1 agent.
-   — unverified until step 4 is done.
+  test-coverage follow-up) merged as PR #2, released as `v0.1.1`.
+- **M2.1** (read-only local-node browsing) merged as PR #3 (`3146715`),
+  followed by PR #4 (the lgs-first agent docs, `9a45838`) and PR #5
+  (`e1c6b64`, the inspector Basecamp via `lgs basecamp setup --inspector`).
+  Released as `v0.2.0` — see below.
 
-**M2 (local-node browsing) is explicitly out of scope until the user has
-reviewed the M1 work above** — do not start it unprompted.
+**M2.2** (write actions — issues/patches/comments, a GitHub-Desktop-style
+workflow) remains a planning task, not started.
 
 ### M1 gaps closed, and what M1 is
 
@@ -934,11 +953,14 @@ switching. Read-only throughout.
 
 An audit found three things claimed as done that were not: the issue detail
 view did not exist, commit rows were click-dead, and there was no diff
-rendering at all. The first is shipped; the other two are the uncommitted work
-above. **Local browsing (`local*`) is deliberately unimplemented** — it needs
-the Rust FFI backend, which is M2. Those methods return a specific reason
-rather than an empty list, because "no local node" and "no repositories" are
-different answers.
+rendering at all. All three shipped in M1.
+
+**Local browsing (`local*`) was deliberately unimplemented in M1** — it needed
+the Rust FFI backend. That is M2.1, which has since shipped (see above), so
+this paragraph describes history, not the current state. The distinction those
+stubs preserved still holds in the working implementation: "no local node" and
+"no repositories" return different answers, because the UI renders them
+differently.
 
 ## Tests are part of the change, not a follow-up
 
