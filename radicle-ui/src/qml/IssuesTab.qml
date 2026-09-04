@@ -204,7 +204,16 @@ Item {
 
                 MouseArea {
                     id: rowMouse
-                    objectName: "threadRow"
+                    // "issueRow", not the "threadRow" this and PatchesTab used
+                    // to share. A component test scopes its search to one tab
+                    // and so could not see the clash, but a sitometres spec
+                    // searches the whole app: both tabs are instantiated in the
+                    // same StackLayout, so `threadRow` matched two sets of
+                    // delegates and a click by index landed on the hidden
+                    // Patches list. The click reported success and nothing
+                    // opened — found by tests/ui/write.yaml, which is the first
+                    // spec ever to click one of these rows.
+                    objectName: "issueRow"
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor

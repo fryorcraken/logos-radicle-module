@@ -88,6 +88,24 @@ Item {
     readonly property var discussion: item && item.discussion ? item.discussion : []
     readonly property var revisions: item && item.revisions ? item.revisions : []
 
+    /// How many comments the thread currently shows, and the composer itself.
+    /// Both exist for the end-to-end write spec (tests/ui/write.yaml), which
+    /// has no other way to reach either: a spec's `state:` and `eval:`
+    /// expressions evaluate against the app's QML root and cannot address a
+    /// StackLayout child by id.
+    ///
+    /// The count is the assertion that matters. `onPosted` deliberately
+    /// RELOADS the thread rather than appending locally, so a comment showing
+    /// up here means the backend really returned it — which is the whole point
+    /// of reloading, and is not something a click or a screenshot can tell you.
+    readonly property int commentCount: discussion.length
+    /// The composer, so the spec can put text in the field the way a user
+    /// would have to. sitometres has no typing verb, so the draft is set
+    /// through `body` and then the REAL button is clicked — the click is what
+    /// proves submit() is wired, and setting the text is only the typing it
+    /// cannot otherwise do.
+    readonly property var composerItem: composer
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

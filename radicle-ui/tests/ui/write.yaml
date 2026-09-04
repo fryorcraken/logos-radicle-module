@@ -1,0 +1,418 @@
+# End-to-end UI test: WRITING. Creating an issue and commenting on one, against
+# a real local Radicle node, through a real Basecamp.
+#
+# RUN IT WITH THE WRAPPER, NOT BY HAND:
+#
+#   sh radicle-ui/tests/run-write-e2e.sh
+#
+# See browse.yaml's header for how to run these at all.
+#
+# ---------------------------------------------------------------------------
+# THIS SPEC RUNS AGAINST A PROFILE BUILT FOR IT, NOT AGAINST YOURS
+# ---------------------------------------------------------------------------
+#
+# Every other spec here reads. This one CHANGES SOMETHING, and that changes
+# what a fixture is allowed to be.
+#
+# `local.yaml`, the only other spec on the local path, is pointed at whatever
+# `~/.radicle` the developer already has: reads cannot damage it, so the cost
+# of using a real profile is only that the assertions have to stay generic
+# ("some repositories arrived") because nobody knows what is in it. A write
+# spec cannot make that trade twice over:
+#
+#   * it would append a junk comment to a real repository on every run, and
+#     COBs have no delete — the thread would accumulate one per run forever;
+#   * it would need that repository to contain an issue, which no real profile
+#     is guaranteed to have;
+#   * and it could then only assert "the count went up", because the starting
+#     count would be whatever the previous runs left behind.
+#
+# So the wrapper seeds a throwaway profile first — `cargo run --example
+# seed_write_profile` in radicle/rust-ffi, which builds a keystore, a
+# repository and ONE issue with ONE comment through the crate's public API, in
+# a directory it deletes afterwards. Three consequences, all of them the
+# reason this spec is shaped the way it is:
+#
+#   IDEMPOTENCY is structural, not managed. Each run gets a new home, so
+#   running this twice is indistinguishable from running it once, and a run
+#   that dies half way leaves nothing behind to confuse the next one. Nothing
+#   here has to clean up after a previous run, because there is never a
+#   previous run to clean up after.
+#
+#   THE ASSERTIONS CAN BE EXACT. The thread has exactly one comment before the
+#   post and must have exactly two after. "> 1" would pass against a fixture
+#   that arrived with three; "=== 2" is a statement about what this run did.
+#
+#   IT CAN RUN IN CI. The seeded keystore is PLAINTEXT (`Profile::init` with
+#   no passphrase), which is row 1 of the signer table in
+#   docs/M2.2-write-actions-design.md — the only row reachable without either
+#   prompting a human or shipping a passphrase. That is what makes
+#   `canWriteLocal` true on a runner that has never heard of Radicle. The key
+#   is generated from a fixed seed into a directory that is deleted on the way
+#   out and signs nothing that leaves it, so it is not a secret.
+#
+# It still needs RAD_HOME, for the reason local.yaml documents at length:
+# sitometres gives every run a throwaway $HOME, so without the flag the module
+# looks for a profile under a directory that has none and reports
+# localAvailable=false on every machine. The wrapper passes it.
+#
+# ---------------------------------------------------------------------------
+# WHY THE ASSERTIONS LOOK LIKE THIS
+# ---------------------------------------------------------------------------
+#
+# No `calls:` anywhere, on purpose. QML dispatches through the radicle_ui QtRO
+# replica and that hop is not logged as a LogosAPIClient invocation, so
+# sitometres reports "no backend calls at all" while the write plainly lands.
+# The effect is asserted with `state:` instead — which is the stronger
+# assertion anyway: a call being made is not the same as a comment existing.
+#
+# `root.threadCommentCount` is the load-bearing one, and it is load-bearing
+# *because of how CommentComposer is built*. A successful post does not append
+# the comment locally; it emits `posted()` and ThreadView RELOADS the thread
+# from the backend. So the count going 1 → 2 means the write reached storage
+# and a fresh read found it there. Had the composer appended locally, this
+# same assertion would pass against a write that silently did nothing — the
+# "a fake that answers the same for every input" trap this repo lost a
+# milestone to, which is exactly why the composer reloads.
+
+# ---------------------------------------------------------------------------
+# CURRENT STATUS: RED, ON A REAL DEFECT. READ THIS BEFORE "FIXING" THE SPEC.
+# ---------------------------------------------------------------------------
+#
+# Everything up to and including "the seeded issue is listed" passes against a
+# real Basecamp. The next step — clicking an issue row — fails, and it is NOT
+# a spec bug. The click is delivered to the right element and `onClicked` never
+# runs, because the row is rendered off-screen.
+#
+# Measured from inside the running app (root is 861 tall):
+#
+#   outer QQuickStackLayout   h=785
+#   inner QQuickStackLayout   h=18     <- the tab bodies
+#     SourceTab               h=18
+#     CommitsTab              h=0
+#     IssuesTab               h=18     <- current, visible
+#     PatchesTab              h=0
+#   issueRow                  y=877, h=56
+#
+# RepoView's content StackLayout collapses to 18px, so every tab body is a
+# sliver and its ListView lays rows out below the viewport. They are present in
+# the item tree — which is why sitometres finds `issueRow`, reports the click as
+# delivered, and nothing happens — but no mouse event can reach y=877 on an
+# 861px surface.
+#
+# This is a layout defect in RepoView.qml, not in the write path, and it is
+# older than M2.2: it affects every row in every tab. No existing spec caught it
+# because none of them had ever CLICKED a row inside a tab — `browse.yaml` only
+# switches tabs, and `repoRow` (which works) is on the repository list, outside
+# this StackLayout.
+#
+# Do not paper over this by emitting `itemActivated` instead of clicking. That
+# would make the spec green while leaving the app's rows unreachable, which is
+# precisely the "a test that cannot fail" failure this repository keeps paying
+# for. Fix the layout; the spec is already asserting the right thing.
+
+app: radicle_ui
+with: [radicle]
+timeout: 30s
+
+steps:
+  - name: the app opens
+    open: radicle_ui
+
+  - name: it becomes ready
+    wait_for:
+      state: "root.ready === true"
+    timeout: 45s
+
+  # The seeded profile is a profile, so the local segment must be offerable.
+  # Asserting it here turns "the wrapper's RAD_HOME did not reach the app" into
+  # a failure that says so, rather than a missing-element failure further down.
+  - name: the seeded profile is visible to the module
+    wait_for:
+      state: "root.localAvailable === true"
+    timeout: 45s
+
+  # The whole point of the seeded profile: its key is plaintext, so a signer
+  # loads with no passphrase and no agent. If this is false the spec cannot
+  # prove anything about writing, and every later step would fail for the same
+  # single reason — so it fails here, once, where the message is about signing.
+  - name: and a write could actually be signed
+    expect:
+      state:
+        - "root.canWrite === true"
+        - "root.writeUnavailableReason === ''"
+
+  - name: switch to the local node
+    click: { objectName: "sourceToggle_local" }
+
+  - name: every call now routes to the local surface
+    wait_for:
+      state: "root.source === 'local'"
+    timeout: 30s
+
+  # Exactly one — the seeder creates exactly one. A real profile would make
+  # this "> 0"; the fixture is what lets it be a statement rather than a hope.
+  - name: the seeded repository is the only one there
+    wait_for:
+      state: "root.repoCount === 1"
+    timeout: 60s
+
+  - name: open it
+    click: { objectName: "repoRow", nth: 0 }
+
+  - name: its source tree loads from local storage
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+    timeout: 60s
+
+  # ---- the composer must NOT be offered where a write cannot work ---------
+  #
+  # Checked before anything is written, because it is the failure that costs a
+  # user their text: a box offered where a submit cannot work loses whatever
+  # was typed into it. `commentable` is a conjunction — issue kind, an app, and
+  # the local source — and any one term silently becoming true everywhere would
+  # still leave the app looking correct on the screen where it is supposed to
+  # be true.
+  #
+  # This spec does NOT browse to a seed-hosted repository to check the negative,
+  # and that is a deliberate narrowing after a real failure. An earlier draft
+  # did; it failed at
+  #
+  #     no failed or timed-out backend calls — radicle.remoteListBranches
+  #     failed or timed out
+  #
+  # which is a public seed being slow, not a defect in anything this spec is
+  # about. A WRITE spec whose verdict depends on a third party's HTTP endpoint
+  # is red for environmental reasons, and this repository has twice paid for a
+  # check that could not pass — the whole reason `local.yaml` exists in the
+  # shape it does. Every step here runs against the seeded profile on disk, so
+  # the only thing that can fail it is the code under test.
+  #
+  # `commentable`'s three terms are each pinned by `tst_comment.qml` —
+  # `test_the_box_is_offered_for_a_local_issue`,
+  # `test_the_box_is_not_offered_while_browsing_a_seed` and
+  # `test_the_box_is_not_offered_for_a_patch` — where a component test sets
+  # `source` and `kind` directly instead of waiting on somebody's HTTP
+  # endpoint. What only this layer can prove is the whole chain against real
+  # storage, which is what the rest of this spec does.
+  #
+  # One thing NOT to assert here, learned by getting it wrong: `composerVisible`
+  # is `thread.commentable`, and `thread.kind` is `openThreadKind`, which keeps
+  # its previous value while no thread is open. So it says nothing about which
+  # TAB is showing, and "no composer on the patches tab" was green-or-red for
+  # reasons unrelated to patches. The panel's own `visible` also requires
+  # `itemId !== ""`, so with no thread open nothing is on screen either way.
+  # The meaningful assertion is the one below, with an issue actually open.
+
+  # ---- write ---------------------------------------------------------------
+  - name: switch to the issues tab
+    click: { objectName: "sectionTab", nth: 2 }
+
+  # One issue, because the seeder creates one.
+  - name: the seeded issue is listed
+    wait_for:
+      state:
+        - "root.repoTab === 2"
+        - "root.issueCount === 1"
+    timeout: 60s
+
+  # `issueRow`. These rows were called `threadRow` in both IssuesTab and
+  # PatchesTab until this spec was written: a component test scopes its search
+  # to one tab and so never saw the clash, but sitometres searches the whole
+  # app and both tabs live in the same StackLayout, so the name matched two
+  # sets of delegates. `nth: 0` landed on the hidden Patches list, the click
+  # reported success, and nothing opened. Renamed to `issueRow`/`patchRow`.
+  - name: open it
+    click: { objectName: "issueRow", nth: 0 }
+
+  # The thread as the seeder left it: the issue's own body and nothing else.
+  # This is the baseline the post is measured against, and asserting it makes
+  # the final "=== 2" mean "this run added one" rather than "there are two".
+  - name: the thread opens with only its root comment
+    wait_for:
+      state:
+        - "root.openThread !== ''"
+        - "root.threadCommentCount === 1"
+    timeout: 60s
+
+  # NOW the composer must be there: local source, issue kind, signable key.
+  # The mirror of the seed-side assertion above — together they pin both
+  # directions of the gate, which neither does alone.
+  - name: the composer is offered for a local issue
+    expect:
+      state: "root.composerVisible === true"
+
+  # sitometres has no typing verb, so the draft is set directly. This is the
+  # ONLY part of the flow that is not a real user gesture, and it is confined
+  # to the text: everything that decides whether the comment can be posted and
+  # what happens when it is — canSubmit, the button, submit(), the guard, the
+  # reload — is exercised for real below.
+  - name: type a comment
+    eval: >-
+      (function () {
+        root.composerItem.body = "posted by tests/ui/write.yaml";
+        return root.composerItem.body;
+      })()
+
+  # A non-empty draft is what makes the button live. Asserting it before the
+  # click means a click that does nothing fails at the click, not here.
+  - name: the button becomes submittable
+    expect:
+      state: "root.composerItem.canSubmit === true"
+
+  # The real click on the real button. Not `submit()` called directly: the
+  # MouseArea is `enabled: composer.canSubmit`, so a click landing at all is
+  # itself part of what is under test, and calling the function would skip it.
+  - name: click Comment
+    click: { objectName: "commentSubmit" }
+
+  # The payoff, and the assertion the whole spec exists for.
+  #
+  # The count comes from a FRESH READ of local storage — the composer reloads
+  # rather than appending — so 2 means the comment was signed, written to the
+  # COB DAG, and found again by a reader that knew nothing about the write.
+  # Nothing short of the write actually landing produces this.
+  - name: the comment lands and the reloaded thread shows it
+    wait_for:
+      state: "root.threadCommentCount === 2"
+    timeout: 60s
+
+  # A successful post clears the draft; a failed one keeps it. So an empty
+  # field is the composer's own verdict on what happened, and it must agree
+  # with the count above — the two disagreeing would mean the success path ran
+  # against a write that did not land.
+  - name: the composer reports success too
+    expect:
+      state:
+        - "root.composerItem.body === ''"
+        - "root.composerItem.error === ''"
+        - "root.composerItem.posting === false"
+
+  - name: no error surfaced anywhere during the write
+    expect:
+      state: "root.navError === ''"
+
+  # ---- a second comment ----------------------------------------------------
+  #
+  # One post proves the happy path. Two prove the composer is usable again
+  # afterwards — that the reload did not leave it stuck `posting`, and that the
+  # store can be reopened for a second write. The Rust layer pins the same
+  # property (`successive_comments_all_land_in_order`); this is the end-to-end
+  # half of it, and it costs three steps.
+  - name: type a second comment
+    eval: >-
+      (function () {
+        root.composerItem.body = "a second comment, to prove the box still works";
+        return root.composerItem.body;
+      })()
+
+  - name: click Comment again
+    click: { objectName: "commentSubmit" }
+
+  - name: the second comment lands too
+    wait_for:
+      state: "root.threadCommentCount === 3"
+    timeout: 60s
+
+  - name: still no error
+    expect:
+      state: "root.navError === ''"
+
+  # ---- creating an issue ---------------------------------------------------
+  #
+  # The second write M2.2 shipped, and a different shape from commenting: it
+  # creates a COB rather than appending to one, and it has its own cache trap.
+  # `IssuesTab` is cache-first, so `onCreated` must `reset()` before `load()` —
+  # a plain `load()` serves the page fetched before the create and the new
+  # issue is simply absent, a screen that looks like it worked while showing
+  # stale data. `root.issueCount` going 1 → 2 is what catches that, and it only
+  # catches it because the seeded fixture makes both numbers exact.
+  - name: go back to the issue list
+    click: { objectName: "threadBackButton" }
+
+  - name: the list is showing again
+    wait_for:
+      state:
+        - "root.openThread === ''"
+        - "root.issueCount === 1"
+    timeout: 30s
+
+  # The button is gated on canWrite, not on localAvailable — a profile can
+  # exist while its key stays locked, and offering a form that cannot be
+  # submitted loses whatever was typed into it. The seeded key is signable, so
+  # here it must be offered.
+  - name: the New issue button is offered
+    expect:
+      state:
+        - "root.canCreateIssue === true"
+        - "root.newIssueOpen === false"
+
+  - name: open the form
+    click: { objectName: "newIssueButton" }
+
+  - name: the form is up
+    wait_for:
+      state: "root.newIssueOpen === true"
+    timeout: 30s
+
+  # Same as the comment: only the typing is done through the item, because
+  # sitometres has no typing verb. Everything that decides whether the issue
+  # can be created, and what happens when it is, runs for real.
+  - name: fill in the form
+    eval: >-
+      (function () {
+        var f = root.newIssueFormItem;
+        f.title = "Created by tests/ui/write.yaml";
+        f.description = "This issue was created end to end through a real Basecamp.";
+        return f.title;
+      })()
+
+  - name: the form becomes submittable
+    expect:
+      state: "root.newIssueFormItem.canSubmit === true"
+
+  - name: click Create
+    click: { objectName: "newIssueSubmit" }
+
+  # Three things at once, and each would fail differently: the form closed (so
+  # `onCreated` ran rather than `onCancelled` or nothing), the list came back,
+  # and it has TWO issues. The last is the one that catches a create whose
+  # reload served the cache — the count would stay at 1 with every other
+  # assertion here still green.
+  - name: the issue is created and appears in the list
+    wait_for:
+      state:
+        - "root.newIssueOpen === false"
+        - "root.issueCount === 2"
+    timeout: 60s
+
+  - name: no error surfaced while creating
+    expect:
+      state: "root.navError === ''"
+
+  # Opening it proves the COB is real and readable, not just a row the list
+  # painted. A created issue's thread starts with its description as the root
+  # comment, and nothing else.
+  #
+  # nth: 0 is the newest, since the list sorts newest-first — but the
+  # assertion does not rely on that being true. The seeded issue now has THREE
+  # comments (its root plus the two posted above), so "exactly 1" identifies
+  # the new issue on its own: if the ordering were the other way round this
+  # step would fail rather than quietly assert the wrong thing.
+  - name: open the new issue
+    click: { objectName: "issueRow", nth: 0 }
+
+  - name: it reads back with its description as the root comment
+    wait_for:
+      state:
+        - "root.openThread !== ''"
+        - "root.threadCommentCount === 1"
+    timeout: 60s
+
+  - name: and commenting is offered on it too
+    expect:
+      state:
+        - "root.composerVisible === true"
+        - "root.navError === ''"

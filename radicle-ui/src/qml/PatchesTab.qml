@@ -200,7 +200,10 @@ Item {
 
                 MouseArea {
                     id: rowMouse
-                    objectName: "threadRow"
+                    // "patchRow" — see IssuesTab's matching comment. These two
+                    // shared "threadRow", which is ambiguous to anything that
+                    // searches the whole app rather than one tab.
+                    objectName: "patchRow"
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
