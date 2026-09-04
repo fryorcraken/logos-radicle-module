@@ -409,13 +409,20 @@ each one costs the user a manual approval click. What that means in practice:
 | the test scripts, by absolute path | `sh <relative-path>` |
 | | anything resolving into `/nix/store` or `~/.cargo` |
 
-Two that catch people repeatedly:
+Three that catch people repeatedly:
 
 - **`gh` is free until you filter it.** `gh api repos/o/r/releases` runs
   unprompted; adding `--jq '.[].tag_name'` makes it unanalysable and costs a
   click. Run it plain and read the JSON — that costs nothing.
 - **Never `readlink` or `ls` a `/nix/store` path** to find out where an
   artefact went. The paths are documented below; use them.
+- **Do not `curl` a third-party API to predict whether a command will work.**
+  Run the command. `curl https://crates.io/…` to check a version exists is
+  both blocked from this sandbox (it returns empty, which reads as "not
+  found") and pointless — `cargo install <crate> --version X` answers the same
+  question by succeeding or failing, and leaves you with the tool installed.
+  Where a fact really is needed up front, `gh api` reaches GitHub without a
+  prompt; reach for that instead of inventing a network call.
 
 The test scripts take no arguments and set their own environment for exactly
 this reason.
