@@ -189,8 +189,11 @@ jobs:
             ~/.cargo/git
           key: cargo-lgs-${{ runner.os }}-0.3.1
 
+      # `--force` because `~/.cargo/bin` is cached above: on a cache hit the
+      # binaries already exist and plain `cargo install` fails with "binary
+      # `lgs` already exists in destination". See the same step in ci.yml.
       - name: Install logos-scaffold
-        run: cargo install logos-scaffold --version 0.3.1 --locked
+        run: cargo install logos-scaffold --version 0.3.1 --locked --force
 
       # The bundle carries its own Qt but NOT host graphics libraries — you
       # cannot bundle a GPU driver — so it resolves libGL/glvnd through the

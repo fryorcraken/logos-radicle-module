@@ -209,8 +209,14 @@ jobs:
             ~/.cargo/git
           key: cargo-lgs-${{ runner.os }}-0.3.1
 
+      # `--force` because `~/.cargo/bin` is in the cache above: on a cache hit
+      # the binaries already exist and plain `cargo install` refuses with
+      # "binary `lgs` already exists in destination" rather than treating it as
+      # a no-op. --force also makes the step do the right thing when the pinned
+      # version changes, instead of silently keeping the cached older build.
+      # (The compile itself is still skipped when the version already matches.)
       - name: Install logos-scaffold
-        run: cargo install logos-scaffold --version 0.3.1 --locked
+        run: cargo install logos-scaffold --version 0.3.1 --locked --force
 
       # Unit tests for the core module's logic (URL building, ref resolution,
       # pagination, error shapes, local-profile detection).
