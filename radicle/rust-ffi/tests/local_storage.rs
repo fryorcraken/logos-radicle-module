@@ -260,6 +260,68 @@ fn a_malformed_rid_is_rejected_before_touching_storage() {
     );
 }
 
+/// Scope narrows the list. The fixture's node is the delegate of every repo it
+/// creates, so "delegate" sees them all and "seeded" — other people's public
+/// work — sees none. That asymmetry is the point: it proves the filter is
+/// actually reading the identity document rather than passing everything
+/// through, which is what the previous implementation did.
+#[test]
+fn list_repos_narrows_by_scope() {
+    let fixture = init_profile("scope");
+    init_repo(&fixture, "mine-one", "first");
+    init_repo(&fixture, "mine-two", "second");
+    let home = fixture.home();
+
+    let count = |scope: &str| {
+        let v = parse(&radicle_local_ffi::local::list_repos(&home, scope, 0, 10));
+        assert!(v.get("error").is_none(), "unexpected error for {scope}: {v}");
+        v["items"].as_array().expect("items").len()
+    };
+
+    assert_eq!(count("all"), 2, "'all' lists everything");
+    assert_eq!(count(""), 2, "an empty scope means all");
+    assert_eq!(count("delegate"), 2, "this node delegates both repos");
+    assert_eq!(
+        count("seeded"),
+        0,
+        "'seeded' is other people's repos, and there are none here"
+    );
+    assert_eq!(
+        count("private"),
+        0,
+        "the fixture creates public repos, so 'private' is empty"
+    );
+    // An unrecognized scope shows everything rather than nothing: an empty
+    // list would be indistinguishable from a node with no repositories.
+    assert_eq!(count("no-such-scope"), 2);
+}
+
+/// `visibility` and `delegates` are read by `RepoList.qml` (the private badge)
+/// and are part of the shape `remoteGetRepo` returns, so a local repo must
+/// carry them too or the two sources render differently.
+#[test]
+fn get_repo_reports_visibility_and_delegates() {
+    let fixture = init_profile("visibility");
+    let rid = init_repo(&fixture, "public-repo", "a public one");
+
+    let v = parse(&radicle_local_ffi::local::get_repo(&fixture.home(), &rid));
+    assert!(v.get("error").is_none(), "unexpected error: {v}");
+
+    // `Visibility` derives `tag = "type"`, so this is the exact string
+    // RepoList.qml compares against "private".
+    assert_eq!(v["visibility"]["type"], "public", "got {v}");
+
+    let delegates = v["delegates"].as_array().expect("delegates array");
+    assert_eq!(delegates.len(), 1, "the creating node is the delegate: {v}");
+    assert!(
+        delegates[0]["id"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("did:key:"),
+        "a delegate is identified by DID: {v}"
+    );
+}
+
 /// The "no local node" case must stay distinguishable from "no repositories":
 /// `radicle_impl.h` documents that these are different answers, and the UI
 /// renders them differently.
