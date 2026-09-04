@@ -85,8 +85,8 @@ Item {
             issues.load();
             wait(50);
 
-            var row = findByName(issues, "threadRow");
-            verify(row !== null, "no threadRow delegate was rendered");
+            var row = findByName(issues, "issueRow");
+            verify(row !== null, "no issueRow delegate was rendered");
 
             var seen = "";
             function grab(id) { seen = id; }
@@ -124,17 +124,22 @@ Item {
         }
 
         function test_a_patch_row_click_activates_it() {
-            // PatchesTab shares its "threadRow" objectName with IssuesTab
-            // (both feed the same detail view via RepoView), and all three
-            // tabs overlap (anchors.fill: parent) while hidden by default —
-            // same reason as commits above: mouseClick cannot reach an
-            // invisible item's children, so this test needs the tab shown
-            // for real, or it would silently hit issues' row instead.
+            // PatchesTab's rows used to share IssuesTab's "threadRow" name.
+            // They are "patchRow" and "issueRow" now, because a sitometres
+            // spec searches the whole app rather than one tab and the shared
+            // name matched both sets of delegates — a click by index landed on
+            // whichever list came first, reported success, and opened nothing.
+            // This test could not see that: findByName is scoped to one tab.
+            //
+            // All three tabs still overlap (anchors.fill: parent) and stay
+            // hidden by default — same reason as commits above: mouseClick
+            // cannot reach an invisible item's children, so this test needs the
+            // tab shown for real.
             patches.load();
             wait(50);
 
-            var row = findByName(patches, "threadRow");
-            verify(row !== null, "no threadRow delegate was rendered");
+            var row = findByName(patches, "patchRow");
+            verify(row !== null, "no patchRow delegate was rendered");
 
             patches.visible = true;
             var seen = "";
@@ -154,9 +159,9 @@ Item {
             commits.load();
             patches.load();
             wait(50);
-            compare(findByName(issues, "threadRow").cursorShape, Qt.PointingHandCursor);
+            compare(findByName(issues, "issueRow").cursorShape, Qt.PointingHandCursor);
             compare(findByName(commits, "commitRow").cursorShape, Qt.PointingHandCursor);
-            compare(findByName(patches, "threadRow").cursorShape, Qt.PointingHandCursor);
+            compare(findByName(patches, "patchRow").cursorShape, Qt.PointingHandCursor);
         }
     }
 }

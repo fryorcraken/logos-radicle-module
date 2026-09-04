@@ -69,6 +69,16 @@ Item {
     readonly property bool canCreateIssue: newIssueButton.visible
     readonly property bool newIssueOpen: composingIssue
 
+    /// How many comments the open thread shows, and the composer itself — both
+    /// re-exported for tests/ui/write.yaml. See ThreadView, where they are
+    /// defined and where the reasoning lives.
+    readonly property int threadCommentCount: thread.commentCount
+    readonly property var composerItem: thread.composerItem
+    /// The new-issue form, for the same reason as composerItem: sitometres has
+    /// no typing verb, so a spec fills the fields through the item and then
+    /// clicks the REAL submit button.
+    readonly property var newIssueFormItem: newIssue
+
     /// State the end-to-end UI specs assert on. Kept here, and re-exported by
     /// Main.qml, because a spec's `state:` expressions evaluate against the
     /// app's QML root and cannot reach into a StackLayout child by id.

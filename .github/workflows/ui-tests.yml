@@ -95,10 +95,16 @@ jobs:
     # fail-fast is off: when two specs break it is worth seeing both, and a
     # spec that fails for seed-side reasons should not hide a real failure in
     # another.
+    # `write` is the odd one out and needs two extra things the others do not:
+    # a Rust toolchain, and a seeded Radicle profile with a signable key. Both
+    # are handled by steps below that are `if`-gated on the spec name, so the
+    # other four jobs pay nothing for it. It is in the matrix rather than
+    # excluded because a spec not in the matrix runs nowhere — the state three
+    # of these were in before af9a746.
     strategy:
       fail-fast: false
       matrix:
-        spec: [browse, branches, source, sync]
+        spec: [browse, branches, source, sync, write]
 
     env:
       # NOTE: BASECAMP_REV is NOT set here. It is derived from
@@ -468,6 +474,64 @@ jobs:
       - name: Build both modules (portable)
         run: lgs basecamp build-portable --print-output
 
+      # ---- the write spec only ------------------------------------------
+      #
+      # `write.yaml` is the one spec that CHANGES something, and it needs a
+      # Radicle profile with a SIGNABLE key to change it in. A runner has
+      # neither, and pointing the spec at a developer's real profile is not an
+      # option for something that appends a COB comment on every run — COBs
+      # have no delete, so those would accumulate forever.
+      #
+      # So the profile is built for the run: `seed_write_profile` creates a
+      # keystore, one repository and one issue with one comment through the
+      # radicle crate's public API. No network, no `rad` binary, no daemon — a
+      # COB write is local, which is exactly why this is affordable in CI at
+      # all.
+      #
+      # The keystore is PLAINTEXT (`Profile::init` with no passphrase), which
+      # is the only one of the four signer rows in
+      # docs/M2.2-write-actions-design.md reachable without prompting a human
+      # or putting a passphrase in the environment. That is what makes
+      # `canWriteLocal` true here. The key is generated from a fixed seed into
+      # a runner directory that is destroyed with the runner and signs nothing
+      # that leaves it: a fixture, not a credential.
+      #
+      # The runner image already ships a Rust toolchain — `cargo install` above
+      # depends on it — so there is no toolchain step to add.
+      #
+      # Gated on the spec name so the other four jobs pay none of this.
+      - name: Seed a throwaway Radicle profile (write spec only)
+        if: matrix.spec == 'write'
+        run: |
+          set -eu
+          # Under the runner's workspace, and a path that does not exist yet:
+          # the seeder REFUSES an existing directory rather than clearing one,
+          # so a mistyped path can never land on somebody's ~/.radicle.
+          scratch="$RUNNER_TEMP/write-e2e-profile"
+          seeded=$(cd radicle/rust-ffi && cargo run --quiet --example seed_write_profile -- "$scratch")
+          rad_home=$(printf '%s\n' "$seeded" | sed -n '1p')
+          # storage/ is the marker LocalStore uses to decide a profile is real.
+          # Without it the spec fails at "the seeded profile is visible", which
+          # would read as a module bug rather than as a seeding failure.
+          test -d "$rad_home/storage" || {
+            echo "::error::seed_write_profile produced no storage/ under $rad_home"
+            exit 1
+          }
+          echo "rid:   $(printf '%s\n' "$seeded" | sed -n '2p')"
+          echo "issue: $(printf '%s\n' "$seeded" | sed -n '3p')"
+          echo "RAD_HOME=$rad_home" >> "$GITHUB_ENV"
+
+      # sitometres gives every run a throwaway $HOME so a spec cannot touch the
+      # user's real keys, and LocalStore resolves the Radicle home from
+      # RAD_HOME before $HOME/.radicle. So the seeded profile reaches the module
+      # only through --env, and every local spec needs it — see
+      # radicle-ui/tests/run-local-e2e.sh, which documents the failure at
+      # length. Empty for the four read specs, which never leave the seed
+      # source and must NOT be handed a profile they have no use for.
+      - name: Point the spec at the seeded profile (write spec only)
+        if: matrix.spec == 'write'
+        run: echo "SPEC_ENV=--env RAD_HOME=$RAD_HOME" >> "$GITHUB_ENV"
+
       # sitometres reads $APP_DIR directly — verified by a real run. It follows
       # the /nix/store symlinks and is not confused by the <NN>- load-order
       # prefix, the two details most likely to have broken it. There is
@@ -498,11 +562,19 @@ jobs:
           # --strict: an INCONCLUSIVE run is one that proved nothing, and a
           # green tick on no evidence is worse than a red one. Without it
           # sitometres exits 0 on INCONCLUSIVE by design.
+          # $SPEC_ENV is deliberately UNQUOTED: it is either empty (the four
+          # read specs) or the two words `--env RAD_HOME=<path>` (the write
+          # spec), and quoting would pass the whole thing as one argument.
+          # `${SPEC_ENV:-}` because `set -u` is on and the four read specs
+          # never set it. The path cannot contain spaces — it is built from
+          # $RUNNER_TEMP by the seed step above — so word splitting is safe
+          # here in a way it would not be for an arbitrary value.
           npx --yes "$SITOMETRES" run "$SPEC" \
             --app radicle_ui \
             --app-dir "$APP_DIR" \
             --basecamp "$BASECAMP_BIN" \
             --variant linux-amd64 \
+            ${SPEC_ENV:-} \
             --strict \
             --json  "ui-results/${{ matrix.spec }}.json" \
             --junit "ui-results/${{ matrix.spec }}.xml" \
