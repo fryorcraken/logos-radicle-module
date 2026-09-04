@@ -60,9 +60,13 @@ version = "0.4.1"
 # private dir like /tmp/lgs-alice starts basecamp with no display and it exits
 # immediately.
 #
-# NOTE: `lgs basecamp setup` rewrites this file and strips comments. If these
-# are missing after running it, restore them — they are the record of two bugs
-# that each cost a debugging session.
+# These comments used to be destroyed by `lgs basecamp setup`, which rewrote
+# the file without preserving them. Fixed upstream (logos-co/scaffold#266) and
+# the fix is in the build both CI workflows pin via LGS_REV, so a `setup` run
+# now leaves this block alone. Verified rather than assumed: a
+# `setup --inspector` run in a worktree changed only the two `attr` lines
+# above. Keep the note — it is the record of two bugs that each cost a
+# debugging session, and it is still worth a `git diff` after a `setup`.
 [basecamp.env]
 # Qt's own logging otherwise vanishes into the platform log sink, so neither
 # `lgs basecamp launch` nor the profile log captures it.

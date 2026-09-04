@@ -25,7 +25,7 @@ name: UI tests
 # Two caveats before anyone moves this to `pull_request`. Cache scoping: a PR
 # branch can read main's cache, but a PR from a FORK gets its own isolated
 # scope and would always run cold, i.e. ~9m. And the first run after any
-# BASECAMP_REV bump is cold by construction, since the rev is in the key.
+# Basecamp pin bump is cold by construction, since the rev is in the key.
 #
 # ─── why Basecamp is BUILT and not fetched ──────────────────────────────────
 # sitometres attaches to Basecamp's QML inspector. That is a compile-time
@@ -53,8 +53,10 @@ name: UI tests
 #     does not hold the artefact. It is still configured, because the
 #     dependencies AROUND Basecamp do come from it — 676 paths were substituted
 #     on the run above, for a resulting store of 5.15 GB.
-#   * the rev is pinned. An unpinned build would recompile on every upstream
-#     commit and would also miss the store cache every time.
+#   * the rev is pinned, in `[repos.basecamp].pin` in scaffold.toml — the one
+#     place it is written. `lgs basecamp setup` builds that pin, and the store
+#     cache key is derived from it. An unpinned build would recompile on every
+#     upstream commit and would also miss the store cache every time.
 # If a future Basecamp release publishes the inspector bundle, drop the store
 # cache and let the substituter do the work — re-check with the curl above.
 
@@ -68,7 +70,8 @@ on:
   # about rather than being surprised by:
   #   - a PR from a fork gets its own isolated cache scope, so it never hits
   #     this repo's cache;
-  #   - the first run after BASECAMP_REV changes, since the rev is in the key.
+  #   - the first run after `[repos.basecamp].pin` changes in scaffold.toml,
+  #     since the rev it names is in the cache key.
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -98,20 +101,183 @@ jobs:
         spec: [browse, branches, source, sync]
 
     env:
-      # Pinned: Basecamp 0.2.3. Bump deliberately — an unpinned rev recompiles
-      # on every upstream commit and invalidates the store cache with it.
-      BASECAMP_REV: aa237766baf61404e12da86b7303cb41065464c9
+      # NOTE: BASECAMP_REV is NOT set here. It is derived from
+      # `[repos.basecamp].pin` in scaffold.toml by the "Resolve the pinned
+      # Basecamp rev" step below, which exports it for every later step.
+      #
+      # It used to be hardcoded here, and that was safe only while this
+      # workflow also did the build. Now `lgs basecamp setup` does, and it
+      # reads the pin from scaffold.toml — so a literal here would be a second
+      # source of truth for one fact. Bump scaffold.toml and forget this, and
+      # the store cache silently keys on the old rev: it restores a store full
+      # of the previous Basecamp, the build finds nothing useful in it and
+      # recompiles from scratch on every run, forever. Nothing errors; the
+      # specs still pass; the job just quietly costs ~9 minutes instead of ~3,
+      # and CI slowness gets blamed on the runners.
       SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
+      # Where `lgs basecamp build-portable` collects both modules. sitometres
+      # takes ONE --app-dir search root and browse.yaml declares
+      # `with: [radicle]`, so both .lgx must be findable from here.
+      APP_DIR: .scaffold/basecamp/portable
       # Keep in step with ci.yml's build job.
-      LGS_VERSION: "0.3.1"
+      #
+      # TEMPORARY: a git rev, not a crates.io version. `setup --inspector` and
+      # `build --print-output` are both from logos-co/scaffold#266, which is
+      # open, so there is no published release carrying them. This is a pinned
+      # COMMIT rather than the branch name on purpose — a moving branch would
+      # silently change the tool driving every build here, and would also make
+      # the cache key below meaningless.
+      #
+      # Revert to `LGS_VERSION: "<next release>"` and a plain
+      # `cargo install logos-scaffold --version …` the moment #266 ships in one.
+      #
+      # If EVERY job in both workflows suddenly fails in `cargo install`, this
+      # is the first thing to check: the rev lives on an unmerged PR branch,
+      # kept alive only by that PR. A force-push plus a close, or the branch
+      # being deleted, makes it unfetchable. The fix is to re-pin to #266's
+      # current head, not to debug cargo.
+      LGS_REV: 8f41e37e766037674b4ebf608d45bdf0ada15be0
+
+      # TEMPORARY, and the same shape as LGS_REV above: a git commit rather
+      # than an npm version.
+      #
+      # Published sitometres (0.1.0) refuses this bundle with "no Basecamp with
+      # the QML inspector compiled in" even though the inspector is there. Its
+      # `hasInspector()` probes `bin/LogosBasecamp` (a ~5 KB sh wrapper) and
+      # `bin/.LogosBasecamp` (absent), never `bin/.LogosBasecamp.elf`, which is
+      # what nix's dirBundler actually ships. That is the ONLY reason this job
+      # used to copy the bundle out of the store and symlink a second name
+      # beside the wrapper — a step now deleted, because this build probes the
+      # `.elf` sibling (and `-wrapped`, and resolves symlinks first).
+      #
+      # Filed as paradoxcomputer/sitometres#1, fixed by #3, which is open. A
+      # pinned COMMIT, not the branch: a moving ref would silently change the
+      # tool that gates every spec here — exactly the hazard scaffold#266's
+      # mid-session force-push demonstrated for LGS_REV.
+      #
+      # `npx` on a git ref runs the package's `prepare` script, so the
+      # TypeScript is compiled on install; no published artefact is needed.
+      #
+      # Revert to `@paradoxcomputer/sitometres@<version>` the moment #3 ships
+      # in one. If that release also carries the probe fix, nothing else here
+      # changes — the workaround step is already gone.
+      SITOMETRES: "github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9"
 
     steps:
-      - uses: actions/checkout@v4
+      # Action majors are the Node-24 ones. GitHub retired the Node 20 runtime,
+      # and until these were bumped every job here logged a deprecation warning
+      # naming checkout/cache/setup-node: the runner was already force-running
+      # them on Node 24, so the bump matches what was happening anyway rather
+      # than changing it. `node-version` is a separate axis — that is the Node
+      # sitometres itself runs on, and 20 is EOL, so it moved with them.
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
+      # Two unrelated needs, one apt transaction, so the job pays the
+      # update-and-install cost once:
+      #
+      #   * the graphics libraries the Basecamp bundle resolves at load time.
+      #     It carries its own Qt but NOT host graphics — you cannot bundle a
+      #     GPU driver — so a bare runner dies with `libOpenGL.so.0: cannot
+      #     open shared object file`. Same list as logos-basecamp's own
+      #     doctests workflow.
+      #   * `tomlq`, which the next step uses to read the Basecamp pin. That
+      #     is why this sits up here rather than just before the bundle is
+      #     built: the resolve step needs it, and the cache step needs the
+      #     resolve step.
+      #
+      # `yq` is the Python package that ships `tomlq`. The runner preinstalls
+      # a `yq` already, but that is the Go one (v4) and has no `tomlq` — two
+      # different tools sharing a name, so this install is not redundant.
+      #
+      # The runner image preconfigures third-party apt repos this job does not
+      # use, and one of them failing takes `apt-get update` — and so the whole
+      # job — down with it. Seen for real (run 33826324704, the `sync` job,
+      # while its three siblings passed the identical step minutes apart):
+      #
+      #   E: Failed to fetch https://packages.microsoft.com/ubuntu/24.04/prod/…
+      #      403  Forbidden
+      #   E: The repository '… noble InRelease' is no longer signed.
+      #
+      # Not a momentary blip worth retrying through: the runner image already
+      # sets `APT::Acquire::Retries "10"`, so apt had retried ten times before
+      # surfacing that.
+      #
+      # Every package below comes from Ubuntu's own archive, so nothing here
+      # needs a third-party source. Rather than name one file — the image's
+      # layout is not a contract, and a `.list` that has become a deb822
+      # `.sources` would make a targeted `rm` silently do nothing — move every
+      # extra source out of the way by pattern and keep only the distribution's
+      # own. `mv -v` so the log says what was disabled rather than leaving it
+      # to be inferred.
+      #
+      # `update` is then allowed to fail without failing the step: `install`
+      # is the real gate and fails loudly if a package cannot be resolved,
+      # which is the outcome that actually matters.
+      - name: Install graphics runtime libraries and tomlq
+        run: |
+          set -eu
+          sudo mkdir -p /etc/apt/disabled-sources.d
+          # `find -exec` rather than a glob: no match must not be an error.
+          sudo find /etc/apt/sources.list.d -maxdepth 1 \
+            \( -name '*.list' -o -name '*.sources' \) \
+            ! -name 'ubuntu.sources' ! -name 'ubuntu.list' \
+            -exec mv -v -t /etc/apt/disabled-sources.d {} +
+          sudo apt-get update -qq \
+            || echo "::warning::apt-get update reported errors; install is the gate, continuing"
+          sudo apt-get install -y --no-install-recommends \
+            libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1 yq
+          tomlq --version
+
+      # ONE source of truth for the Basecamp rev: `[repos.basecamp].pin`.
+      #
+      # `lgs basecamp setup` takes no --rev — it reads that pin — so anything
+      # else naming the rev has to derive it rather than repeat it. The store
+      # cache below is keyed on it, which is what makes this load-bearing:
+      # a cache keyed on a rev the build does not use restores a store that
+      # cannot help, and the only symptom is that every run is slow.
+      #
+      # Three ordering constraints, all load-bearing:
+      #   * AFTER the apt step, which installs tomlq — which is why that step
+      #     moved up to the top of the job rather than sitting beside the
+      #     bundle build it also serves.
+      #   * BEFORE the cache step, which keys on what this exports.
+      #   * BEFORE `setup --inspector`, which rewrites scaffold.toml's `attr`
+      #     keys IN PLACE. Safe today because setup never touches `pin`, but
+      #     the read happening first is what makes that a non-question; a
+      #     reorder should be a deliberate choice, not an accident.
+      # `tomlq` (from the `yq` package) reads the pin as the TOML value it is
+      # rather than regexing the file.
+      #
+      # Note the runner's preinstalled `yq` is the Go one (v4), which has no
+      # `tomlq`; the apt `yq` is the Python one, which does. They are different
+      # tools sharing a name, so the install is not redundant.
+      - name: Resolve the pinned Basecamp rev
+        run: |
+          set -eu
+          pin=$(tomlq -r '.repos.basecamp.pin' scaffold.toml)
+          # A short, empty or branch-name pin would still produce a perfectly
+          # usable cache key while silently not being the rev anyone meant.
+          # `tomlq -r` also prints the string "null" for a missing key, which
+          # this rejects along with the rest.
+          #
+          # Lowercase is required, not merely conventional: the pin goes into
+          # the cache key verbatim, so `AA23…` and `aa23…` would key two
+          # separate caches for one rev and halve the hit rate for no visible
+          # reason. Rejecting is better than normalising, because scaffold
+          # builds whatever the file says and only the file should decide.
+          printf '%s' "$pin" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "::error::[repos.basecamp].pin is '$pin', expected a full 40-char lowercase sha"
+            exit 1
+          }
+          echo "BASECAMP_REV=$pin" >> "$GITHUB_ENV"
+          echo "BASECAMP_REV=$pin (from scaffold.toml)"
+
+      # Not a GitHub-authored action, so the Node-20 retirement does not reach
+      # it — install-nix-action is a composite/Docker action. Left on its pin.
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -133,8 +299,13 @@ jobs:
       # The store cache is what makes a repeat run fast. Most of the cold cost
       # is not the Basecamp compile (~1.5 min) but pulling ~5 GB of closure from
       # the substituters (~4.5 min); the cache removes the download, not the
-      # compile. Keyed on the pinned rev so bumping BASECAMP_REV starts a fresh
-      # cache rather than restoring a store that cannot help.
+      # compile. Keyed on the pinned rev — resolved from scaffold.toml by the
+      # step above, which is also the rev `setup` builds — so bumping the pin
+      # starts a fresh cache rather than restoring a store that cannot help.
+      #
+      # `env.BASECAMP_REV` here resolves against the accumulated step
+      # environment, so it does see the $GITHUB_ENV write from that step. It is
+      # NOT the job's `env:` map, which no longer sets this at all.
       #
       # v7, not v5. On v5 this step never cached anything — run 33712429609
       # failed both halves, for two independent reasons:
@@ -177,72 +348,125 @@ jobs:
           purge-prefixes: nix-ui-${{ runner.os }}-
           purge-created: 604800
 
-      # `lgs` builds the modules below. logos-scaffold has no flake and no
-      # release binary, so `cargo install` from crates.io is the documented
-      # install path. Pinned to an exact version: an unpinned install would
-      # silently change the tool driving every module build the next time
-      # upstream publishes.
+      # `lgs` builds the modules below AND builds Basecamp itself. logos-scaffold
+      # has no flake and no release binary, so `cargo install` is the documented
+      # install path — here from a git rev rather than crates.io, because this
+      # job needs `setup --inspector` and that is still unreleased (see LGS_REV).
       # Cache the binary, not `~/.cargo` — see the same pair of steps in
       # ci.yml for why (throwaway target dir, and not overlaying the runner's
       # own rust shims). Exact-match key, no restore-keys, on purpose.
       - name: Cache lgs
         id: lgs-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/lgs
-          key: lgs-${{ runner.os }}-${{ env.LGS_VERSION }}
+          key: lgs-${{ runner.os }}-git-${{ env.LGS_REV }}
 
       - name: Install logos-scaffold
         if: steps.lgs-cache.outputs.cache-hit != 'true'
-        run: cargo install logos-scaffold --version ${{ env.LGS_VERSION }} --locked
+        run: cargo install --git https://github.com/logos-co/scaffold.git --rev ${{ env.LGS_REV }} logos-scaffold --locked
 
-      # The bundle carries its own Qt but NOT host graphics libraries — you
-      # cannot bundle a GPU driver — so it resolves libGL/glvnd through the
-      # normal loader path. A bare runner has none, and the binary dies at load
-      # with `libOpenGL.so.0: cannot open shared object file`. Same list as
-      # logos-basecamp's own doctests workflow.
-      - name: Install graphics runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
-
+      # `lgs`, not raw `nix build`. `setup --inspector` selects
+      # `.#bin-bundle-dir-inspector` and — the part that matters and the reason
+      # this could not be done before scaffold#266 — classifies it as the
+      # PORTABLE stack, so `[repos.lgpm].attr` moves to `cli-portable` with it.
+      # Left as dev, lgpm would accept only `-dev` variants and Basecamp would
+      # decline to load both modules with one warning line, opening to an empty
+      # UI: exactly the silent failure `--variant linux-amd64` guards against
+      # further down.
+      #
+      # The rev needs no flag: scaffold reads `[repos.basecamp].pin`, the same
+      # value the resolve step above turned into BASECAMP_REV. One source of
+      # truth, so there is nothing here to keep in step by hand.
+      #
+      # setup also builds lgpm and seeds the alice/bob profiles, neither of
+      # which this job uses. That is a few seconds against a build measured in
+      # minutes, and is the price of not hand-rolling the flake ref.
       - name: Build Basecamp with the QML inspector
-        run: |
-          set -eu
-          nix build "github:logos-co/logos-basecamp/${BASECAMP_REV}#bin-bundle-dir-inspector" \
-            -L --out-link result-bundle
-          test -x result-bundle/bin/LogosBasecamp
-          # Prove the inspector really is compiled in before anything depends on
-          # it, so a Basecamp built without it fails here — where the message
-          # says so — rather than as a timeout waiting for a port.
-          strings -a result-bundle/bin/.LogosBasecamp.elf \
-            | grep -q 'Inspector server listening on port'
-          echo "ok: inspector present"
+        run: lgs basecamp setup --inspector
 
-      # sitometres 0.1.0 decides whether a build has the inspector by scanning
-      # for the inspector's log strings, and it probes exactly two paths:
-      # bin/LogosBasecamp and bin/.LogosBasecamp (src/app/discover.ts,
-      # hasInspector). In this bundle the first is a 5 KB shell wrapper and the
-      # second does not exist — the real ELF is bin/.LogosBasecamp.elf — so the
-      # run is refused with "no Basecamp with the QML inspector compiled in"
-      # even though the string above proves it is there.
+      # setup records the built binary at a deterministic path in
+      # ~/.cache/logos-scaffold rather than a ./result symlink, and writes it
+      # to .scaffold/state/basecamp.state as `basecamp_bin=`. Read it from
+      # there rather than reconstructing the path.
       #
-      # Pointing --basecamp at the .elf directly gets past the check and then
-      # fails to spawn (ENOENT from the loader): the wrapper is what sets up the
-      # bundled library and Qt plugin paths. So keep the wrapper as the binary
-      # and add the name the probe looks for beside it.
-      #
-      # Copied out of the store because the store is read-only. Remove all of
-      # this once sitometres also probes the .elf.
-      - name: Work around the sitometres inspector probe
+      # Two things are asserted here that setup itself cannot tell us:
+      #   * it built the rev this job's store cache is keyed on. Both now come
+      #     from scaffold.toml, so this can no longer catch a hand-editing slip
+      #     — what it still catches is scaffold resolving the pin to something
+      #     else, which is exactly the assumption worth pinning down while
+      #     `setup --inspector` is an unreleased flag.
+      #   * the inspector really is compiled in. A Basecamp built without it
+      #     fails HERE, where the message says so, rather than as a timeout
+      #     waiting for a port that never opens.
+      - name: The built Basecamp is the pinned rev, with the inspector in it
         run: |
           set -eu
-          rm -rf basecamp
-          cp -RL result-bundle basecamp
-          chmod -R u+w basecamp
-          ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
-          test -x basecamp/bin/LogosBasecamp
+          # Parsed, not sourced. `. file` would execute it — and `basecamp_bin`
+          # is a path, so a value carrying $(...) would run. It also makes a
+          # missing key surface as a bare `pin: unbound variable` from `set -u`,
+          # which is the least legible failure in the file at the exact moment
+          # someone bumps LGS_REV and the state format has moved under them.
+          # scaffold writes each key CONDITIONALLY (`if !state.pin.is_empty()`),
+          # so an absent key is a shape this really can hit.
+          state=.scaffold/state/basecamp.state
+          test -f "$state" || {
+            echo "::error::$state missing — lgs basecamp setup wrote no state"
+            exit 1
+          }
+          pin=$(sed -n 's/^pin=//p' "$state")
+          basecamp_bin=$(sed -n 's/^basecamp_bin=//p' "$state")
+          [ -n "$pin" ] || {
+            echo "::error::$state has no 'pin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
+            exit 1
+          }
+          [ -n "$basecamp_bin" ] || {
+            echo "::error::$state has no 'basecamp_bin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
+            exit 1
+          }
+          echo "basecamp_bin=$basecamp_bin"
+          [ "$pin" = "$BASECAMP_REV" ] || {
+            echo "::error::setup built $pin but scaffold.toml resolved to $BASECAMP_REV —"
+            echo "::error::the Nix store cache key does not match what was built"
+            exit 1
+          }
+          test -x "$basecamp_bin"
+          # Two DIFFERENT failures, kept apart on purpose. Without the -f test,
+          # a bundle whose layout moved makes `strings` write to stderr and
+          # print nothing; `grep -q` then sees empty input and returns 1, and
+          # the step blames a missing inspector for what is really a wrong
+          # path. There is no pipefail here, so the exit status is grep's
+          # alone — the left-hand side's failure would be invisible.
+          elf="$(dirname "$basecamp_bin")/.LogosBasecamp.elf"
+          test -f "$elf" || {
+            echo "::error::no .LogosBasecamp.elf beside $basecamp_bin —"
+            echo "::error::lgs's bundle layout moved; the sitometres probe workaround below assumes it too"
+            exit 1
+          }
+          strings -a "$elf" | grep -q 'Inspector server listening on port' || {
+            echo "::error::$elf carries no inspector —"
+            echo "::error::setup --inspector did not select the inspector output"
+            exit 1
+          }
+          echo "ok: inspector present"
+          echo "BASECAMP_BIN=$basecamp_bin" >> "$GITHUB_ENV"
+
+      # NOTE: there used to be a "Work around the sitometres inspector probe"
+      # step here — `cp -RL` the bundle out of the store, `chmod -R u+w`, then
+      # symlink `.LogosBasecamp` beside the wrapper. It is gone.
+      #
+      # It existed because published sitometres (0.1.0) probed only
+      # `bin/LogosBasecamp` and `bin/.LogosBasecamp`, never the
+      # `bin/.LogosBasecamp.elf` that nix's dirBundler actually ships, and so
+      # refused a bundle that does have the inspector. The pinned SITOMETRES
+      # build probes the `.elf` sibling, so `--basecamp` can point straight at
+      # scaffold's own `basecamp_bin` inside the read-only out-link — no copy,
+      # no symlink, nothing to keep in step with lgs's bundle layout.
+      #
+      # Do NOT reintroduce it if a spec fails: check SITOMETRES first. Pointing
+      # `--basecamp` at the `.elf` instead of the wrapper is also still wrong —
+      # the wrapper is what sets the bundled library and Qt plugin paths, and
+      # the raw ELF fails to spawn with ENOENT.
 
       # `.#lgx-portable`, NOT `.#lgx` — and this is the opposite of what the
       # target's name suggests, so it is worth being explicit.
@@ -275,33 +499,28 @@ jobs:
       # nor the profiles, and `lgs basecamp docs` names CI explicitly as a
       # supported hand-authored-[modules]-table case.
       #
-      # NOTE: `lgs basecamp build` has no `--print-build-logs` passthrough, so
-      # a failing module build reports less here than the raw `nix build -L`
-      # this replaced — and ci.yml's build job lost it too, so there is no
-      # log-carrying build left in CI. To debug one, reproduce locally with
-      # `nix build .#lgx-portable -L` in the module directory.
+      # `--print-output` streams nix's output to the step log instead of
+      # tucking it into .scaffold/logs/ and printing a one-line status. That
+      # matters only when a build FAILS: without it the step says the
+      # derivation failed and nothing about why, and the log file it points at
+      # lives on a runner that is about to be destroyed. Restores what the raw
+      # `nix build -L` this replaced used to give.
       - name: Build both modules (portable)
-        run: lgs basecamp build-portable
+        run: lgs basecamp build-portable --print-output
 
-      # sitometres reads .scaffold/basecamp/portable/ directly — verified by a
-      # real run. It follows the /nix/store symlinks and is not confused by the
-      # <NN>- load-order prefix, the two details most likely to have broken it.
-      # There is deliberately NO copy into dist/: that only ever existed to
-      # collect two separate sub-flake result-* symlinks into one directory,
-      # and build-portable already does the collecting.
-      - name: The built packages carry the variant the bundle accepts
-        # Getting this wrong does not fail loudly: Basecamp logs one warning,
-        # declines to load the module, and the spec then times out on its first
-        # step for no visible reason. So assert it here, where the message says
-        # what happened.
-        run: |
-          set -eu
-          for f in .scaffold/basecamp/portable/*.lgx; do
-            echo "$f: $(tar tzf "$f" | grep -oE 'variants/[^/]+' | sort -u | tr '\n' ' ')"
-            tar tzf "$f" | grep -q '^variants/linux-amd64/' \
-              || { echo "::error::$f has no linux-amd64 variant — did build-portable fall back to .#lgx?"; exit 1; }
-          done
-
+      # sitometres reads $APP_DIR directly — verified by a real run. It follows
+      # the /nix/store symlinks and is not confused by the <NN>- load-order
+      # prefix, the two details most likely to have broken it. There is
+      # deliberately NO copy into dist/: that only ever existed to collect two
+      # separate sub-flake result-* symlinks into one directory, and
+      # build-portable already does the collecting.
+      #
+      # There was a "The built packages carry the variant the bundle accepts"
+      # step here, asserting each .lgx contained variants/linux-amd64. Removed
+      # deliberately: it was a diagnostic, not a gate — it could not fail a
+      # correct build, and `build-portable`'s whole job is that variant. The
+      # failure it guarded is written up above `Build both modules (portable)`,
+      # which is where a reader hitting it will look.
       - name: Run the spec
         # Bounded well inside the job's 120, so a spec that hangs fails HERE —
         # leaving the later steps to collect logs and upload evidence. If the
@@ -319,10 +538,10 @@ jobs:
           # --strict: an INCONCLUSIVE run is one that proved nothing, and a
           # green tick on no evidence is worse than a red one. Without it
           # sitometres exits 0 on INCONCLUSIVE by design.
-          npx --yes @paradoxcomputer/sitometres@0.1.0 run "$SPEC" \
+          npx --yes "$SITOMETRES" run "$SPEC" \
             --app radicle_ui \
-            --app-dir .scaffold/basecamp/portable \
-            --basecamp basecamp/bin/LogosBasecamp \
+            --app-dir "$APP_DIR" \
+            --basecamp "$BASECAMP_BIN" \
             --variant linux-amd64 \
             --strict \
             --json  "ui-results/${{ matrix.spec }}.json" \
@@ -421,7 +640,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Per spec: upload-artifact@v4 refuses a name another job in the same
           # run already claimed, so a shared name would fail three of the four.
