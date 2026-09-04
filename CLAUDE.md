@@ -58,10 +58,31 @@ signs as part of the operation.
 
 ### What shipped, and the rule that came with it
 
-`localCommentOnIssue` only — Rust (`cobwrite.rs`), FFI, `LocalWriter`,
-`radicle_impl`, the `.rep`, and `CommentComposer.qml` in `ThreadView`.
-Deliberately one narrow slice end to end rather than a broad half-wired
-surface.
+Two writes, each a full vertical slice: **`localCommentOnIssue`**
+(`CommentComposer.qml` in `ThreadView`) and **`localCreateIssue`**
+(`NewIssueForm.qml`, reached from a "New issue" button on the Issues tab).
+Both go Rust (`cobwrite.rs`) → FFI → `LocalWriter` → `radicle_impl` → `.rep` →
+QML, with tests at every layer.
+
+**A save that has not been announced now says so.** Both composers carry a
+`queuedNotice` in `Theme.warn` — not `Theme.bad`, because nothing went wrong
+and there is nothing to retry. Checked as `announced === false`, not for
+falsiness: an older backend omitting the field means "no claim made", and
+inventing a warning from a missing field would alarm the user about nothing.
+
+**`IssuesTab`/`PatchesTab` had no `count` property**, yet `RepoView` and
+`Main.qml` had read `issues.count` / `patches.count` since those were written —
+all four were `undefined`, and a spec asserting `issueCount > 0` would have
+compared against undefined. Nothing noticed because no spec asserts on them and
+`CommitsTab` has had the equivalent all along. Fixed in both, with a regression
+test. Worth knowing as a class: a `readonly property` alias to a child that
+does not exist fails silently in QML.
+
+**Creating an issue must drop the issue cache before reloading.**
+`IssuesTab` is cache-first, so `RepoView.onCreated` calls `issues.reset()` and
+*then* `load()`. A plain `load()` serves the page from before the create and
+the new issue is simply absent — a screen that looks like it worked while
+showing stale data. Pinned by a test that fails against a plain `load()`.
 
 **Gate every write affordance on `canWriteLocal`, never on `localAvailable`.**
 A profile can exist while its key stays locked. This is stated in
@@ -72,10 +93,28 @@ successful post *reloads* the thread rather than appending locally (an append
 renders correctly whether or not the write landed — the branch-switch fake trap
 in different clothes).
 
-Deferred with reasons in the design doc: creating an issue (the obvious next
-slice), commenting on a patch (needs revision-thread *reads* first — `get_patch`
-does not serialize them, so a patch comment would have nowhere to appear),
-close/reopen, labels and assignees, patch review, and the passphrase UI.
+Deferred with reasons in the design doc: commenting on a patch (needs
+revision-thread *reads* first — `get_patch` does not serialize them, so a patch
+comment would have nowhere to appear), close/reopen, labels and assignees,
+patch review, and the passphrase UI.
+
+**`objectName`s the write surface exposes**, for whoever writes the e2e specs:
+`commentComposer`, `commentComposerPanel`, `commentField`, `commentSubmit`,
+`composerError`, `composerQueuedNotice`, `composerUnavailable`;
+`newIssueButton`, `newIssueForm`, `newIssueTitle`, `newIssueDescription`,
+`newIssueSubmit`, `newIssueCancel`, `newIssueError`, `newIssueQueuedNotice`,
+`newIssueUnavailable`. Each sits on the clickable element, not its parent.
+`Main.qml` re-exports `composerVisible`, `canCreateIssue` and `newIssueOpen`
+for `state:` assertions, since a spec cannot reach into a `StackLayout` child.
+
+### Writes need a `write.yaml`, and none exists
+
+No sitometres spec exercises either write. That is a real gap, not a
+completed-and-omitted one: `local.yaml` is the only spec that touches `local*`
+at all, it is not in CI (a runner has no Radicle profile), and it needs
+`run-local-e2e.sh` to supply `RAD_HOME`. A write spec inherits all of that plus
+a signing key. Do not read the green component tests as covering the wiring —
+they structurally cannot.
 
 ### `cobwrite.rs` is separate from `cobs.rs` on purpose
 
