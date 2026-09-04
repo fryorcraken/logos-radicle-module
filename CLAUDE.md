@@ -822,23 +822,20 @@ is the one you repeat.
 #    It writes basecamp_bin= to .scaffold/state/basecamp.state.
 lgs basecamp setup --inspector
 
-# 2. Work around the sitometres inspector probe (explained below). Still
-#    needed: `basecamp_bin` is inside a read-only nix out-link, and the ELF is
-#    still named .LogosBasecamp.elf. Sourcing the state file is how you get
-#    the path — do not reconstruct it or go hunting in /nix/store.
+# 2. Read where setup put the bundle. No copy, no symlink: --basecamp points
+#    straight at scaffold's own binary inside the read-only out-link. Source
+#    the state file rather than reconstructing the path or hunting /nix/store.
 . .scaffold/state/basecamp.state
-cp -RL "$(dirname "$(dirname "$basecamp_bin")")" basecamp
-chmod -R u+w basecamp
-ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
 
-# 3. Build the modules and run the spec. Pin 0.1.0 to match CI — the probe
-#    bug in step 2 is version-specific, so an unpinned npx can behave
-#    differently from what CI proved.
+# 3. Build the modules and run the spec. Match CI's SITOMETRES pin exactly —
+#    the probe fix that makes step 2 a one-liner is unreleased, so plain
+#    `@0.1.0` (or an unpinned npx) refuses the bundle. See below.
 lgs basecamp build-portable --print-output
-npx --yes @paradoxcomputer/sitometres@0.1.0 run radicle-ui/tests/ui/browse.yaml \
+npx --yes 'github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9' \
+  run radicle-ui/tests/ui/browse.yaml \
   --app radicle_ui \
   --app-dir .scaffold/basecamp/portable \
-  --basecamp basecamp/bin/LogosBasecamp \
+  --basecamp "$basecamp_bin" \
   --variant linux-amd64 \
   --strict          # without it sitometres exits 0 on INCONCLUSIVE
 ```
@@ -855,46 +852,45 @@ one-time-per-machine step, and that it produces a bundle sitometres still
 cannot consume directly — which is step 2, and is not licence to hand-roll the
 module builds too.
 
-### Why step 2 exists (the inspector probe bug)
+### Why `SITOMETRES` is a git commit (the inspector probe bug, now fixed)
 
-sitometres 0.1.0 refuses the bundle with "no Basecamp with the QML inspector
-compiled in", even though the inspector is there. It decides by scanning for the
-inspector's log strings and probes exactly two paths: `bin/LogosBasecamp` (a
-5 KB shell wrapper) and `bin/.LogosBasecamp` (absent). The real ELF is
-`bin/.LogosBasecamp.elf`, which it never looks at.
+**Published sitometres (0.1.0) cannot run this bundle at all.** It refuses with
+"no Basecamp with the QML inspector compiled in" even though the inspector is
+there: `hasInspector()` in `src/app/discover.ts` probes exactly
+`bin/LogosBasecamp` (a ~5 KB sh wrapper) and `bin/.LogosBasecamp` (absent),
+never the `bin/.LogosBasecamp.elf` that nix's `dirBundler` actually ships.
 
-Do not simply point `--basecamp` at the `.elf`: that clears the check and then
-fails to spawn with `ENOENT`, because the wrapper is what sets up the bundled
-library and Qt plugin paths. So step 2 copies the bundle somewhere writable
-(the store is read-only) and adds the name the probe wants, keeping the wrapper
-as the binary. Drop all of it once sitometres also probes the `.elf` — this is
-the highest-value upstream fix anywhere in this stack.
+That single bug is why this job used to carry a copy-and-symlink step —
+`cp -RL` the bundle somewhere writable (the store is read-only), then create
+the filename the probe wanted. **That step is gone.** `ui-tests.yml` and step 2
+above now point `--basecamp` straight at scaffold's `basecamp_bin`.
 
-**Filed, with the fix, as
-[paradoxcomputer/sitometres#1](https://github.com/paradoxcomputer/sitometres/issues/1).**
-Confirmed in their source rather than inferred from the symptom:
-`hasInspector()` in `src/app/discover.ts` builds its candidate list as
-`[binPath, .<base>]`, which for `bin/LogosBasecamp` misses the real ELF at
-`bin/.LogosBasecamp.elf`. Its own doc comment describes the intent correctly
-("execs a sibling dot-file that holds the real ELF"), and the bundle's wrapper
-spells the convention out (`REAL="$SELF_DIR/.$BASE.elf"`) — the probe just does
-not account for the `.elf` suffix nix's `dirBundler` appends. One line:
-`[binPath, .<base>, .<base>.elf]`. Their existing test does not catch it
-because its fixture is named `.LogosBasecamp`, without the suffix. When the fix
-ships, delete the workaround step in `ui-tests.yml` and step 2 above.
+**Filed as
+[paradoxcomputer/sitometres#1](https://github.com/paradoxcomputer/sitometres/issues/1),
+fixed by [#3](https://github.com/paradoxcomputer/sitometres/pull/3)**, which is
+open — hence a git pin rather than a version. The fix probes three spellings
+(`.<base>`, `.<base>.elf`, `.<base>-wrapped`) and resolves symlinks before
+looking beside the binary; the last two were found by review after the original
+one-line fix, and `-wrapped` is what nixpkgs `makeWrapper` emits.
+
+`npx` on a git ref runs the package's `prepare` script, so the TypeScript is
+compiled at install time and no published artefact is needed.
+
+**Pin the commit, never the branch.** A moving ref would silently change the
+tool that gates every spec — the same hazard `LGS_REV` guards against, and one
+this repo watched happen for real when scaffold#266 was force-pushed
+mid-session. Revert to `@paradoxcomputer/sitometres@<version>` once #3 ships in
+one; nothing else changes, because the workaround step is already deleted.
+
+**Do not point `--basecamp` at the `.elf` directly** — that clears the probe
+and then fails to spawn with `ENOENT`, because the wrapper is what sets the
+bundled library and Qt plugin paths. The wrapper is the binary; the `.elf` is
+what the probe needs to *find beside* it.
 
 **Check the issue before re-filing.** This was filed twice in this repo's
 history — the second time by an agent that went looking for the bug in
 sitometres' source, found it, and opened a duplicate without checking the
 tracker first.
-
-**Moving step 1 to `lgs` did not remove this**, which was the open question
-when `setup --inspector` landed. Re-checked directly: pointing `--basecamp` at
-scaffold's own `basecamp_bin` still fails with the same "no Basecamp with the
-QML inspector compiled in". Scaffold changed where the bundle is fetched from,
-not what is in it — `app-result` is a nix out-link like `result-bundle` was,
-read-only, with the same `.LogosBasecamp.elf` naming. Nothing on the scaffold
-side can fix this; it is sitometres' probe.
 
 ### Why `--app-dir` points straight at the portable directory
 

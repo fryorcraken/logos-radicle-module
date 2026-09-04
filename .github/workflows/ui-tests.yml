@@ -115,6 +115,10 @@ jobs:
       # specs still pass; the job just quietly costs ~9 minutes instead of ~3,
       # and CI slowness gets blamed on the runners.
       SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
+      # Where `lgs basecamp build-portable` collects both modules. sitometres
+      # takes ONE --app-dir search root and browse.yaml declares
+      # `with: [radicle]`, so both .lgx must be findable from here.
+      APP_DIR: .scaffold/basecamp/portable
       # Keep in step with ci.yml's build job.
       #
       # TEMPORARY: a git rev, not a crates.io version. `setup --inspector` and
@@ -133,6 +137,31 @@ jobs:
       # being deleted, makes it unfetchable. The fix is to re-pin to #266's
       # current head, not to debug cargo.
       LGS_REV: 8f41e37e766037674b4ebf608d45bdf0ada15be0
+
+      # TEMPORARY, and the same shape as LGS_REV above: a git commit rather
+      # than an npm version.
+      #
+      # Published sitometres (0.1.0) refuses this bundle with "no Basecamp with
+      # the QML inspector compiled in" even though the inspector is there. Its
+      # `hasInspector()` probes `bin/LogosBasecamp` (a ~5 KB sh wrapper) and
+      # `bin/.LogosBasecamp` (absent), never `bin/.LogosBasecamp.elf`, which is
+      # what nix's dirBundler actually ships. That is the ONLY reason this job
+      # used to copy the bundle out of the store and symlink a second name
+      # beside the wrapper — a step now deleted, because this build probes the
+      # `.elf` sibling (and `-wrapped`, and resolves symlinks first).
+      #
+      # Filed as paradoxcomputer/sitometres#1, fixed by #3, which is open. A
+      # pinned COMMIT, not the branch: a moving ref would silently change the
+      # tool that gates every spec here — exactly the hazard scaffold#266's
+      # mid-session force-push demonstrated for LGS_REV.
+      #
+      # `npx` on a git ref runs the package's `prepare` script, so the
+      # TypeScript is compiled on install; no published artefact is needed.
+      #
+      # Revert to `@paradoxcomputer/sitometres@<version>` the moment #3 ships
+      # in one. If that release also carries the probe fix, nothing else here
+      # changes — the workaround step is already gone.
+      SITOMETRES: "github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9"
 
     steps:
       # Action majors are the Node-24 ones. GitHub retired the Node 20 runtime,
@@ -422,35 +451,22 @@ jobs:
           echo "ok: inspector present"
           echo "BASECAMP_BIN=$basecamp_bin" >> "$GITHUB_ENV"
 
-      # sitometres 0.1.0 decides whether a build has the inspector by scanning
-      # for the inspector's log strings, and it probes exactly two paths:
-      # bin/LogosBasecamp and bin/.LogosBasecamp (src/app/discover.ts,
-      # hasInspector). In this bundle the first is a 5 KB shell wrapper and the
-      # second does not exist — the real ELF is bin/.LogosBasecamp.elf — so the
-      # run is refused with "no Basecamp with the QML inspector compiled in"
-      # even though the string above proves it is there.
+      # NOTE: there used to be a "Work around the sitometres inspector probe"
+      # step here — `cp -RL` the bundle out of the store, `chmod -R u+w`, then
+      # symlink `.LogosBasecamp` beside the wrapper. It is gone.
       #
-      # Pointing --basecamp at the .elf directly gets past the check and then
-      # fails to spawn (ENOENT from the loader): the wrapper is what sets up the
-      # bundled library and Qt plugin paths. So keep the wrapper as the binary
-      # and add the name the probe looks for beside it.
+      # It existed because published sitometres (0.1.0) probed only
+      # `bin/LogosBasecamp` and `bin/.LogosBasecamp`, never the
+      # `bin/.LogosBasecamp.elf` that nix's dirBundler actually ships, and so
+      # refused a bundle that does have the inspector. The pinned SITOMETRES
+      # build probes the `.elf` sibling, so `--basecamp` can point straight at
+      # scaffold's own `basecamp_bin` inside the read-only out-link — no copy,
+      # no symlink, nothing to keep in step with lgs's bundle layout.
       #
-      # Copied out of the store because the store is read-only — and scaffold's
-      # `basecamp_bin` is inside a nix out-link, so moving to `lgs` does not
-      # change that.
-      #
-      # Filed upstream with the one-line fix:
-      # https://github.com/paradoxcomputer/sitometres/issues/1
-      # `hasInspector` builds its candidate list as [bin, .bin] and needs
-      # [bin, .bin, .bin.elf]. Delete this whole step when that ships.
-      - name: Work around the sitometres inspector probe
-        run: |
-          set -eu
-          rm -rf basecamp
-          cp -RL "$(dirname "$(dirname "$BASECAMP_BIN")")" basecamp
-          chmod -R u+w basecamp
-          ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
-          test -x basecamp/bin/LogosBasecamp
+      # Do NOT reintroduce it if a spec fails: check SITOMETRES first. Pointing
+      # `--basecamp` at the `.elf` instead of the wrapper is also still wrong —
+      # the wrapper is what sets the bundled library and Qt plugin paths, and
+      # the raw ELF fails to spawn with ENOENT.
 
       # `.#lgx-portable`, NOT `.#lgx` — and this is the opposite of what the
       # target's name suggests, so it is worth being explicit.
@@ -492,45 +508,19 @@ jobs:
       - name: Build both modules (portable)
         run: lgs basecamp build-portable --print-output
 
-      # sitometres reads .scaffold/basecamp/portable/ directly — verified by a
-      # real run. It follows the /nix/store symlinks and is not confused by the
-      # <NN>- load-order prefix, the two details most likely to have broken it.
-      # There is deliberately NO copy into dist/: that only ever existed to
-      # collect two separate sub-flake result-* symlinks into one directory,
-      # and build-portable already does the collecting.
-      - name: The built packages carry the variant the bundle accepts
-        # Getting this wrong does not fail loudly: Basecamp logs one warning,
-        # declines to load the module, and the spec then times out on its first
-        # step for no visible reason. So assert it here, where the message says
-        # what happened.
-        run: |
-          set -eu
-          # nullglob first. Without it a directory with no .lgx leaves the
-          # literal pattern as "$f", the loop runs once, `tar tzf` fails on a
-          # path that does not exist, and `grep -q` — reading empty input,
-          # with no pipefail to notice — returns 1. The step does fail, but it
-          # blames a missing linux-amd64 variant for what is really
-          # "build-portable produced nothing", sending the reader after a
-          # variant bug that is not there.
-          shopt -s nullglob
-          files=(.scaffold/basecamp/portable/*.lgx)
-          [ ${#files[@]} -gt 0 ] || {
-            echo "::error::build-portable produced no .lgx in .scaffold/basecamp/portable/"
-            exit 1
-          }
-          # Two modules, radicle and radicle_ui. A count that drops to one is
-          # the shape browse.yaml's `with: [radicle]` would fail on later, in a
-          # spec timeout that says nothing about the cause.
-          [ ${#files[@]} -eq 2 ] || {
-            echo "::error::expected 2 .lgx (radicle, radicle_ui), found ${#files[@]}: ${files[*]}"
-            exit 1
-          }
-          for f in "${files[@]}"; do
-            echo "$f: $(tar tzf "$f" | grep -oE 'variants/[^/]+' | sort -u | tr '\n' ' ')"
-            tar tzf "$f" | grep -q '^variants/linux-amd64/' \
-              || { echo "::error::$f has no linux-amd64 variant — did build-portable fall back to .#lgx?"; exit 1; }
-          done
-
+      # sitometres reads $APP_DIR directly — verified by a real run. It follows
+      # the /nix/store symlinks and is not confused by the <NN>- load-order
+      # prefix, the two details most likely to have broken it. There is
+      # deliberately NO copy into dist/: that only ever existed to collect two
+      # separate sub-flake result-* symlinks into one directory, and
+      # build-portable already does the collecting.
+      #
+      # There was a "The built packages carry the variant the bundle accepts"
+      # step here, asserting each .lgx contained variants/linux-amd64. Removed
+      # deliberately: it was a diagnostic, not a gate — it could not fail a
+      # correct build, and `build-portable`'s whole job is that variant. The
+      # failure it guarded is written up above `Build both modules (portable)`,
+      # which is where a reader hitting it will look.
       - name: Run the spec
         # Bounded well inside the job's 120, so a spec that hangs fails HERE —
         # leaving the later steps to collect logs and upload evidence. If the
@@ -548,10 +538,10 @@ jobs:
           # --strict: an INCONCLUSIVE run is one that proved nothing, and a
           # green tick on no evidence is worse than a red one. Without it
           # sitometres exits 0 on INCONCLUSIVE by design.
-          npx --yes @paradoxcomputer/sitometres@0.1.0 run "$SPEC" \
+          npx --yes "$SITOMETRES" run "$SPEC" \
             --app radicle_ui \
-            --app-dir .scaffold/basecamp/portable \
-            --basecamp basecamp/bin/LogosBasecamp \
+            --app-dir "$APP_DIR" \
+            --basecamp "$BASECAMP_BIN" \
             --variant linux-amd64 \
             --strict \
             --json  "ui-results/${{ matrix.spec }}.json" \
