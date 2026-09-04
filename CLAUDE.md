@@ -209,8 +209,15 @@ persists them, so a later plain `setup` cannot silently drop the opt-in;
 
 The rev needs no flag: scaffold reads `[repos.basecamp].pin` from
 `scaffold.toml`, and that pin is already the `aa237766…` the e2e layer wants.
-`ui-tests.yml` asserts the pin equals its own `BASECAMP_REV` rather than
-trusting that, because the rev is also the Nix store cache key.
+**That pin is the single source of truth for the rev** — `ui-tests.yml` derives
+its `BASECAMP_REV` from it (a `tomllib` one-liner in the "Resolve the pinned
+Basecamp rev" step, which must stay before the cache step) rather than carrying
+its own literal. It used to carry one, which was safe only while the workflow
+also did the build; once `setup` took that over, a hardcoded copy became a
+second source of truth for one fact, and the divergence would have been
+invisible — the store cache would key on the stale rev, restore a store that
+cannot help, and recompile Basecamp on every run forever without anything
+failing.
 
 **Where the binary lands.** Not a `./result` symlink — `setup` writes it to
 `~/.cache/logos-scaffold/basecamp/<pin>/app-result/` and records the path in
@@ -1025,11 +1032,16 @@ Four things that are CI-specific and not obvious from the local workflow:
   When they ship, both workflows go back to `LGS_VERSION` and a plain
   `cargo install logos-scaffold --version …`; the flag names do not change, so
   nothing else in either file does.
-- **`ui-tests.yml` asserts scaffold.toml's pin equals `BASECAMP_REV`.** With
-  `setup` doing the build, the rev that gets built comes from
-  `[repos.basecamp].pin` — but the Nix store cache is still keyed on the
-  workflow's own `BASECAMP_REV`. Bump one without the other and every run goes
-  cold with nothing saying why, so the mismatch is made a named error instead.
+- **`BASECAMP_REV` is derived from `scaffold.toml`, not written in the
+  workflow.** With `setup` doing the build, the rev comes from
+  `[repos.basecamp].pin`; the Nix store cache is keyed on the same value, read
+  out by the "Resolve the pinned Basecamp rev" step. Keep that step **before**
+  the cache step — that ordering is the whole reason it is a separate step
+  rather than part of the setup one. A literal in the job's `env:` would be a
+  second source of truth whose divergence nothing reports: the cache would key
+  on the stale rev and every run would recompile Basecamp, with green specs
+  and no error. The step after `setup` still cross-checks what was actually
+  built against that value.
 - **The staging step spells out the four release filenames.** `lgs` names its
   symlinks `<NN>-<module>.lgx` for load order; the release contract is the
   published names, and the module catalog references them. The mapping is

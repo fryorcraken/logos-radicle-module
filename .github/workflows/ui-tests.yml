@@ -25,7 +25,7 @@ name: UI tests
 # Two caveats before anyone moves this to `pull_request`. Cache scoping: a PR
 # branch can read main's cache, but a PR from a FORK gets its own isolated
 # scope and would always run cold, i.e. ~9m. And the first run after any
-# BASECAMP_REV bump is cold by construction, since the rev is in the key.
+# Basecamp pin bump is cold by construction, since the rev is in the key.
 #
 # ─── why Basecamp is BUILT and not fetched ──────────────────────────────────
 # sitometres attaches to Basecamp's QML inspector. That is a compile-time
@@ -53,8 +53,10 @@ name: UI tests
 #     does not hold the artefact. It is still configured, because the
 #     dependencies AROUND Basecamp do come from it — 676 paths were substituted
 #     on the run above, for a resulting store of 5.15 GB.
-#   * the rev is pinned. An unpinned build would recompile on every upstream
-#     commit and would also miss the store cache every time.
+#   * the rev is pinned, in `[repos.basecamp].pin` in scaffold.toml — the one
+#     place it is written. `lgs basecamp setup` builds that pin, and the store
+#     cache key is derived from it. An unpinned build would recompile on every
+#     upstream commit and would also miss the store cache every time.
 # If a future Basecamp release publishes the inspector bundle, drop the store
 # cache and let the substituter do the work — re-check with the curl above.
 
@@ -68,7 +70,8 @@ on:
   # about rather than being surprised by:
   #   - a PR from a fork gets its own isolated cache scope, so it never hits
   #     this repo's cache;
-  #   - the first run after BASECAMP_REV changes, since the rev is in the key.
+  #   - the first run after `[repos.basecamp].pin` changes in scaffold.toml,
+  #     since the rev it names is in the cache key.
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -98,9 +101,19 @@ jobs:
         spec: [browse, branches, source, sync]
 
     env:
-      # Pinned: Basecamp 0.2.3. Bump deliberately — an unpinned rev recompiles
-      # on every upstream commit and invalidates the store cache with it.
-      BASECAMP_REV: aa237766baf61404e12da86b7303cb41065464c9
+      # NOTE: BASECAMP_REV is NOT set here. It is derived from
+      # `[repos.basecamp].pin` in scaffold.toml by the "Resolve the pinned
+      # Basecamp rev" step below, which exports it for every later step.
+      #
+      # It used to be hardcoded here, and that was safe only while this
+      # workflow also did the build. Now `lgs basecamp setup` does, and it
+      # reads the pin from scaffold.toml — so a literal here would be a second
+      # source of truth for one fact. Bump scaffold.toml and forget this, and
+      # the store cache silently keys on the old rev: it restores a store full
+      # of the previous Basecamp, the build finds nothing useful in it and
+      # recompiles from scratch on every run, forever. Nothing errors; the
+      # specs still pass; the job just quietly costs ~9 minutes instead of ~3,
+      # and CI slowness gets blamed on the runners.
       SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
       # Keep in step with ci.yml's build job.
       #
@@ -128,6 +141,33 @@ jobs:
         with:
           node-version: "24"
 
+      # ONE source of truth for the Basecamp rev: `[repos.basecamp].pin`.
+      #
+      # `lgs basecamp setup` takes no --rev — it reads that pin — so anything
+      # else naming the rev has to derive it rather than repeat it. The store
+      # cache below is keyed on it, which is what makes this load-bearing:
+      # a cache keyed on a rev the build does not use restores a store that
+      # cannot help, and the only symptom is that every run is slow.
+      #
+      # Must run before the cache step, which is why it is this early. Python
+      # with tomllib (3.11+, and the runner ships 3.12) rather than a regex:
+      # the pin is a TOML value and should be read as one.
+      - name: Resolve the pinned Basecamp rev
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, tomllib
+          with open("scaffold.toml", "rb") as fh:
+              pin = tomllib.load(fh)["repos"]["basecamp"]["pin"]
+          # A short or empty pin would still produce a usable cache key while
+          # silently not being the rev anyone meant.
+          assert len(pin) == 40 and all(c in "0123456789abcdef" for c in pin), \
+              f"[repos.basecamp].pin is {pin!r}, expected a full 40-char sha"
+          with open(os.environ["GITHUB_ENV"], "a") as fh:
+              fh.write(f"BASECAMP_REV={pin}\n")
+          print(f"BASECAMP_REV={pin} (from scaffold.toml)")
+          PY
+
       # Not a GitHub-authored action, so the Node-20 retirement does not reach
       # it — install-nix-action is a composite/Docker action. Left on its pin.
       - uses: cachix/install-nix-action@v27
@@ -151,8 +191,13 @@ jobs:
       # The store cache is what makes a repeat run fast. Most of the cold cost
       # is not the Basecamp compile (~1.5 min) but pulling ~5 GB of closure from
       # the substituters (~4.5 min); the cache removes the download, not the
-      # compile. Keyed on the pinned rev so bumping BASECAMP_REV starts a fresh
-      # cache rather than restoring a store that cannot help.
+      # compile. Keyed on the pinned rev — resolved from scaffold.toml by the
+      # step above, which is also the rev `setup` builds — so bumping the pin
+      # starts a fresh cache rather than restoring a store that cannot help.
+      #
+      # `env.BASECAMP_REV` here resolves against the accumulated step
+      # environment, so it does see the $GITHUB_ENV write from that step. It is
+      # NOT the job's `env:` map, which no longer sets this at all.
       #
       # v7, not v5. On v5 this step never cached anything — run 33712429609
       # failed both halves, for two independent reasons:
@@ -266,10 +311,9 @@ jobs:
       # UI: exactly the silent failure `--variant linux-amd64` guards against
       # further down.
       #
-      # The rev comes from `[repos.basecamp].pin` in scaffold.toml, which is
-      # byte-identical to BASECAMP_REV — that env var is still what keys the
-      # store cache below, so the two must be kept in step. They are asserted
-      # equal in the step after this one rather than left to trust.
+      # The rev needs no flag: scaffold reads `[repos.basecamp].pin`, the same
+      # value the resolve step above turned into BASECAMP_REV. One source of
+      # truth, so there is nothing here to keep in step by hand.
       #
       # setup also builds lgpm and seeds the alice/bob profiles, neither of
       # which this job uses. That is a few seconds against a build measured in
@@ -283,9 +327,11 @@ jobs:
       # there rather than reconstructing the path.
       #
       # Two things are asserted here that setup itself cannot tell us:
-      #   * the pin scaffold.toml carries is the rev this job's store cache is
-      #     keyed on. If someone bumps one and not the other, the cache silently
-      #     stops matching the build and every run goes cold.
+      #   * it built the rev this job's store cache is keyed on. Both now come
+      #     from scaffold.toml, so this can no longer catch a hand-editing slip
+      #     — what it still catches is scaffold resolving the pin to something
+      #     else, which is exactly the assumption worth pinning down while
+      #     `setup --inspector` is an unreleased flag.
       #   * the inspector really is compiled in. A Basecamp built without it
       #     fails HERE, where the message says so, rather than as a timeout
       #     waiting for a port that never opens.
@@ -295,8 +341,8 @@ jobs:
           . .scaffold/state/basecamp.state
           echo "basecamp_bin=$basecamp_bin"
           [ "$pin" = "$BASECAMP_REV" ] || {
-            echo "::error::scaffold.toml pins $pin but BASECAMP_REV is $BASECAMP_REV —"
-            echo "::error::the Nix store cache key would not match the build"
+            echo "::error::setup built $pin but scaffold.toml resolved to $BASECAMP_REV —"
+            echo "::error::the Nix store cache key does not match what was built"
             exit 1
           }
           test -x "$basecamp_bin"
