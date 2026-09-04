@@ -165,6 +165,36 @@ coverage here, verify it fails when it should: breaking `local.rs` on
 purpose and watching the assertion go red takes a minute and is the only
 thing that distinguishes a real test from a skip.
 
+### `cargo clippy -- -D warnings` is load-bearing here, not style policing
+
+CI runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`
+on this crate. That is not tidiness: a dead-code warning in an FFI crate is
+usually a *safety* feature that was written and never wired in, and `-D
+warnings` is what turns "nobody noticed" into a red build. Two such cases
+were caught by exactly that, both pre-existing:
+
+- **`guarded()` was never called.** Its own doc comment says it is a
+  soundness guard, not error handling — a Rust panic unwinding through an
+  `extern "C"` frame is undefined behaviour. Every `radicle_local_*`
+  function called `to_c_string(...)` directly, so nothing was guarded. The
+  fix was to route all twelve read entry points through it, and
+  `tests/panic_guard.rs` now drives the real boundary with pathological
+  inputs (junk RIDs, traversal-shaped paths, `i64::MAX`/`i64::MIN` paging)
+  and asserts parseable JSON comes back every time. If a future change
+  drops `guarded` from a call site, the panic it was catching aborts the
+  whole test binary — loud, which is the point.
+- **`init_private_repo` was never called**, and its absence had hollowed
+  out a test: `list_repos_narrows_by_scope` asserted `count("private") == 0`
+  against a fixture containing only public repos, which passes just as
+  happily against a filter that returns nothing for any input. It now
+  creates one private repo and asserts `count("private") == 1`. Same lesson
+  as the branch-switch fake: **a fixture that answers the same for every
+  input cannot tell working from broken.**
+
+So when clippy flags dead code in `rust-ffi`, read what the dead thing was
+*for* before deleting it or reaching for `#[allow]`. Twice now the answer
+has been "it should have been called".
+
 ### `local.yaml` needs RAD_HOME — run it with `run-local-e2e.sh`
 
 sitometres gives every run a **throwaway `$HOME`** so a test cannot touch your

@@ -295,6 +295,12 @@ fn list_repos_narrows_by_scope() {
     let fixture = init_profile("scope");
     init_repo(&fixture, "mine-one", "first");
     init_repo(&fixture, "mine-two", "second");
+    // A private repo is what justifies local browsing existing at all — a seed
+    // never shows one. Without a positive example here, `count("private") == 0`
+    // passed just as happily against a filter that returned nothing for every
+    // input, which is the "a fake that answers the same for every input cannot
+    // tell working from broken" trap this repo has been bitten by before.
+    init_private_repo(&fixture, "secret", "not for the seed");
     let home = fixture.home();
 
     let count = |scope: &str| {
@@ -306,9 +312,9 @@ fn list_repos_narrows_by_scope() {
         v["items"].as_array().expect("items").len()
     };
 
-    assert_eq!(count("all"), 2, "'all' lists everything");
-    assert_eq!(count(""), 2, "an empty scope means all");
-    assert_eq!(count("delegate"), 2, "this node delegates both repos");
+    assert_eq!(count("all"), 3, "'all' lists everything");
+    assert_eq!(count(""), 3, "an empty scope means all");
+    assert_eq!(count("delegate"), 3, "this node delegates all three repos");
     assert_eq!(
         count("seeded"),
         0,
@@ -316,12 +322,12 @@ fn list_repos_narrows_by_scope() {
     );
     assert_eq!(
         count("private"),
-        0,
-        "the fixture creates public repos, so 'private' is empty"
+        1,
+        "'private' finds the one private repo and not the two public ones"
     );
     // An unrecognized scope shows everything rather than nothing: an empty
     // list would be indistinguishable from a node with no repositories.
-    assert_eq!(count("no-such-scope"), 2);
+    assert_eq!(count("no-such-scope"), 3);
 }
 
 /// `visibility` and `delegates` are read by `RepoList.qml` (the private badge)

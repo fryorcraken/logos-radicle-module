@@ -71,7 +71,7 @@ pub unsafe extern "C" fn radicle_local_get_repo(
 ) -> *mut c_char {
     let home = read_str(home);
     let rid = read_str(rid);
-    to_c_string(local::get_repo(&home, &rid))
+    guarded(move || local::get_repo(&home, &rid))
 }
 
 /// Repos in local storage, paginated the same way `remoteListRepos` is.
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn radicle_local_list_repos(
 ) -> *mut c_char {
     let home = read_str(home);
     let scope = read_str(scope);
-    to_c_string(local::list_repos(&home, &scope, page, per_page))
+    guarded(move || local::list_repos(&home, &scope, page, per_page))
 }
 
 /// Directory listing at `path` ("" = root) for `sha`.
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn radicle_local_get_tree(
     path: *const c_char,
 ) -> *mut c_char {
     let (home, rid, sha, path) = (read_str(home), read_str(rid), read_str(sha), read_str(path));
-    to_c_string(gitread::get_tree(&home, &rid, &sha, &path))
+    guarded(move || gitread::get_tree(&home, &rid, &sha, &path))
 }
 
 /// File contents at `path` for `sha`.
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn radicle_local_get_blob(
     path: *const c_char,
 ) -> *mut c_char {
     let (home, rid, sha, path) = (read_str(home), read_str(rid), read_str(sha), read_str(path));
-    to_c_string(gitread::get_blob(&home, &rid, &sha, &path))
+    guarded(move || gitread::get_blob(&home, &rid, &sha, &path))
 }
 
 /// The repository's README at `sha`, or an error when it has none.
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn radicle_local_get_readme(
     sha: *const c_char,
 ) -> *mut c_char {
     let (home, rid, sha) = (read_str(home), read_str(rid), read_str(sha));
-    to_c_string(gitread::get_readme(&home, &rid, &sha))
+    guarded(move || gitread::get_readme(&home, &rid, &sha))
 }
 
 /// Commit log from `sha` backwards.
@@ -150,7 +150,7 @@ pub unsafe extern "C" fn radicle_local_list_commits(
     per_page: i64,
 ) -> *mut c_char {
     let (home, rid, sha) = (read_str(home), read_str(rid), read_str(sha));
-    to_c_string(gitread::list_commits(&home, &rid, &sha, page, per_page))
+    guarded(move || gitread::list_commits(&home, &rid, &sha, page, per_page))
 }
 
 /// One commit with its diff.
@@ -165,7 +165,7 @@ pub unsafe extern "C" fn radicle_local_get_commit(
     sha: *const c_char,
 ) -> *mut c_char {
     let (home, rid, sha) = (read_str(home), read_str(rid), read_str(sha));
-    to_c_string(gitread::get_commit(&home, &rid, &sha))
+    guarded(move || gitread::get_commit(&home, &rid, &sha))
 }
 
 /// Issues, filtered by `status` ("open"|"closed"|"" for all).
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn radicle_local_list_issues(
     per_page: i64,
 ) -> *mut c_char {
     let (home, rid, status) = (read_str(home), read_str(rid), read_str(status));
-    to_c_string(cobs::list_issues(&home, &rid, &status, page, per_page))
+    guarded(move || cobs::list_issues(&home, &rid, &status, page, per_page))
 }
 
 /// One issue including its discussion thread.
@@ -197,7 +197,7 @@ pub unsafe extern "C" fn radicle_local_get_issue(
     id: *const c_char,
 ) -> *mut c_char {
     let (home, rid, id) = (read_str(home), read_str(rid), read_str(id));
-    to_c_string(cobs::get_issue(&home, &rid, &id))
+    guarded(move || cobs::get_issue(&home, &rid, &id))
 }
 
 /// Patches, filtered by `status` ("open"|"merged"|"archived"|"draft"|"").
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn radicle_local_list_patches(
     per_page: i64,
 ) -> *mut c_char {
     let (home, rid, status) = (read_str(home), read_str(rid), read_str(status));
-    to_c_string(cobs::list_patches(&home, &rid, &status, page, per_page))
+    guarded(move || cobs::list_patches(&home, &rid, &status, page, per_page))
 }
 
 /// One patch including its revisions.
@@ -229,7 +229,7 @@ pub unsafe extern "C" fn radicle_local_get_patch(
     id: *const c_char,
 ) -> *mut c_char {
     let (home, rid, id) = (read_str(home), read_str(rid), read_str(id));
-    to_c_string(cobs::get_patch(&home, &rid, &id))
+    guarded(move || cobs::get_patch(&home, &rid, &id))
 }
 
 /// Frees a string previously returned by one of the `radicle_local_*`
