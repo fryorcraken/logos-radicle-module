@@ -207,7 +207,11 @@ fn get_blob_inner(home: &str, rid: &str, sha: &str, path: &str) -> Result<Value,
 }
 
 /// Shared by `get_blob` and `get_readme`, which return the same shape.
-fn blob_json(backend: &git2::Repository, tree: &git2::Tree<'_>, path: &str) -> Result<Value, String> {
+fn blob_json(
+    backend: &git2::Repository,
+    tree: &git2::Tree<'_>,
+    path: &str,
+) -> Result<Value, String> {
     let entry = tree
         .get_path(std::path::Path::new(path))
         .map_err(|_| format!("file '{path}' not found in this commit"))?;

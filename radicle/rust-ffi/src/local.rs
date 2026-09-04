@@ -55,8 +55,12 @@ pub(crate) fn open_storage(home: &str) -> Result<Storage, String> {
     // Repos live under `<home>/storage`, matching `LocalStore`'s own
     // `home() + "/storage"` marker check on the C++ side.
     let storage_dir = std::path::Path::new(home).join("storage");
-    Storage::open(&storage_dir, info)
-        .map_err(|e| format!("failed to open Radicle storage at {}: {e}", storage_dir.display()))
+    Storage::open(&storage_dir, info).map_err(|e| {
+        format!(
+            "failed to open Radicle storage at {}: {e}",
+            storage_dir.display()
+        )
+    })
 }
 
 pub(crate) fn parse_rid(rid: &str) -> Result<RepoId, String> {
@@ -93,9 +97,8 @@ fn get_repo_inner(home: &str, rid: &str) -> Result<Value, String> {
         .payload()
         .get(&radicle::identity::doc::PayloadId::project().clone())
         .ok_or_else(|| format!("{rid} has no project payload"))?;
-    let project: radicle::identity::Project =
-        serde_json::from_value(project.clone().into_inner())
-            .map_err(|e| format!("malformed project payload for {rid}: {e}"))?;
+    let project: radicle::identity::Project = serde_json::from_value(project.clone().into_inner())
+        .map_err(|e| format!("malformed project payload for {rid}: {e}"))?;
 
     let (_, head) = repo
         .head()
@@ -104,14 +107,16 @@ fn get_repo_inner(home: &str, rid: &str) -> Result<Value, String> {
     // Counts default to zero rather than failing the whole repo view: a repo
     // with no issues/patches store yet (never opened locally before) is not
     // an error, just empty.
-    let issue_counts = radicle::cob::issue::Issues::open(&repo, radicle::cob::store::access::ReadOnly)
-        .ok()
-        .and_then(|issues| issues.counts().ok())
-        .unwrap_or_default();
-    let patch_counts = radicle::cob::patch::Patches::open(&repo, radicle::cob::store::access::ReadOnly)
-        .ok()
-        .and_then(|patches| patches.counts().ok())
-        .unwrap_or_default();
+    let issue_counts =
+        radicle::cob::issue::Issues::open(&repo, radicle::cob::store::access::ReadOnly)
+            .ok()
+            .and_then(|issues| issues.counts().ok())
+            .unwrap_or_default();
+    let patch_counts =
+        radicle::cob::patch::Patches::open(&repo, radicle::cob::store::access::ReadOnly)
+            .ok()
+            .and_then(|patches| patches.counts().ok())
+            .unwrap_or_default();
 
     // Only `refs/heads/*` and `refs/tags/*` — matching the seed's shape,
     // which reports this repo's own canonical branches/tags, not the
@@ -240,7 +245,10 @@ fn list_repos_inner(home: &str, scope: &str, page: i64, per_page: i64) -> Result
         .map(|v| v as usize)
         .unwrap_or(infos.len());
     let has_more = infos.len() > end;
-    let page_infos = infos.into_iter().skip(start).take(end.saturating_sub(start));
+    let page_infos = infos
+        .into_iter()
+        .skip(start)
+        .take(end.saturating_sub(start));
 
     let items: Result<Vec<Value>, String> = page_infos
         .map(|info| get_repo_inner(home, &info.rid.urn()))

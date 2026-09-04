@@ -15,7 +15,12 @@ fn get_tree_lists_the_root_with_kinds_the_view_branches_on() {
     let f = init_profile("tree-root");
     let (rid, _) = init_repo(&f, "tree-repo", "trees");
 
-    let v = parse(&radicle_local_ffi::gitread::get_tree(&f.home(), &rid, "", ""));
+    let v = parse(&radicle_local_ffi::gitread::get_tree(
+        &f.home(),
+        &rid,
+        "",
+        "",
+    ));
     assert!(v.get("error").is_none(), "unexpected error: {v}");
 
     let entries = v["entries"].as_array().expect("entries should be an array");
@@ -72,10 +77,7 @@ fn asking_for_a_file_as_a_tree_is_an_error_not_an_empty_listing() {
     ));
     // An empty `entries` would render as an empty directory, which is a
     // different and wrong answer.
-    assert!(
-        v["error"].as_str().is_some(),
-        "expected an error, got: {v}"
-    );
+    assert!(v["error"].as_str().is_some(), "expected an error, got: {v}");
 }
 
 #[test]
@@ -230,7 +232,10 @@ fn list_commits_paginates_newest_first() {
     let first_ids: Vec<&str> = items.iter().filter_map(|i| i["id"].as_str()).collect();
     let second_ids: Vec<&str> = items1.iter().filter_map(|i| i["id"].as_str()).collect();
     for id in &second_ids {
-        assert!(!first_ids.contains(id), "commit {id} appeared on both pages");
+        assert!(
+            !first_ids.contains(id),
+            "commit {id} appeared on both pages"
+        );
     }
 }
 
@@ -242,7 +247,11 @@ fn get_commit_renders_a_diff_in_the_shape_commitview_reads() {
     let repo = radicle::git::raw::Repository::open(&work).expect("open working copy");
     // One modification (a line replaced) and one brand-new file, so both the
     // "added" and "modified" file statuses and both line types appear.
-    std::fs::write(work.join("src/main.rs"), "fn main() { println!(\"hi\"); }\n").expect("write");
+    std::fs::write(
+        work.join("src/main.rs"),
+        "fn main() { println!(\"hi\"); }\n",
+    )
+    .expect("write");
     std::fs::write(work.join("added.txt"), "brand new\n").expect("write");
     let sha = fixture::commit_all(&repo, "change main and add a file");
     fixture::publish(&f, &work, &rid);

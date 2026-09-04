@@ -71,7 +71,10 @@ fn list_issues_returns_the_fields_the_view_reads() {
     // GetIssue, so it must round-trip exactly.
     let ids: Vec<&str> = items.iter().filter_map(|i| i["id"].as_str()).collect();
     for id in &created {
-        assert!(ids.contains(&id.as_str()), "issue {id} missing from {ids:?}");
+        assert!(
+            ids.contains(&id.as_str()),
+            "issue {id} missing from {ids:?}"
+        );
     }
 
     // `state` is a nested object, not a bare string: StatusBadge.qml reads
@@ -211,7 +214,11 @@ fn get_issue_returns_the_discussion_thread() {
             .expect("could not comment");
     }
 
-    let v = parse(&radicle_local_ffi::cobs::get_issue(&f.home(), &rid, &ids[0]));
+    let v = parse(&radicle_local_ffi::cobs::get_issue(
+        &f.home(),
+        &rid,
+        &ids[0],
+    ));
     assert!(v.get("error").is_none(), "unexpected error: {v}");
 
     assert_eq!(v["title"], "issue 1");
@@ -221,7 +228,10 @@ fn get_issue_returns_the_discussion_thread() {
     let discussion = v["discussion"]
         .as_array()
         .expect("discussion should be an array");
-    let bodies: Vec<&str> = discussion.iter().filter_map(|c| c["body"].as_str()).collect();
+    let bodies: Vec<&str> = discussion
+        .iter()
+        .filter_map(|c| c["body"].as_str())
+        .collect();
     assert!(
         bodies.contains(&"the body of issue 1"),
         "the root comment is part of the thread: {bodies:?}"

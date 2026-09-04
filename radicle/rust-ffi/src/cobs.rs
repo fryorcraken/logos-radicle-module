@@ -93,7 +93,7 @@ fn state_value<S: serde::Serialize>(state: &S) -> Value {
 fn paginate(mut items: Vec<(u64, Value)>, page: i64, per_page: i64) -> Value {
     // Newest first, matching the seed's ordering — the views show no sort
     // control, so this ordering *is* the contract.
-    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.sort_by_key(|(timestamp, _)| std::cmp::Reverse(*timestamp));
 
     let start = (page.max(0) as usize).saturating_mul(per_page.max(0) as usize);
     let want = per_page.max(0) as usize;

@@ -77,12 +77,7 @@ pub unsafe extern "C" fn radicle_local_get_tree(
     sha: *const c_char,
     path: *const c_char,
 ) -> *mut c_char {
-    let (home, rid, sha, path) = (
-        read_str(home),
-        read_str(rid),
-        read_str(sha),
-        read_str(path),
-    );
+    let (home, rid, sha, path) = (read_str(home), read_str(rid), read_str(sha), read_str(path));
     to_c_string(gitread::get_tree(&home, &rid, &sha, &path))
 }
 
@@ -97,12 +92,7 @@ pub unsafe extern "C" fn radicle_local_get_blob(
     sha: *const c_char,
     path: *const c_char,
 ) -> *mut c_char {
-    let (home, rid, sha, path) = (
-        read_str(home),
-        read_str(rid),
-        read_str(sha),
-        read_str(path),
-    );
+    let (home, rid, sha, path) = (read_str(home), read_str(rid), read_str(sha), read_str(path));
     to_c_string(gitread::get_blob(&home, &rid, &sha, &path))
 }
 

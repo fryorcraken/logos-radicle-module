@@ -169,7 +169,10 @@ fn list_repos_paginates_and_reports_has_more() {
     let all = parse(&radicle_local_ffi::local::list_repos(&home, "all", 0, 10));
     assert!(all.get("error").is_none(), "unexpected error: {all}");
     assert_eq!(
-        all["items"].as_array().expect("items should be an array").len(),
+        all["items"]
+            .as_array()
+            .expect("items should be an array")
+            .len(),
         2,
         "both repos should be listed: {all}"
     );
@@ -208,7 +211,10 @@ fn a_page_past_the_end_is_empty_not_an_error() {
         99,
         10,
     ));
-    assert!(v.get("error").is_none(), "running off the end is not an error: {v}");
+    assert!(
+        v.get("error").is_none(),
+        "running off the end is not an error: {v}"
+    );
     assert_eq!(v["items"].as_array().unwrap().len(), 0);
     assert_eq!(v["hasMore"], false);
 }
@@ -237,7 +243,10 @@ fn an_unknown_rid_reports_an_error_naming_the_repo() {
     // than the parse path.
     let missing = "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5";
 
-    let v = parse(&radicle_local_ffi::local::get_repo(&fixture.home(), missing));
+    let v = parse(&radicle_local_ffi::local::get_repo(
+        &fixture.home(),
+        missing,
+    ));
     let err = v["error"].as_str().expect("expected an error field");
     assert!(
         err.contains(missing),
@@ -274,7 +283,10 @@ fn list_repos_narrows_by_scope() {
 
     let count = |scope: &str| {
         let v = parse(&radicle_local_ffi::local::list_repos(&home, scope, 0, 10));
-        assert!(v.get("error").is_none(), "unexpected error for {scope}: {v}");
+        assert!(
+            v.get("error").is_none(),
+            "unexpected error for {scope}: {v}"
+        );
         v["items"].as_array().expect("items").len()
     };
 
