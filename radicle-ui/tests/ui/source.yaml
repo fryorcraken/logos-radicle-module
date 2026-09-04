@@ -1,0 +1,187 @@
+# End-to-end UI test: the file tree, the blob viewer, the README, and patches.
+#
+#   npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/source.yaml
+#
+# See browse.yaml's header for how to run these at all.
+#
+# These are shipped M1 features that the end-to-end layer had never touched.
+# They are grouped in one file because they share an expensive prefix — open
+# the app, wait for a seed, open a repository — and each is a handful of steps
+# once that is paid for.
+#
+# The viewer assertions are about which file the pane BELIEVES it is showing,
+# not about its text. That is deliberate: the app has twice had a bug where
+# the pane's title and its contents disagreed — a README landing after a click
+# relabelled the pane and left the clicked file's text under "README.md" — so
+# "title and selection agree" is the property worth pinning, and the body is
+# checked only for having arrived at all.
+
+app: radicle_ui
+with: [radicle]
+timeout: 30s
+
+steps:
+  - name: the app opens
+    open: radicle_ui
+
+  - name: it becomes ready
+    wait_for:
+      state: "root.ready === true"
+    timeout: 45s
+
+  - name: repositories arrive from the seed node
+    wait_for:
+      state: "root.repoCount > 0"
+    timeout: 60s
+
+  - name: open the first repository
+    click: { objectName: "repoRow", nth: 0 }
+
+  - name: its source tree loads at the repository root
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+        - "root.treePath === ''"
+    timeout: 60s
+
+  # ---- README -------------------------------------------------------------
+  #
+  # Opening a repository fetches the tree AND the README, in parallel. The
+  # README fills the viewer pane with nothing selected — that is what the pane
+  # shows before the user clicks anything.
+  #
+  # Not every repository has a README, and one that does not is not a failure:
+  # loadReadme()'s error path deliberately clears the pane rather than
+  # reporting an error. So this asserts the honest invariant — nothing is
+  # selected, and the pane is not claiming to show a file that was never
+  # clicked — rather than requiring content that may not exist.
+  - name: the README pane fills itself with nothing selected
+    wait_for:
+      state: "root.selectedFile === ''"
+    timeout: 60s
+    expect:
+      calls_succeed: true
+
+  - name: no error surfaced while loading the repository
+    expect:
+      state: "root.navError === ''"
+
+  # ---- clicking a tree row ------------------------------------------------
+  #
+  # Which repository the seed lists first is not fixed, so this spec cannot
+  # know whether row 0 is a directory or a file. Rather than guess — and get a
+  # test that fails when the seed reorders — it clicks row 0 and asserts the
+  # invariant that must hold in EITHER case: openEntry() does exactly one of
+  # the two things, completely.
+  #
+  # That is a real assertion, not a hedge. It fails when the click does
+  # nothing at all (the click-dead delegate class of bug this codebase has
+  # already had twice), when a descent empties the listing, and when the
+  # viewer ends up titled with a file it has not selected — which is precisely
+  # the README race: a late README relabelled the pane and left the clicked
+  # file's text sitting under "README.md".
+  #
+  # The two cases are then pinned individually by the steps after it.
+  - name: click the first row in the tree
+    click: { objectName: "fileRow", nth: 0 }
+
+  - name: it either descended into a directory or opened a file, not neither
+    wait_for:
+      state:
+        - "(root.treePath !== '') !== (root.selectedFile !== '')"
+        - "root.treePath === '' || root.treeCount > 0"
+        - "root.selectedFile === '' || root.fileTitle === root.selectedFile"
+    timeout: 60s
+    expect:
+      calls_succeed: true
+
+  # If the click above descended into a directory, come back up so the next
+  # step is looking at the repository root again. The ".." row only exists
+  # while treePath is non-empty, which is exactly when this is needed.
+  #
+  # Skipping this and clicking the README from inside a subdirectory is what
+  # the first draft of this spec did, and it failed in an instructive way: the
+  # README's NAME is also what the viewer's title bar shows, so a bare
+  # `text: "README.md"` matched the title bar, resolved to a MouseArea that
+  # was not a file row, and clicked something that opened nothing.
+  - name: go back up to the repository root
+    click: { objectName: "fileUpRow" }
+
+  - name: the tree returns to the repository root
+    wait_for:
+      state:
+        - "root.treePath === ''"
+        - "root.treeCount > 0"
+    timeout: 60s
+
+  # ---- the blob viewer ----------------------------------------------------
+  #
+  # A file row addressed by NAME as well as objectName, so it is a file for
+  # certain AND is the tree row rather than the viewer's title bar, which
+  # carries the same text once a README has loaded.
+  #
+  # Using `text:` to SELECT is fine; CLAUDE.md's preference for `state:` is
+  # about what to ASSERT on, where a label can match an item that is loaded
+  # but hidden.
+  - name: click the README row in the file tree
+    click: { objectName: "fileRowName", text: "README.md", match: "contains" }
+
+  # openEntry() retitles the pane immediately, before the request goes out, so
+  # the header names the file being opened rather than the one still on
+  # screen. Title and selection agreeing is the invariant the README race
+  # broke.
+  - name: the viewer opens it, title and selection agreeing
+    wait_for:
+      state:
+        - "root.selectedFile !== ''"
+        - "root.fileTitle === root.selectedFile"
+    timeout: 60s
+
+  # Content arrived. A zero-length body would mean the pane is titled with a
+  # file whose text never landed — the "loading forever" symptom the
+  # hover-prefetch race used to produce when a click found no cache entry and
+  # nothing else painted the reply.
+  - name: the file's contents arrive
+    wait_for:
+      state: "root.fileBodyLength > 0"
+    timeout: 60s
+    expect:
+      calls_succeed: true
+
+  # ---- patches ------------------------------------------------------------
+  #
+  # Tab 3. Patches are repository-wide COBs with no branch concept, and the
+  # tab fetches on first view rather than at repo-open time.
+  - name: switch to the patches tab
+    click: { objectName: "sectionTab", nth: 3 }
+
+  - name: the patches tab becomes current
+    wait_for:
+      state: "root.repoTab === 3"
+    timeout: 60s
+    expect:
+      calls_succeed: true
+
+  - name: it opens on the open filter
+    expect:
+      state: "root.patchStatus === 'open'"
+
+  # The state filter. Chips are rendered from PatchesTab.states, which is
+  # [open, merged, archived, draft], so nth: 1 is "merged". Switching filter
+  # is cache-first: an already-viewed filter comes back at once and is
+  # revalidated behind the scenes, which is why this asserts on the status
+  # rather than on a count that may legitimately be zero.
+  - name: switch the filter to merged
+    click: { objectName: "filterChip", nth: 1 }
+
+  - name: the merged filter takes effect
+    wait_for:
+      state: "root.patchStatus === 'merged'"
+    timeout: 60s
+    expect:
+      calls_succeed: true
+
+  - name: no error surfaced while browsing patches
+    expect:
+      state: "root.navError === ''"

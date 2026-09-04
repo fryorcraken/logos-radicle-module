@@ -99,6 +99,7 @@ Item {
         seedPicker.loaded = false;
         seedPicker.reload();
         nav.reset();
+        repoList.reload();
     }
 
     /// Source-routed backend call. `method` is the suffix after remote/local.
@@ -111,28 +112,27 @@ Item {
         if (!backend) return;
         var name = (source || root.source) + method;
         if (typeof backend[name] !== "function") {
+            // No request was started (inflight was never incremented), so
+            // this sets the error directly rather than going through fail(),
+            // which also decrements the counter.
             nav.error = "unsupported operation: " + name;
             if (onFail) onFail();
             return;
         }
-        // Deliberately does NOT clear nav.error on the way in. Clearing on
-        // every request start meant a later request erased an earlier one's
-        // error, so during a sync — dozens of parallel fetches — an error was
-        // effectively unobservable. Errors clear on success, and on navigation.
-        nav.inflight++;
+        // Deliberately does NOT clear nav.error on the way in — see
+        // NavState.begin()'s doc comment.
+        nav.begin();
         logos.watch(backend[name].apply(backend, args), function (text) {
-            nav.inflight--;
             var r = R.parse(text);
             if (r.ok) {
-                nav.error = "";
+                nav.succeed();
                 onOk(r.data);
             } else {
-                nav.error = r.error;
+                nav.fail(r.error);
                 if (onFail) onFail();
             }
         }, function (err) {
-            nav.inflight--;
-            nav.error = String(err);
+            nav.fail(String(err));
             if (onFail) onFail();
         });
     }
@@ -141,14 +141,15 @@ Item {
     /// keeping the old data under the new seed's name.
     function setSeed(url) {
         if (!backend) return;
-        nav.inflight++;
+        nav.begin();
         logos.watch(backend.setRemoteSeed(url), function (text) {
-            nav.inflight--;
             var r = R.parse(text);
             if (r.ok) {
+                nav.succeed();
                 nav.reset();
+                repoList.reload();
             } else {
-                nav.error = "Cannot use " + url + ": " + r.error;
+                nav.fail("Cannot use " + url + ": " + r.error);
                 // Snap the picker back to the seed actually in use.
                 seedPicker.currentSeed = Qt.binding(function () {
                     return root.caps.remoteSeed || "";
@@ -156,8 +157,7 @@ Item {
                 seedPicker.syncSelection();
             }
         }, function (err) {
-            nav.inflight--;
-            nav.error = String(err);
+            nav.fail(String(err));
         });
     }
 
@@ -182,6 +182,43 @@ Item {
     readonly property int    repoTab:   repoPage.tab
     readonly property int    treeCount: repoPage.treeCount
     readonly property int    commitCount: repoPage.commitCount
+    readonly property int    issueCount:  repoPage.issueCount
+    readonly property int    patchCount:  repoPage.patchCount
+    readonly property string patchStatus: repoPage.patchStatus
+
+    // Sync button: its three idle labels ("Download All" / "Re-sync" /
+    // "Update") plus the in-progress percentage are the whole of that
+    // feature's user-visible behaviour, so the specs assert on all of them.
+    readonly property bool   syncing:         repoPage.syncing
+    readonly property real   syncProgress:    repoPage.syncProgress
+    readonly property bool   syncedOnce:      repoPage.syncedOnce
+    readonly property bool   updateAvailable: repoPage.updateAvailable
+    readonly property string syncLabel:       repoPage.syncLabel
+
+    /// See RepoView.sourceTabItem: the sync spec sets the real
+    /// `lastSyncedCommit` and calls the real `checkForUpdate()` through this,
+    /// rather than through a test-only hook that would fake the outcome.
+    readonly property var    sourceTabItem:  repoPage.sourceTabItem
+
+    // File tree and viewer.
+    readonly property string treePath:       repoPage.treePath
+    readonly property string selectedFile:   repoPage.selectedFile
+    readonly property string fileTitle:      repoPage.fileTitle
+    readonly property int    fileBodyLength: repoPage.fileBodyLength
+
+    // Branch picker.
+    readonly property string repoBranch:        repoPage.branch
+    readonly property string repoDefaultBranch: repoPage.defaultBranch
+    readonly property int    branchCount:       repoPage.branchCount
+    readonly property string branchLabel:       repoPage.branchLabel
+    /// See RepoView.branchPickerItem: a ComboBox's popup delegates live in a
+    /// separate window and cannot be clicked by objectName, so the branch spec
+    /// emits the picker's own `activated` signal instead.
+    readonly property var    branchPickerItem:  repoPage.branchPickerItem
+
+    // Detail views. "" when the tabs are showing.
+    readonly property string openThread: repoPage.openThread
+    readonly property string openCommit: repoPage.openCommit
 
     /// Open a repository object directly (deep links and testing).
     function openRepoExternal(repo) {
@@ -189,31 +226,11 @@ Item {
     }
 
     // ---- navigation state -------------------------------------------------
+    // See NavState.qml for the counter/error semantics — pulled into its own
+    // component so that logic is directly testable, the same way
+    // ListCache.qml is tested without a live backend.
 
-    QtObject {
-        id: nav
-        property string view: "repos"      // repos | repo
-        property string rid: ""
-        property var repo: null
-        // A counter, not a flag. Concurrent requests are the norm here —
-        // SourceTab.load() fires two, syncAll() fires dozens — and with a
-        // boolean the first reply to land cleared the strip while the rest
-        // were still in flight.
-        property int inflight: 0
-        readonly property bool busy: inflight > 0
-        property string error: ""
-
-        function reset() {
-            view = "repos"; rid = ""; repo = null; error = ""; inflight = 0;
-            repoList.reload();
-        }
-        function openRepo(r) {
-            rid = r.rid; repo = r; view = "repo";
-        }
-        function back() {
-            view = "repos"; rid = ""; repo = null; error = "";
-        }
-    }
+    NavState { id: nav }
 
     // ---- chrome -----------------------------------------------------------
 

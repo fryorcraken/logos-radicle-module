@@ -134,6 +134,11 @@ std::string RadicleImpl::remoteGetRepo(const std::string& rid)
     return dump(seed().getRepo(rid));
 }
 
+std::string RadicleImpl::remoteListBranches(const std::string& rid)
+{
+    return dump(seed().listBranches(rid));
+}
+
 std::string RadicleImpl::remoteGetTree(const std::string& rid, const std::string& sha,
                                        const std::string& path)
 {
@@ -207,6 +212,22 @@ std::string RadicleImpl::localGetRepo(const std::string& rid)
 {
     if (!local().available()) return localUnavailable();
     return localReader().getRepo(rid);
+}
+
+std::string RadicleImpl::localListBranches(const std::string& rid)
+{
+    if (!local().available()) return localUnavailable();
+
+    // Derived from the repo document rather than added to the FFI surface,
+    // exactly as `SeedClient::listBranches` derives it from `getRepo`. The
+    // local backend already returns `refs.refs` in the same shape, so a
+    // dedicated Rust entry point would be a second implementation of one
+    // filter — and a second place for the two sources to drift apart.
+    const auto repo = nlohmann::json::parse(localReader().getRepo(rid), nullptr, false);
+    if (repo.is_discarded()) return dump(radicle::makeError("malformed reply from local storage"));
+    if (radicle::isError(repo)) return dump(repo);
+
+    return dump(radicle::branchesFrom(repo));
 }
 
 std::string RadicleImpl::localGetTree(const std::string& rid, const std::string& sha,

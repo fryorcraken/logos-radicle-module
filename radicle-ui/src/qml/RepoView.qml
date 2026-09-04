@@ -30,6 +30,12 @@ Item {
     readonly property var meta: repo ? R.projectMeta(repo) : ({})
     readonly property string defaultBranch: repo ? (R.project(repo).defaultBranch || "") : ""
 
+    /// The branch Source and Commits are currently showing. Starts out bound
+    /// to defaultBranch; picking a branch (see BranchPicker below) replaces
+    /// that binding with a plain value, and onRidChanged restores it (see
+    /// there) so a new repository does not inherit the old one's pick.
+    property string branch: defaultBranch
+
     property int tab: 0
     property var loadedTabs: ({})
 
@@ -47,13 +53,85 @@ Item {
     /// True while any detail view is covering the tabs.
     readonly property bool showingDetail: openThreadId !== "" || openCommitSha !== ""
 
-    /// Counts the UI tests assert on.
+    /// State the end-to-end UI specs assert on. Kept here, and re-exported by
+    /// Main.qml, because a spec's `state:` expressions evaluate against the
+    /// app's QML root and cannot reach into a StackLayout child by id.
+    ///
+    /// These are readonly aliases of state that already exists; nothing here
+    /// is a second implementation of anything, so a spec asserting on them is
+    /// asserting on what the UI itself uses.
     readonly property int treeCount:   source.entryCount
     readonly property int commitCount: commits.count
+    readonly property int issueCount:  issues.count
+    readonly property int patchCount:  patches.count
+    /// Which state filter the Patches tab is on ("open"/"merged"/…).
+    readonly property string patchStatus: patches.status
+
+    // ---- source tab / sync ----
+    readonly property bool   syncing:         source.syncing
+    readonly property real   syncProgress:    source.syncProgress
+    readonly property bool   syncedOnce:      source.syncedOnce
+    readonly property bool   updateAvailable: syncButton.updateAvailable
+    /// The sync button's label, read off the Text item that actually renders
+    /// it rather than recomputed from the same inputs. Recomputing would let a
+    /// spec assert "the label says Re-sync" and still pass with the button's
+    /// own binding deleted — the assertion would be checking a copy of the
+    /// logic instead of the button.
+    readonly property string syncLabel: syncLabelText.text
+    /// The SourceTab itself, so an end-to-end spec can reach the real
+    /// `lastSyncedCommit` and the real `checkForUpdate()`.
+    ///
+    /// The "Update" state is only reachable when the branch head has moved
+    /// past the commit captured at the last sync, which cannot be arranged
+    /// against a public repository on demand. Rather than add a test-only
+    /// hook that fakes the outcome, the spec sets the real property the real
+    /// comparison reads and then calls the real poll — so the request, the
+    /// parse, the comparison and the re-label are all genuinely exercised.
+    readonly property var sourceTabItem: source
+    /// Directory the file tree is showing; "" is the repository root.
+    readonly property string treePath:        source.path
+    /// Path of the file open in the viewer; "" while the README is showing.
+    readonly property string selectedFile:    source.selectedFile
+    /// What the viewer pane is titled — the README's path until a file is
+    /// clicked, then that file's path.
+    readonly property string fileTitle:       source.viewerTitle
+    /// Length rather than the text itself: a spec only needs to know that
+    /// content arrived, and a whole blob in a report is noise.
+    readonly property int    fileBodyLength:  source.viewerBodyLength
+
+    // ---- branch ----
+    readonly property int    branchCount:  branchPicker.count
+    readonly property string branchLabel:  branchPicker.displayText
+    /// The picker itself, so an end-to-end spec can emit its `activated`
+    /// signal — which is exactly what a click on a popup delegate emits.
+    ///
+    /// A ComboBox's list lives in a Popup, i.e. a separate window, and the
+    /// inspector's snapshot is scoped to the app's own item tree, so those
+    /// delegates cannot be addressed by objectName the way every other
+    /// control here can. Emitting the real signal keeps `onActivated` — the
+    /// handler under test — in the path; assigning `branch` directly would
+    /// skip it and prove nothing about the picker.
+    readonly property var branchPickerItem: branchPicker
+
+    /// True while a detail view (issue/patch thread, or a commit) covers the
+    /// tabs — the spec's way of asserting a row click actually opened it.
+    readonly property string openThread: openThreadId
+    readonly property string openCommit: openCommitSha
 
     onRidChanged: {
         tab = 0;
         loadedTabs = ({});
+        // Re-bind to the new repo's default branch. A plain assignment
+        // (branch = defaultBranch) would only copy today's value and leave
+        // `branch` a dead literal from then on; Qt.binding restores the live
+        // binding declared above, so a repo picked before its own repo
+        // object (and therefore defaultBranch) has arrived still ends up on
+        // the right branch once it does. Without this, picking a non-default
+        // branch on one repository and then opening a different one carried
+        // the old repo's branch NAME into the new repo — silently wrong
+        // rather than merely stale, since two repos rarely share branch
+        // names on purpose.
+        branch = Qt.binding(function () { return page.defaultBranch; });
         // Drop every tab's contents up front. Without this, switching repos
         // left the previous repo's commits/issues/patches on screen under the
         // new repo's header until each tab was re-opened.
@@ -63,7 +141,54 @@ Item {
         commits.reset();
         issues.reset();
         patches.reset();
+        branchPicker.rid = rid;
         maybeLoad();
+    }
+
+    onBranchChanged: {
+        // Same principle as switching repository, one level down: the
+        // previously loaded tree/commits belong to the OLD branch and must
+        // not linger on screen — or worse, look current — while the new
+        // branch's data is in flight. Only source (tab 0) and commits
+        // (tab 1) are branch-scoped — issues and patches are repository-wide
+        // COBs with no branch concept — so only their loadedTabs entries are
+        // cleared, and only they refetch. Clearing all four would refetch
+        // issues/patches for no reason on every branch switch.
+        // Rebuilt as a NEW object rather than mutated with `delete
+        // loadedTabs[0]`. `loadedTabs` is a `property var`, and an in-place
+        // delete on one does not reliably write back through the property —
+        // the entries survived, loadTab() below took its early return, and
+        // switching branch silently left the OLD branch's tree and commits on
+        // screen with no refetch at all. onRidChanged has always reassigned
+        // the whole object (loadedTabs = ({})), which is why the repository
+        // switch worked while the branch switch did not.
+        var keep = ({});
+        for (var k in loadedTabs)
+            if (k !== "0" && k !== "1" && loadedTabs[k]) keep[k] = true;
+        loadedTabs = keep;
+        source.reset();
+        commits.reset();
+        // Reload on the next event-loop turn, NOT synchronously here.
+        //
+        // SourceTab.branch and CommitsTab.branch are bindings to this
+        // property. Inside this handler those bindings have not been
+        // re-evaluated yet, so calling maybeLoad() directly made the two tabs
+        // refetch using the branch they were ALREADY on — the request went out
+        // for the old branch, its reply repopulated the pane, and switching
+        // branch appeared to do nothing at all. Deferring by one turn lets the
+        // bindings settle so the refetch asks for the branch just picked.
+        branchReload.restart();
+    }
+
+    /// Drives onBranchChanged's reload one event-loop turn later, so the
+    /// branch bindings on SourceTab/CommitsTab have been re-evaluated before
+    /// either is asked to fetch. See onBranchChanged for what went wrong when
+    /// this was a direct call.
+    Timer {
+        id: branchReload
+        interval: 0
+        repeat: false
+        onTriggered: maybeLoad()
     }
 
     // The page can receive a rid before it becomes visible, and `active` can
@@ -103,7 +228,6 @@ Item {
                 spacing: Theme.gap
 
                 Rectangle {
-                    objectName: "backButton"
                     Layout.preferredWidth: 68
                     Layout.preferredHeight: 28
                     radius: Theme.radius
@@ -120,6 +244,14 @@ Item {
                     }
                     MouseArea {
                         id: backMouse
+                        // Same move as syncButton below. This one HAPPENED to
+                        // work from the Rectangle — the back button is the
+                        // first handler in the header, so the ancestor search
+                        // landed on it by luck — but it was one reordering
+                        // away from the same silent misfire, and relying on
+                        // sibling order for which control a click hits is not
+                        // something to leave in place once it is understood.
+                        objectName: "backButton"
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
@@ -154,12 +286,20 @@ Item {
                 // Sync: pull the whole repository into the local cache so
                 // browsing afterwards needs no further requests.
                 Rectangle {
-                    objectName: "syncButton"
+                    id: syncButton
+                    // "Update available" is a colour/label change only — the
+                    // button stays exactly as clickable as always. Re-syncing
+                    // is never wrong, just sometimes unnecessary, so this
+                    // must never gate onClicked below.
+                    readonly property bool updateAvailable:
+                        !source.syncing && source.updateAvailable
                     Layout.preferredWidth: 92
                     Layout.preferredHeight: 26
                     radius: Theme.radius
                     color: syncMouse.containsMouse ? Theme.surfaceAlt : "transparent"
-                    border.color: source.syncing ? Theme.accent : Theme.border
+                    border.color: source.syncing ? Theme.accent
+                                : updateAvailable  ? Theme.warn
+                                                    : Theme.border
                     border.width: 1
                     Behavior on color { ColorAnimation { duration: Theme.animFast } }
 
@@ -175,16 +315,36 @@ Item {
                     }
 
                     Text {
+                        id: syncLabelText
+                        objectName: "syncLabel"
                         anchors.centerIn: parent
                         text: source.syncing
                               ? Math.round(source.syncProgress * 100) + "%"
-                              : (source.syncedOnce ? "Re-sync" : "Download All")
-                        color: source.syncing ? Theme.accent : Theme.text
+                              : (syncButton.updateAvailable ? "Update"
+                                 : source.syncedOnce         ? "Re-sync"
+                                                              : "Download All")
+                        color: source.syncing ? Theme.accent
+                             : syncButton.updateAvailable ? Theme.warn
+                                                           : Theme.text
                         font.pixelSize: Theme.fontMd
                     }
 
                     MouseArea {
                         id: syncMouse
+                        // On the MouseArea, not the Rectangle above — and this
+                        // one was not merely unaddressable but actively
+                        // dangerous.
+                        //
+                        // A selector resolves a non-clickable node by climbing
+                        // to a clickable ancestor, then by searching each
+                        // ancestor's DESCENDANTS for a mouse handler — never
+                        // the node's own. The sync button's nearest ancestor
+                        // is the header RowLayout, whose first handler in tree
+                        // order belongs to the BACK BUTTON. So a spec clicking
+                        // "syncButton" reported a successful click and
+                        // navigated to the repository list instead, which read
+                        // as "the sync never started".
+                        objectName: "syncButton"
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
@@ -196,28 +356,25 @@ Item {
                     ToolTip.text: source.syncing
                                   ? "Cancel — " + source.syncDone + " of "
                                     + source.syncQueued + " fetched"
-                                  : (source.syncedOnce
-                                     ? "Re-download every file to refresh the local cache"
-                                     : "Download every file so browsing is instant")
+                                  : syncButton.updateAvailable
+                                    ? "The remote has new commits — re-sync to fetch them"
+                                    : (source.syncedOnce
+                                       ? "Re-download every file to refresh the local cache"
+                                       : "Download every file so browsing is instant")
                 }
 
-                // Branch chip.
-                Rectangle {
-                    visible: page.defaultBranch !== ""
-                    Layout.preferredWidth: branchText.implicitWidth + 20
-                    Layout.preferredHeight: 22
-                    radius: Theme.radiusPill
-                    color: Theme.surfaceAlt
-                    border.color: Theme.border
-                    border.width: 1
-                    Text {
-                        id: branchText
-                        anchors.centerIn: parent
-                        text: page.defaultBranch
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontSm
-                        font.family: Theme.mono
+                // Branch picker: which branch Source and Commits show.
+                BranchPicker {
+                    id: branchPicker
+                    objectName: "branchPicker"
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: page.rid !== ""
+                    currentBranch: page.branch
+                    fetchBranches: function (cb) {
+                        if (!page.app || page.rid === "") return;
+                        page.app.call("ListBranches", [page.rid], cb);
                     }
+                    onBranchChosen: function (name) { page.branch = name; }
                 }
             }
 
@@ -255,13 +412,13 @@ Item {
                         : page.openCommitSha !== "" ? page.commitIndex
                         : page.tab
 
-            SourceTab  { id: source;  app: page.app; rid: page.rid; branch: page.defaultBranch }
+            SourceTab  { id: source;  app: page.app; rid: page.rid; branch: page.branch }
 
             CommitsTab {
                 id: commits
                 app: page.app
                 rid: page.rid
-                branch: page.defaultBranch
+                branch: page.branch
                 onCommitActivated: function (sha) { page.openCommitSha = sha; }
             }
 

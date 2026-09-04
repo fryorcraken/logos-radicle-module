@@ -61,6 +61,9 @@ Item {
 
                 MouseArea {
                     id: chipMouse
+                    // On the MouseArea rather than the chip Rectangle, so a spec
+                    // addressing `filterChip` with nth: gets one match per chip.
+                    objectName: "filterChip"
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor

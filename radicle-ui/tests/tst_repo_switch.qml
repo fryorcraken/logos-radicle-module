@@ -52,6 +52,15 @@ Item {
         id: deepApp
         property var progressAfterEachReply: []
         function call(method, args, onOk, onFail) {
+            // syncAll() also makes one ListBranches call up front (to record
+            // the branch head it is syncing to). Answer it out of band,
+            // without touching progressAfterEachReply — that array is about
+            // GetTree replies specifically, and dirPath below would
+            // misinterpret ListBranches' single-rid argument list anyway.
+            if (method === "ListBranches") {
+                onOk({ items: [{ name: "main", head: "" }], default: "main" });
+                return;
+            }
             var dirPath = args[2];
             if (dirPath === "") {
                 onOk({ entries: [

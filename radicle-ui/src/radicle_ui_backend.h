@@ -34,6 +34,7 @@ public:
     // Remote — proxied to a seed node over HTTPS
     QString remoteListRepos(QString query, int page, int perPage) override;
     QString remoteGetRepo(QString rid) override;
+    QString remoteListBranches(QString rid) override;
     QString remoteGetTree(QString rid, QString sha, QString path) override;
     QString remoteGetBlob(QString rid, QString sha, QString path) override;
     QString remoteGetReadme(QString rid, QString sha) override;
@@ -47,6 +48,7 @@ public:
     // Local — this machine's node
     QString localListRepos(QString scope, int page, int perPage) override;
     QString localGetRepo(QString rid) override;
+    QString localListBranches(QString rid) override;
     QString localGetTree(QString rid, QString sha, QString path) override;
     QString localGetBlob(QString rid, QString sha, QString path) override;
     QString localGetReadme(QString rid, QString sha) override;
