@@ -41,10 +41,33 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    // Only the remote (seed-node) source exists. Local-node browsing needs a
-    // backend that is not written yet, and a disabled control for it was a
-    // placeholder that looked like a broken feature.
-    readonly property string source: "remote"
+    // Which source every browsing call goes to. The state and the routing it
+    // implies live in SourceState so they can be tested as a unit — inside
+    // this file they could only be covered by a stub reproducing them, which
+    // is a copy asserted against itself. See SourceState.qml.
+    readonly property SourceState sourceState: SourceState {
+        localAvailable: root.caps.localAvailable === true
+
+        // A repo id from one source is meaningless to the other, so the whole
+        // navigation stack resets. `nav.reset()` clears state but does NOT
+        // refetch — NavState is a pure holder and the caller owns reloading,
+        // which is why onBackendReady and setSeed both call reload() alongside
+        // it. Omitting the reload here shipped once: the toggle flipped, the
+        // screen cleared, and no request was ever issued.
+        onChanged: {
+            nav.reset();
+            repoList.reload();
+        }
+    }
+
+    /// Convenience aliases. Views read these rather than reaching through
+    /// `sourceState`, so moving the state again does not touch every consumer.
+    readonly property string source: sourceState.current
+    readonly property bool localAvailable: sourceState.localAvailable
+
+    function setSource(next) {
+        sourceState.select(next);
+    }
 
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
@@ -81,13 +104,14 @@ Item {
     }
 
     /// Source-routed backend call. `method` is the suffix after remote/local.
-    /// `source` defaults to "remote" — every call site today browses via a
-    /// seed node. Threading it through now, ahead of any caller actually
-    /// needing "local", is cheaper than retrofitting a source parameter
-    /// across every call site once M2 adds local-node browsing.
+    ///
+    /// The optional `source` argument overrides `root.source` for one call.
+    /// No caller uses it today — the toggle moves every view at once, which is
+    /// the point — but it is the seam for a future screen that wants to show
+    /// both sources side by side.
     function call(method, args, onOk, onFail, source) {
         if (!backend) return;
-        var name = (source || "remote") + method;
+        var name = sourceState.methodFor(method, source);
         if (typeof backend[name] !== "function") {
             // No request was started (inflight was never incremented), so
             // this sets the error directly rather than going through fail(),
@@ -162,6 +186,15 @@ Item {
     readonly property int    issueCount:  repoPage.issueCount
     readonly property int    patchCount:  repoPage.patchCount
     readonly property string patchStatus: repoPage.patchStatus
+
+    // Which source is selected, and whether the local one is offerable at all.
+    // `capsRaw` is the whole capabilities reply verbatim: when the local
+    // segment does not appear, the question is always "what did
+    // getCapabilities actually say", and reading it out of the app beats
+    // guessing from a screenshot.
+    readonly property string sourceName:  source
+    readonly property bool   hasLocal:    localAvailable
+    readonly property string capsRaw:     capsJson
 
     // Sync button: its three idle labels ("Download All" / "Re-sync" /
     // "Update") plus the in-progress percentage are the whole of that
@@ -238,9 +271,23 @@ Item {
                         font.bold: true
                     }
 
+                    SourceToggle {
+                        id: sourceToggle
+                        objectName: "sourceToggle"
+                        current: root.source
+                        localAvailable: root.localAvailable
+                        reason: "No Radicle profile on this machine — "
+                                + "install Radicle and run `rad auth` to browse local repositories"
+                        onSourceChosen: function (next) { root.setSource(next); }
+                    }
+
                     SeedPicker {
                         id: seedPicker
                         objectName: "seedPicker"
+                        // Which seed is proxied to is a remote-source concern;
+                        // showing the picker while browsing local storage would
+                        // imply it affects what is on screen, which it does not.
+                        visible: root.source === "remote"
                         currentSeed: root.caps.remoteSeed || ""
                         fetchSeeds: function (cb) {
                             root.callPlain("listKnownSeeds", [], cb);
@@ -260,7 +307,10 @@ Item {
 
                     FilterField {
                         id: searchField
-                        visible: nav.view === "repos"
+                        // Local listing takes a scope, not a search string —
+                        // see RepoList.fetch(). A search box that silently did
+                        // nothing would be worse than no search box.
+                        visible: nav.view === "repos" && root.source === "remote"
                         Layout.preferredWidth: 260
                         placeholder: "Search repositories"
                         onAccepted: repoList.reload()

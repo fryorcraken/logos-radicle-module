@@ -152,6 +152,62 @@ jobs:
           echo "spec files: $specs, Totals lines: $totals"
           test "$totals" -eq "$specs"
 
+  # The Rust local-node backend (radicle/rust-ffi). Its tests build real
+  # Radicle profiles on disk and read them back, which is the layer that can
+  # prove the local* JSON shapes — the C++ tests can only prove the FFI
+  # boundary, because building a profile from C++ would mean reimplementing
+  # `rad auth`.
+  #
+  # Run here on plain cargo rather than through Nix: the module build compiles
+  # the crate with `doCheck = false` (a plugin rebuild should not pay for the
+  # fixtures), so without this job nothing in CI would execute a single one of
+  # these tests and a green run would say nothing about the crate.
+  rust:
+    name: Rust backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: radicle/rust-ffi
+
+      # libgit2-sys and openssl-sys prefer system libraries when pkg-config
+      # finds them, and vendor their own otherwise. Installing them keeps the
+      # build close to what Nix produces.
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev zlib1g-dev
+
+      - name: Formatting
+        run: cargo fmt --manifest-path radicle/rust-ffi/Cargo.toml --check
+
+      - name: Clippy
+        run: |
+          cargo clippy --manifest-path radicle/rust-ffi/Cargo.toml \
+            --all-targets -- -D warnings
+
+      # `| tee` then assert on the output, matching what the QML job does: a
+      # runner that exits 0 having executed nothing has passed twice in this
+      # repository's history, and the crate's own tests were once
+      # env-var-gated to skip silently. Counting the reported tests makes that
+      # shape impossible to miss.
+      - name: Tests
+        run: |
+          set -eu -o pipefail
+          cargo test --manifest-path radicle/rust-ffi/Cargo.toml \
+            | tee /tmp/cargo-test.log
+          passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-test.log \
+                   | grep -oE '[0-9]+' | paste -sd+ | bc)
+          echo "tests passed: $passed"
+          # A floor, not an exact count, so adding a test does not fail CI —
+          # but deleting the suite, or reintroducing a skip, does.
+          test "$passed" -ge 28
+
   # The end-to-end UI specs need a Basecamp built with the QML inspector (a
   # compile-time feature, off in shipping builds), so running them in CI means
   # building Basecamp first — minutes, not seconds. Validating the specs is
@@ -344,7 +400,7 @@ jobs:
 
   release:
     name: Release
-    needs: [lint, qml, build]
+    needs: [lint, qml, rust, build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

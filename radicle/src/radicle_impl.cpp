@@ -1,5 +1,6 @@
 #include "radicle_impl.h"
 
+#include "local_reader.h"
 #include "local_store.h"
 #include "seed_client.h"
 
@@ -34,7 +35,23 @@ std::string dump(const nlohmann::json& j)
     return j.dump();
 }
 
-/// Uniform "this build has no local backend" error for every local* method.
+radicle::LocalReader& localReader()
+{
+    // Built from LocalStore's resolved home so RAD_HOME/HOME resolution lives
+    // in exactly one place. Constructed on first use, after LocalStore has
+    // read the environment.
+    static radicle::LocalReader reader{local().home()};
+    return reader;
+}
+
+/// Uniform "there is no local profile here" error.
+///
+/// Reached only when detection fails — no ~/.radicle, or one with no storage/
+/// directory. Once a profile exists the call goes to the backend, which
+/// reports its own, more specific failure ("repository X not found locally",
+/// "this repository has no README") rather than this blanket one. Keeping the
+/// two apart matters: "you have no node" and "that repo isn't here" prompt
+/// different actions from a user.
 std::string localUnavailable()
 {
     return dump(radicle::makeError(local().unavailableReason()));
@@ -173,28 +190,101 @@ std::string RadicleImpl::remoteGetPatch(const std::string& rid, const std::strin
 }
 
 // ===========================================================================
-// LOCAL — the local node's storage.
+// LOCAL — the local node's storage, read in-process through the Rust backend.
 //
-// The local backend (the Rust shim over the radicle crate) lands in a later
-// milestone. Until then every method reports precisely why it is unavailable
-// rather than pretending to be empty: an empty repo list and "no local node"
-// are very different answers, and a view must be able to tell them apart.
+// Each method is a two-step: refuse early when there is no profile at all,
+// otherwise hand off to LocalReader, which owns the FFI boundary and returns
+// the finished JSON. The shapes match the remote* methods above byte for byte
+// — that is the contract radicle_impl.h states, and the reason a view renders
+// either source without branching.
+//
+// Read-only. Nothing here signs, writes, or contacts the node daemon, so it
+// works offline and with the node stopped.
 // ===========================================================================
 
-std::string RadicleImpl::localListRepos(const std::string&, int64_t, int64_t)      { return localUnavailable(); }
-std::string RadicleImpl::localGetRepo(const std::string&)                  { return localUnavailable(); }
-std::string RadicleImpl::localListBranches(const std::string&)             { return localUnavailable(); }
-std::string RadicleImpl::localGetTree(const std::string&, const std::string&,
-                                      const std::string&)                 { return localUnavailable(); }
-std::string RadicleImpl::localGetBlob(const std::string&, const std::string&,
-                                      const std::string&)                 { return localUnavailable(); }
-std::string RadicleImpl::localGetReadme(const std::string&, const std::string&) { return localUnavailable(); }
-std::string RadicleImpl::localListCommits(const std::string&, const std::string&,
-                                          int64_t, int64_t)                       { return localUnavailable(); }
-std::string RadicleImpl::localGetCommit(const std::string&, const std::string&) { return localUnavailable(); }
-std::string RadicleImpl::localListIssues(const std::string&, const std::string&,
-                                         int64_t, int64_t)                        { return localUnavailable(); }
-std::string RadicleImpl::localGetIssue(const std::string&, const std::string&)  { return localUnavailable(); }
-std::string RadicleImpl::localListPatches(const std::string&, const std::string&,
-                                          int64_t, int64_t)                       { return localUnavailable(); }
-std::string RadicleImpl::localGetPatch(const std::string&, const std::string&)  { return localUnavailable(); }
+std::string RadicleImpl::localListRepos(const std::string& scope, int64_t page, int64_t perPage)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().listRepos(scope, page, perPage);
+}
+
+std::string RadicleImpl::localGetRepo(const std::string& rid)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getRepo(rid);
+}
+
+std::string RadicleImpl::localListBranches(const std::string& rid)
+{
+    if (!local().available()) return localUnavailable();
+
+    // Derived from the repo document rather than added to the FFI surface,
+    // exactly as `SeedClient::listBranches` derives it from `getRepo`. The
+    // local backend already returns `refs.refs` in the same shape, so a
+    // dedicated Rust entry point would be a second implementation of one
+    // filter — and a second place for the two sources to drift apart.
+    const auto repo = nlohmann::json::parse(localReader().getRepo(rid), nullptr, false);
+    if (repo.is_discarded()) return dump(radicle::makeError("malformed reply from local storage"));
+    if (radicle::isError(repo)) return dump(repo);
+
+    return dump(radicle::branchesFrom(repo));
+}
+
+std::string RadicleImpl::localGetTree(const std::string& rid, const std::string& sha,
+                                      const std::string& path)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getTree(rid, sha, path);
+}
+
+std::string RadicleImpl::localGetBlob(const std::string& rid, const std::string& sha,
+                                      const std::string& path)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getBlob(rid, sha, path);
+}
+
+std::string RadicleImpl::localGetReadme(const std::string& rid, const std::string& sha)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getReadme(rid, sha);
+}
+
+std::string RadicleImpl::localListCommits(const std::string& rid, const std::string& sha,
+                                          int64_t page, int64_t perPage)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().listCommits(rid, sha, page, perPage);
+}
+
+std::string RadicleImpl::localGetCommit(const std::string& rid, const std::string& sha)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getCommit(rid, sha);
+}
+
+std::string RadicleImpl::localListIssues(const std::string& rid, const std::string& status,
+                                         int64_t page, int64_t perPage)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().listIssues(rid, status, page, perPage);
+}
+
+std::string RadicleImpl::localGetIssue(const std::string& rid, const std::string& id)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getIssue(rid, id);
+}
+
+std::string RadicleImpl::localListPatches(const std::string& rid, const std::string& status,
+                                          int64_t page, int64_t perPage)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().listPatches(rid, status, page, perPage);
+}
+
+std::string RadicleImpl::localGetPatch(const std::string& rid, const std::string& id)
+{
+    if (!local().available()) return localUnavailable();
+    return localReader().getPatch(rid, id);
+}

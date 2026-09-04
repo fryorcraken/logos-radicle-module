@@ -1,5 +1,240 @@
 # Working on this repository
 
+## M2.1 — scope and FFI decision, 2026-09-03
+
+M2.1 = read-only local-node browsing: mirror every `remote*` method with a
+working `local*` implementation, reading `~/.radicle` in-process instead of
+proxying to a seed over HTTP. `radicle_impl.h`'s doc comment already commits
+to the hard constraint: a repo from `remoteGetRepo` and `localGetRepo` must
+deserialize identically, so a view renders either without branching.
+
+### FFI approach: a Rust staticlib with a flat `extern "C"` string API, not `cxx`
+
+There is no Rust anywhere in this repo yet — no `Cargo.toml`, no hints in
+`radicle/flake.nix`, `radicle/CMakeLists.txt` or `metadata.json`'s
+`nix.cmake.extra_link_libraries`. This is a from-scratch FFI boundary.
+
+Considered `cxx` (typed C++/Rust interop, codegen'd bridge) vs a plain
+`cbindgen`-style C header over a `staticlib`. Chose the latter: every existing
+module method is already `std::string in, std::string out` JSON — see
+`radicle_impl.h`'s own conventions section, "returning JSON keeps the
+radicle crate's churn behind this wall." `cxx` buys typed struct marshalling
+across the boundary, which is exactly the thing this codebase has deliberately
+avoided needing. A flat API matches the existing shape with the least new
+machinery:
+
+```c
+// caller owns nothing until it gets a pointer back; frees it with
+// radicle_free_string. NULL home = not found via RAD_HOME/HOME (mirrors
+// LocalStore's own env lookup, so behaviour stays identical if both live for
+// a while).
+char* radicle_local_list_repos(const char* home, const char* scope,
+                                int64_t page, int64_t per_page);
+char* radicle_local_get_repo(const char* home, const char* rid);
+// ...one function per local* method, same signature shape as radicle_impl.h.
+void  radicle_free_string(char* s);
+```
+
+The Rust side builds the JSON itself (via `serde_json`, matching the shapes
+below) and returns a `CString::into_raw()` pointer; `radicle_free_string`
+calls `CString::from_raw` to drop it. `local_store.cpp` calls these from a new
+`radicle::LocalRepoReader` (or similar) that owns the FFI boundary, the same
+way `SeedClient` owns the HTTP boundary — `radicle_impl.cpp` should not call
+`extern "C"` functions directly.
+
+Nix wiring (not yet built, this is the plan): a `rustPlatform.buildRustPackage`
+derivation in `radicle/flake.nix` producing the staticlib, added to
+`metadata.json`'s `nix.cmake.extra_link_libraries` /
+`nix.cmake.extra_include_dirs` (that extension point already exists in
+`metadata.json`'s schema, unused today — this is what it's for) so
+`logos_module()`'s `LINK_LIBRARIES` picks it up. `radicle/CMakeLists.txt`
+gets a `radicle_ffi.h` (cbindgen-generated, checked in rather than
+generated-at-configure-time so the header is reviewable) alongside the
+existing sources.
+
+**Known gotcha, unconfirmed whether still live**: a prior memory recorded
+`radicle = "0.24"` failing to build until `radicle-oid` was pinned to
+`0.2.0`. Checked crates.io/GitHub as of this session: `radicle` is now at
+`0.25.1` and `radicle-oid` at `0.2.2` upstream — the pin this module needs, if
+any, has to be re-verified empirically against whatever `Cargo.lock` resolves
+to; do not assume the old pin still applies to the new version line.
+
+### Reading local storage — confirmed against heartwood source (crates/radicle, tag matching v0.25.1)
+
+- **Git-native (repos, tree, blob, commit)**: `radicle::storage::git::Storage::open(path, info: UserInfo)`
+  opens the profile's storage root (no signer, no passphrase — `UserInfo` is
+  config, not a key). `storage.repository(rid) -> Repository` opens one repo;
+  `Repository` wraps a `git2::Repository` (`.backend`) plus helpers for refs,
+  head, tree, blob, commit — all `ReadRepository` trait methods, all
+  read-only. This is genuinely "a few more calls on the same object", same
+  complexity class as what `SeedClient` already does over HTTP.
+- **COBs (issues, patches)**: NOT plain git objects — each COB is a DAG of
+  signed operations under `refs/cobs/<typename>/<id>/...`, replayed
+  (`Evaluate`) into current state. The crate does the replay for you:
+  `radicle::cob::issue::Issues::open(&repository, ReadOnly)` then `.get(&id)`
+  / `.all()` (via `Deref` to `store::Store`) — confirmed in
+  `crates/radicle/src/cob/issue.rs`. `radicle::cob::patch::Patches::open`
+  mirrors it exactly (`crates/radicle/src/cob/patch.rs`). Critically,
+  `store::access::ReadOnly` is a zero-field unit struct requiring no signer
+  (`crates/radicle/src/cob/store/access.rs`) — read access needs only a
+  `&Repository`, so this works fully offline with no passphrase prompt.
+- **The SQLite cache (`radicle::cob::issue::cache::Cache` /
+  `cob::cache::StoreReader`/`StoreWriter`) is NOT required for correctness.**
+  `Cache<..., cache::NoCache>` exists specifically as a direct-read path —
+  `NoCacheIter` walks `store.all()`/`store.get()` straight off git refs, no
+  DB involved (confirmed in `crates/radicle/src/cob/issue/cache.rs`,
+  `impl Issues for Cache<..., cache::NoCache>`). Use `NoCache` for M2.1: it
+  avoids owning a SQLite file's lifecycle/location entirely. The real `rad`
+  CLI's on-disk cache (`~/.radicle/cache/cobs.db`) is a read-through
+  optimization for its own use, not a dependency other readers need.
+- **Correction, verified against docs.rs for 0.25.1: there is no public
+  `radicle::test` module, and no `fixtures` or `rad_util` helper.** An earlier
+  draft of this note claimed those were available for building test profiles;
+  they are crate-internal (heartwood's own tests use them via `#[cfg(test)]`),
+  so they cannot be pulled in as an external dev-dependency. The public
+  modules are: `cli, cob, collections, explorer, git, identity, io, node,
+  prelude, profile, rad, serde_ext, sql, storage, version, web`. Build
+  fixtures through the public API instead — `Profile::init(Home, Alias,
+  Option<Passphrase>, Seed)` creates a keystore and storage root, and
+  `rad::init(&Repository, ProjectName, &str, BranchName, Visibility, &impl
+  Signer, &impl WriteStorage)` pushes a git working copy into it as a real
+  Radicle repo. That is what `rust-ffi/tests/local_storage.rs` does.
+- Net effect: **COB reading is not the separate subsystem it looked like
+  from the outside.** No `automerge` crate knowledge needed, no custom
+  signature-verification code to write — `Issue`/`Patch` (the replayed
+  state structs) come out with fields matching what `remoteGetIssue`/
+  `remoteGetPatch` already expose (title, description, state, thread/
+  comments for issues; revisions/reviews for patches). The actual open
+  question is JSON *shape* matching, not read mechanics — `radicle-httpd`
+  (which produces the `remote*` shapes) lives in a separate repo, not in
+  this heartwood checkout, so its exact serde output wasn't directly
+  confirmed this session. Match `test_seed_client.cpp`'s fixture JSON
+  (`radicle/tests/test_seed_client.cpp`, `kRepoJson` etc.) empirically
+  against real local output once a repo is available to compare, rather
+  than guessing radicle-httpd's serialization from first principles.
+
+### Sequencing: repos + tree + blob + commits first, issues + patches as a flagged follow-up if time runs out
+
+Not because COBs are hard — the research above says they're not
+meaningfully harder than git-native reads — but because there's more total
+surface (two more list+get method pairs, two more JSON shapes to match, two
+more sets of unit tests) and this is one session. Build and land git-native
+`local*` completely and tested first; if session time remains, continue
+straight into issues/patches using the same `Issues::open`/`Patches::open`
++ `NoCache` pattern — there's no architectural reason to stop, only a budget
+one.
+
+### M2.1 progress — wired end to end and proven against a real profile
+
+`radicle/rust-ffi/` is real and on a branch (PR #3). What is true today, so
+nobody re-derives it:
+
+- **The whole `local*` surface works**, matching the `remote*` JSON shapes as
+  pinned by `test_seed_client.cpp`: repos, tree, blob, readme, commits +
+  diffs, and COBs (issues/patches) via `Issues::open`/`Patches::open` +
+  `NoCache`. 29 tests pass via `cargo test`.
+- **It is linked and called.** `radicle/CMakeLists.txt` links the staticlib
+  (`find_library` so a missing archive fails at configure time with a
+  sentence, not at link time with a wall of undefined symbols),
+  `flake.nix`'s `preConfigure` stages it, and `radicle_impl.cpp`'s `local*`
+  methods hand off to `LocalReader` instead of returning
+  `localUnavailable()`. The QML routes through `SourceState.methodFor()`.
+- **Reading needs no passphrase** — only `keys/radicle.pub` is read.
+  `UserInfo.key` is used when *signing*, which this never does, so the
+  private key stays encrypted and untouched. Confirmed empirically, not
+  assumed: the test fixtures init a profile with `None` for the passphrase
+  and the read path works against it.
+- **`radicle 0.25.1` / `radicle-oid 0.2.2` need no pin.** The
+  `radicle = "0.24"` / radicle-oid 0.2.0 gotcha in memory does not apply
+  to this version line.
+- **Two probe examples read this machine's real `~/.radicle`**, because a
+  fixture built by the same code that reads it can agree with itself while
+  both are wrong about what a real `rad`-created profile looks like:
+  `probe_real_profile` (every read, one repo, empty sha) and
+  `probe_ui_args` (every repo, with the `defaultBranch` the UI actually
+  passes as the sha — a different input down a different path). Neither is
+  a test: they depend on whatever is on this machine, so they can neither
+  pass nor fail meaningfully in CI.
+
+A note on testing this crate, learned the hard way: the rescued code came
+with `SMOKE_*`-env-gated tests that returned early when the var was unset,
+so `cargo test` went green having executed none of the code under test —
+the same false-green shape recorded for `qmltestrunner`. They were
+replaced with fixtures built through the crate's *public* API. When adding
+coverage here, verify it fails when it should: breaking `local.rs` on
+purpose and watching the assertion go red takes a minute and is the only
+thing that distinguishes a real test from a skip.
+
+### `cargo clippy -- -D warnings` is load-bearing here, not style policing
+
+CI runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`
+on this crate. That is not tidiness: a dead-code warning in an FFI crate is
+usually a *safety* feature that was written and never wired in, and `-D
+warnings` is what turns "nobody noticed" into a red build. Two such cases
+were caught by exactly that, both pre-existing:
+
+- **`guarded()` was never called.** Its own doc comment says it is a
+  soundness guard, not error handling — a Rust panic unwinding through an
+  `extern "C"` frame is undefined behaviour. Every `radicle_local_*`
+  function called `to_c_string(...)` directly, so nothing was guarded. The
+  fix was to route all twelve read entry points through it, and
+  `tests/panic_guard.rs` now drives the real boundary with pathological
+  inputs (junk RIDs, traversal-shaped paths, `i64::MAX`/`i64::MIN` paging)
+  and asserts parseable JSON comes back every time. If a future change
+  drops `guarded` from a call site, the panic it was catching aborts the
+  whole test binary — loud, which is the point.
+- **`init_private_repo` was never called**, and its absence had hollowed
+  out a test: `list_repos_narrows_by_scope` asserted `count("private") == 0`
+  against a fixture containing only public repos, which passes just as
+  happily against a filter that returns nothing for any input. It now
+  creates one private repo and asserts `count("private") == 1`. Same lesson
+  as the branch-switch fake: **a fixture that answers the same for every
+  input cannot tell working from broken.**
+
+So when clippy flags dead code in `rust-ffi`, read what the dead thing was
+*for* before deleting it or reaching for `#[allow]`. Twice now the answer
+has been "it should have been called".
+
+### `local.yaml` needs RAD_HOME — run it with `run-local-e2e.sh`
+
+sitometres gives every run a **throwaway `$HOME`** so a test cannot touch your
+real wallets and keys. `LocalStore` resolves the Radicle home from `RAD_HOME`,
+else `$HOME/.radicle` — so under that throwaway HOME there is no profile,
+`getCapabilities` reports `localAvailable=false`, the toggle hides its "Local"
+segment, and `local.yaml` fails at step 3 with
+
+```
+state "root.localAvailable === true" — evaluated to false
+```
+
+on **every** machine, including one with a perfectly good profile.
+
+That spec's header used to claim the failure meant "this machine has no
+Radicle profile". It did not, and the mistake was expensive: the one automated
+check covering local browsing was permanently red for a reason unrelated to
+the code under test, so it was never run, and the local path shipped with no
+working end-to-end coverage at all. **A check that cannot pass is worth no
+more than one that cannot fail** — the same lesson as the `SMOKE_*` skips and
+the Qt5 `qmltestrunner`, arriving from the opposite direction.
+
+`radicle-ui/tests/run-local-e2e.sh` passes `--env RAD_HOME=<your profile>`,
+which restores local browsing while keeping the throwaway HOME's isolation.
+Use it rather than invoking sitometres by hand. `--real-home` would also work
+and is deliberately not used: it hands the app every credential in `$HOME` to
+make one directory readable.
+
+It is **not** in CI — a CI runner has no Radicle profile, and seeding one is
+its own piece of work. It is the only spec that covers `local*`, so run it
+locally after touching that path.
+
+One caveat worth knowing before you chase a ghost: step 9 (`treeCount > 0`)
+can fail spuriously when **another Basecamp is running against the same
+`~/.radicle`** — two processes contending on the same git storage. Five
+consecutive clean runs with no other instance up; two failures while an
+interactive `lgs basecamp launch alice` was being driven by hand. Close the
+interactive instance before running the spec, and do not read a lone step-9
+failure as a code defect until you have.
+
 ## How to work in this repo, and what Bash costs
 
 **Reach for `lgs` for anything build-, run- or install-shaped.** This is a

@@ -156,9 +156,8 @@ nlohmann::json SeedClient::getRepo(const std::string& rid)
     return getJson("/repos/" + urlEncode(rid));
 }
 
-nlohmann::json SeedClient::listBranches(const std::string& rid)
+nlohmann::json branchesFrom(const nlohmann::json& repo)
 {
-    const nlohmann::json repo = getRepo(rid);
     if (isError(repo)) return repo;
 
     // Same map resolveSha() reads: refs.refs is "refs/heads/main" -> sha,
@@ -183,6 +182,11 @@ nlohmann::json SeedClient::listBranches(const std::string& rid)
         project.value("data", nlohmann::json::object()).value("defaultBranch", "");
 
     return nlohmann::json{{"items", items}, {"default", defaultBranch}};
+}
+
+nlohmann::json SeedClient::listBranches(const std::string& rid)
+{
+    return branchesFrom(getRepo(rid));
 }
 
 std::string SeedClient::resolveSha(const std::string& rid, const std::string& ref)

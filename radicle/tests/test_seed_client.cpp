@@ -202,6 +202,41 @@ LOGOS_TEST(list_branches_on_a_repo_with_no_refs_returns_an_empty_list_not_an_err
     LOGOS_ASSERT_EQ(out["items"].size(), size_t(0));
 }
 
+/// `localListBranches` derives its answer from the local backend's repo
+/// document using this same function, rather than adding a `listBranches`
+/// entry point to the FFI. That is only correct if the derivation depends on
+/// nothing but the document — no seed, no transport, no client state. Calling
+/// it directly on a parsed document is what pins that.
+LOGOS_TEST(branches_are_derived_from_the_document_alone_so_both_sources_agree)
+{
+    const auto doc = nlohmann::json::parse(kRepoJson);
+
+    // Straight from the document, exactly as localListBranches does it.
+    const auto direct = branchesFrom(doc);
+
+    // Through the seed client, which fetches the same document first.
+    FakeSeed seed;
+    seed.replies["/repos/rad%3AzTEST"] = kRepoJson;
+    SeedClient client("https://example.test");
+    client.setTransport(seed.transport());
+    const auto viaSeed = client.listBranches("rad:zTEST");
+
+    // Byte-identical: a view must render either source without branching, and
+    // a branch picker is no exception.
+    LOGOS_ASSERT_EQ(direct.dump(), viaSeed.dump());
+}
+
+LOGOS_TEST(branches_from_passes_an_error_document_through_untouched)
+{
+    // localListBranches relies on this: it hands the local backend's reply
+    // straight in, and an error must stay an error rather than becoming an
+    // empty branch list that would render as "this repo has no branches".
+    const auto err = makeError("repository not found locally");
+    LOGOS_ASSERT_TRUE(isError(branchesFrom(err)));
+    LOGOS_ASSERT_EQ(branchesFrom(err)["error"].get<std::string>(),
+                    std::string("repository not found locally"));
+}
+
 // ---------------------------------------------------------------------------
 // URL shapes. Both of these were found by probing the live API and are easy to
 // regress silently — a wrong one yields a bare 404 or 400 with no clue.

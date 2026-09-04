@@ -285,8 +285,23 @@ Item {
 
                 // Sync: pull the whole repository into the local cache so
                 // browsing afterwards needs no further requests.
+                //
+                // Shown ONLY for the remote source, and the test is positive
+                // (`=== "remote"`) rather than "not local" on purpose. Caching
+                // is worth doing exactly when the data is behind a network
+                // round trip; every other source reads storage this machine
+                // already has, so a new one — an embedded node, say — should
+                // inherit "no sync button" by default rather than silently
+                // acquire one that copies local files into a cache of
+                // themselves. Adding a source must not require remembering to
+                // come back here.
+                //
+                // Hidden rather than disabled, the same reasoning as the
+                // toggle's own local segment: a control that can only do
+                // something pointless reads as a broken feature.
                 Rectangle {
                     id: syncButton
+                    visible: page.app && page.app.source === "remote"
                     // "Update available" is a colour/label change only — the
                     // button stays exactly as clickable as always. Re-syncing
                     // is never wrong, just sometimes unnecessary, so this

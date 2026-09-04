@@ -1,0 +1,141 @@
+# End-to-end UI test: browsing the LOCAL node instead of a seed.
+#
+# RUN IT WITH THE WRAPPER, NOT BY HAND:
+#
+#   sh radicle-ui/tests/run-local-e2e.sh
+#
+# See browse.yaml's header for how to run these at all.
+#
+# This is the only spec that exercises the `local*` half of the module. Every
+# other one goes through a seed over HTTPS; this one reads ~/.radicle in
+# process, which is a completely different code path (a Rust staticlib over
+# the `radicle` crate) behind an identical JSON contract.
+#
+# ---------------------------------------------------------------------------
+# IT NEEDS RAD_HOME SET, WHICH IS WHY THE WRAPPER EXISTS
+# ---------------------------------------------------------------------------
+#
+# sitometres gives every run a throwaway $HOME so a test cannot touch your real
+# wallets and keys. LocalStore resolves the Radicle home from RAD_HOME, else
+# $HOME/.radicle — so under that throwaway HOME there is no profile,
+# getCapabilities reports localAvailable=false, the toggle hides its "Local"
+# segment, and step 3 below fails with
+#
+#     state "root.localAvailable === true" — evaluated to false
+#
+# on EVERY machine, including one with a perfectly good profile.
+#
+# This header used to claim that failure meant "this machine has no Radicle
+# profile". It did not, and the mistake was expensive: the one automated check
+# covering local browsing was permanently red for a reason unrelated to the
+# code under test, so it was never run, and the local path shipped with no
+# working end-to-end coverage at all. A check that cannot pass is worth no more
+# than one that cannot fail.
+#
+# run-local-e2e.sh passes --env RAD_HOME=<your profile>, which restores local
+# browsing while keeping the throwaway HOME's isolation. It fails loudly with a
+# sentence when there is genuinely no profile, so an unprepared machine still
+# reports the truth rather than skipping quietly — the distinction this
+# repository has been burned on twice before.
+#
+# It is NOT wired into CI: a CI runner has no Radicle profile and seeding one
+# is its own piece of work. Run it locally, against your own node, after
+# `lgs basecamp build-portable`.
+#
+# The assertions avoid anything specific to one person's node. "How many
+# repositories" and "which repository is first" vary per machine, so what is
+# pinned is the shape: the source actually switched, data arrived through the
+# local path, and no error surfaced.
+
+app: radicle_ui
+with: [radicle]
+timeout: 30s
+
+steps:
+  - name: the app opens
+    open: radicle_ui
+
+  - name: it becomes ready
+    wait_for:
+      state: "root.ready === true"
+    timeout: 45s
+
+  # getCapabilities() drives whether the toggle offers a local segment at all.
+  # Asserting it before clicking turns "this machine has no node" into a clear
+  # failure here rather than a confusing missing-element failure one step down.
+  - name: this machine has a local Radicle profile
+    wait_for:
+      state: "root.localAvailable === true"
+    timeout: 45s
+
+  - name: switch to the local node
+    click: { objectName: "sourceToggle_local" }
+
+  - name: every call now routes to the local surface
+    wait_for:
+      state: "root.source === 'local'"
+    timeout: 30s
+
+  # The payoff: repositories read out of ~/.radicle/storage, with no network
+  # involved. A node with a profile but no repositories would legitimately
+  # report zero, so this asserts data arrived AND nothing errored — the two
+  # together are what distinguish "empty node" from "broken read".
+  - name: local repositories arrive
+    wait_for:
+      state: "root.repoCount > 0"
+    timeout: 60s
+
+  - name: no error surfaced while listing local repositories
+    expect:
+      state: "root.navError === ''"
+
+  - name: open the first local repository
+    click: { objectName: "repoRow", nth: 0 }
+
+  # Tree reads go through localGetTree — git-native, out of the bare repo in
+  # storage rather than over HTTP.
+  - name: its source tree loads from local storage
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+        - "root.treePath === ''"
+    timeout: 60s
+
+  - name: no error surfaced while reading the tree
+    expect:
+      state: "root.navError === ''"
+
+  # ---- commits ------------------------------------------------------------
+  #
+  # Tab 1. localListCommits walks the repository's own history with git2 and
+  # has to page it the same way the seed's endpoint does.
+  - name: switch to the commits tab
+    click: { objectName: "sectionTab", nth: 1 }
+
+  - name: commits arrive from local storage
+    wait_for:
+      state:
+        - "root.repoTab === 1"
+        - "root.commitCount > 0"
+    timeout: 60s
+
+  - name: no error surfaced while listing commits
+    expect:
+      state: "root.navError === ''"
+
+  # ---- back to the seed ---------------------------------------------------
+  #
+  # Switching back must reset cleanly: a repository id from local storage is
+  # meaningless to a seed, so setSource() drops the whole navigation stack
+  # rather than carrying the current screen across. Ending on the remote source
+  # also leaves the app in its default state for the next run.
+  - name: switch back to the seed
+    click: { objectName: "sourceToggle_remote" }
+
+  - name: the switch resets to the repository list on the remote source
+    wait_for:
+      state:
+        - "root.source === 'remote'"
+        - "root.navView === 'repos'"
+    timeout: 30s

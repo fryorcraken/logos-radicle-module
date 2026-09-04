@@ -43,7 +43,13 @@ Item {
 
     function fetch() {
         if (!app) return;
-        var args = [page.query, page_, 50];
+        // The first argument means different things per source: a search
+        // `query` for the seed, a `scope` ("all"|"delegate"|"private"|
+        // "seeded") for the local node. Passing the search box's text as a
+        // scope would silently narrow to nothing, so local browsing always
+        // asks for "all" and the search field is hidden for it.
+        var first = (app.source === "local") ? "all" : page.query;
+        var args = [first, page_, 50];
         page.loading = true;
         app.call("ListRepos", args, function (data) {
             page.loading = false;

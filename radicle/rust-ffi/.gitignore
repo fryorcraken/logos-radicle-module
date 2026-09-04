@@ -1,0 +1,4 @@
+/target/
+# Scratch Radicle homes built by tests/local_storage.rs. Kept inside the repo
+# (not /tmp) so everything a test writes stays under the working directory.
+/tmp/

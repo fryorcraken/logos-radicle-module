@@ -110,4 +110,19 @@ std::string urlEncode(const std::string& s);
  */
 nlohmann::json paginate(const nlohmann::json& arr, int64_t page, int64_t perPage);
 
+/**
+ * Derive `{"items":[{"name","head"}],"default":"<branch>"}` from a repo
+ * document's `refs.refs` map.
+ *
+ * Free-standing rather than a SeedClient method because BOTH sources need it
+ * and both already produce the repo document in the same shape — the remote
+ * one from the seed, the local one from the Rust backend. A second
+ * implementation for the local side (or a `localListBranches` entry point in
+ * the FFI) would be one filter written twice, and a place for the two sources
+ * to drift apart on which refs count as branches.
+ *
+ * Passes `{"error":...}` objects through untouched.
+ */
+nlohmann::json branchesFrom(const nlohmann::json& repo);
+
 } // namespace radicle
