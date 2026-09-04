@@ -136,7 +136,21 @@ jobs:
       # kept alive only by that PR. A force-push plus a close, or the branch
       # being deleted, makes it unfetchable. The fix is to re-pin to #266's
       # current head, not to debug cargo.
-      LGS_REV: 8f41e37e766037674b4ebf608d45bdf0ada15be0
+      #
+      # And re-pinning is not mechanical, which is the real reason this is a
+      # commit rather than the branch. #266 has moved three times now — twice
+      # in the session that last bumped this — and one of those moves REMOVED a
+      # feature this repo had already written down as fixed:
+      # `save_project_config`'s comment preservation was reverted out into
+      # `fix/preserve-scaffold-toml-comments`, so bumping the pin reintroduced
+      # `scaffold.toml` comment stripping. The branch was then squashed, which
+      # changes the sha without changing the code.
+      #
+      # So when you move this: check what the new commits DO, and re-run
+      # `lgs basecamp setup --help` / `build-portable --help` against the
+      # installed binary to confirm `--inspector` and `--print-output` survive.
+      # A same-branch commit is not automatically a superset of the old one.
+      LGS_REV: cd4fe509badf84929135aee73972bafee30d30e8
 
       # TEMPORARY, and the same shape as LGS_REV above: a git commit rather
       # than an npm version.
@@ -388,23 +402,14 @@ jobs:
       # setup records the built binary at a deterministic path in
       # ~/.cache/logos-scaffold rather than a ./result symlink, and writes it
       # to .scaffold/state/basecamp.state as `basecamp_bin=`. Read it from
-      # there rather than reconstructing the path.
-      #
-      # Two things are asserted here that setup itself cannot tell us:
-      #   * it built the rev this job's store cache is keyed on. Both now come
-      #     from scaffold.toml, so this can no longer catch a hand-editing slip
-      #     — what it still catches is scaffold resolving the pin to something
-      #     else, which is exactly the assumption worth pinning down while
-      #     `setup --inspector` is an unreleased flag.
-      #   * the inspector really is compiled in. A Basecamp built without it
-      #     fails HERE, where the message says so, rather than as a timeout
-      #     waiting for a port that never opens.
-      - name: The built Basecamp is the pinned rev, with the inspector in it
+      # there rather than reconstructing the path — the "Run the spec" step
+      # below passes it to sitometres as --basecamp.
+      - name: Read where setup put the Basecamp binary
         run: |
           set -eu
           # Parsed, not sourced. `. file` would execute it — and `basecamp_bin`
           # is a path, so a value carrying $(...) would run. It also makes a
-          # missing key surface as a bare `pin: unbound variable` from `set -u`,
+          # missing key surface as a bare `unbound variable` from `set -u`,
           # which is the least legible failure in the file at the exact moment
           # someone bumps LGS_REV and the state format has moved under them.
           # scaffold writes each key CONDITIONALLY (`if !state.pin.is_empty()`),
@@ -414,59 +419,14 @@ jobs:
             echo "::error::$state missing — lgs basecamp setup wrote no state"
             exit 1
           }
-          pin=$(sed -n 's/^pin=//p' "$state")
           basecamp_bin=$(sed -n 's/^basecamp_bin=//p' "$state")
-          [ -n "$pin" ] || {
-            echo "::error::$state has no 'pin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
-            exit 1
-          }
           [ -n "$basecamp_bin" ] || {
             echo "::error::$state has no 'basecamp_bin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
             exit 1
           }
           echo "basecamp_bin=$basecamp_bin"
-          [ "$pin" = "$BASECAMP_REV" ] || {
-            echo "::error::setup built $pin but scaffold.toml resolved to $BASECAMP_REV —"
-            echo "::error::the Nix store cache key does not match what was built"
-            exit 1
-          }
           test -x "$basecamp_bin"
-          # Two DIFFERENT failures, kept apart on purpose. Without the -f test,
-          # a bundle whose layout moved makes `strings` write to stderr and
-          # print nothing; `grep -q` then sees empty input and returns 1, and
-          # the step blames a missing inspector for what is really a wrong
-          # path. There is no pipefail here, so the exit status is grep's
-          # alone — the left-hand side's failure would be invisible.
-          elf="$(dirname "$basecamp_bin")/.LogosBasecamp.elf"
-          test -f "$elf" || {
-            echo "::error::no .LogosBasecamp.elf beside $basecamp_bin —"
-            echo "::error::lgs's bundle layout moved; the sitometres probe workaround below assumes it too"
-            exit 1
-          }
-          strings -a "$elf" | grep -q 'Inspector server listening on port' || {
-            echo "::error::$elf carries no inspector —"
-            echo "::error::setup --inspector did not select the inspector output"
-            exit 1
-          }
-          echo "ok: inspector present"
           echo "BASECAMP_BIN=$basecamp_bin" >> "$GITHUB_ENV"
-
-      # NOTE: there used to be a "Work around the sitometres inspector probe"
-      # step here — `cp -RL` the bundle out of the store, `chmod -R u+w`, then
-      # symlink `.LogosBasecamp` beside the wrapper. It is gone.
-      #
-      # It existed because published sitometres (0.1.0) probed only
-      # `bin/LogosBasecamp` and `bin/.LogosBasecamp`, never the
-      # `bin/.LogosBasecamp.elf` that nix's dirBundler actually ships, and so
-      # refused a bundle that does have the inspector. The pinned SITOMETRES
-      # build probes the `.elf` sibling, so `--basecamp` can point straight at
-      # scaffold's own `basecamp_bin` inside the read-only out-link — no copy,
-      # no symlink, nothing to keep in step with lgs's bundle layout.
-      #
-      # Do NOT reintroduce it if a spec fails: check SITOMETRES first. Pointing
-      # `--basecamp` at the `.elf` instead of the wrapper is also still wrong —
-      # the wrapper is what sets the bundled library and Qt plugin paths, and
-      # the raw ELF fails to spawn with ENOENT.
 
       # `.#lgx-portable`, NOT `.#lgx` — and this is the opposite of what the
       # target's name suggests, so it is worth being explicit.

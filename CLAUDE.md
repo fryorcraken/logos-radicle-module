@@ -293,7 +293,7 @@ release.** Install this and nothing else:
 
 ```bash
 cargo install --git https://github.com/logos-co/scaffold.git \
-  --rev 8f41e37e766037674b4ebf608d45bdf0ada15be0 logos-scaffold --locked
+  --rev cd4fe509badf84929135aee73972bafee30d30e8 logos-scaffold --locked
 ```
 
 That is the same commit both CI workflows pin in `LGS_REV`, and it is a
@@ -396,19 +396,31 @@ The same principle covers the test scripts: `run-qml-tests.sh` and
 `check-qml-syntax.sh` take no arguments and set their own environment
 deliberately. Extend that when adding a script rather than inventing flags.
 
-### `basecamp setup` used to strip the comments from `scaffold.toml`
+### `basecamp setup` strips the comments from `scaffold.toml` — again
 
-It rewrites the file, and the rewrite used to drop every comment. This repo's
+It rewrites the file, and the rewrite drops every comment. This repo's
 `scaffold.toml` carries load-bearing ones — why `runtime_dir` is pinned to the
 session's real runtime dir (the `sun_path` 108-byte cap that made *every*
 module segfault, and Qt needing `XDG_RUNTIME_DIR` to find the Wayland socket).
 Losing them re-opened a bug that cost a full debugging session.
 
-**Fixed** in the scaffold build this repo pins (`save_project_config` now
-rewrites in place through `toml_edit` instead of rendering a fresh document).
-The `NOTE:` in `scaffold.toml` warning about it has been removed accordingly.
-Still worth a `git diff scaffold.toml` after a `setup` — but now to see what it
-*did* change, not to repair what it destroyed.
+This was briefly fixed and then **un-fixed under us**, which is worth reading
+as a caution about pinning to an open PR branch rather than as a complaint.
+Scaffold#266 grew a `toml_edit`-based `save_project_config` that rewrote in
+place and preserved comments; its author then reverted that work into a
+separate PR (`fix/preserve-scaffold-toml-comments`) on the grounds that ~500
+lines of config-writer surgery had nothing to do with selecting a basecamp
+build. The revert is #266's current head, and it is what `LGS_REV` now pins —
+so the comment stripping is back, and only the inspector opt-in and
+`--print-output` remain.
+
+Verified rather than assumed, on the pinned build: a `setup --inspector` run in
+a worktree removed 26 of `scaffold.toml`'s comment lines.
+
+**So: run `git diff scaffold.toml` after any `setup` and restore what it
+destroyed.** The comment block above `[basecamp.profiles.*]` says this itself.
+When `fix/preserve-scaffold-toml-comments` merges, this section reverts to
+"fixed".
 
 ### The one thing `lgs` genuinely does not cover
 
@@ -472,16 +484,16 @@ where the probe looks for `.LogosBasecamp` — verified by pointing `--basecamp`
 straight at it and getting "no Basecamp with the QML inspector compiled in".
 `lgs` changed where the bundle comes from, not what is inside it.
 
-**`setup` no longer strips `scaffold.toml` comments**, as of the same scaffold
-change — the `runtime_dir` / `sun_path` notes survive a run. Still worth a
-`git diff scaffold.toml` afterwards, but it should now show only the two
-`attr` lines.
+**`setup` still strips `scaffold.toml` comments** on the pinned build — that
+fix was reverted back out of #266. `git diff scaffold.toml` after every `setup`
+and restore the `runtime_dir` / `sun_path` block; see the section on it above.
 
 ### Upstream asks against logos-scaffold
 
-All three this repo had filed are **closed by
+Two of the three this repo had filed are **closed by
 [logos-co/scaffold#266](https://github.com/logos-co/scaffold/pull/266)**, which
-is what `LGS_REV` pins:
+is what `LGS_REV` pins; the third was closed and then reopened by #266's own
+revert:
 
 - ~~Select the inspector bundle through scaffold~~ — filed as
   [#265](https://github.com/logos-co/scaffold/issues/265), closed by `setup
@@ -490,7 +502,11 @@ is what `LGS_REV` pins:
   grounds that an attr name the user has to know and spell is a poor opt-in for
   a deliberately-not-a-release output. It also moves `[repos.lgpm].attr` in
   lockstep, which the one-line version would not have.
-- ~~`basecamp setup` should preserve `scaffold.toml` comments~~ — closed.
+- **`basecamp setup` should preserve `scaffold.toml` comments** — briefly
+  closed by #266, then reverted out of it into
+  `fix/preserve-scaffold-toml-comments`, so it is **open again** and the
+  stripping is live on the pinned build. See "`basecamp setup` strips the
+  comments from `scaffold.toml` — again" above.
 - ~~`basecamp build` should pass build logs through~~ — closed as
   `--print-output` (reusing `install`'s existing flag name rather than adding
   `--print-build-logs` as a second name for the same thing). Both workflows
@@ -1281,8 +1297,10 @@ Four things that are CI-specific and not obvious from the local workflow:
   bundle build it also serves. A literal in the job's `env:` would be a second
   source of truth whose divergence nothing reports: the cache would key on the
   stale rev and every run would recompile Basecamp, with green specs and no
-  error. The step after `setup` still cross-checks what was actually built
-  against that value.
+  error. The job used to cross-check `basecamp.state`'s `pin=` against it after
+  `setup`; that assertion has been dropped, since both values now come from the
+  same `scaffold.toml` key and it could only ever have caught scaffold
+  resolving the pin to something other than what it read.
 - **The staging step spells out the four release filenames.** `lgs` names its
   symlinks `<NN>-<module>.lgx` for load order; the release contract is the
   published names, and the module catalog references them. The mapping is

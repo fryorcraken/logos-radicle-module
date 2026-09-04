@@ -259,7 +259,7 @@ jobs:
       # kept alive only by that PR. A force-push plus a close, or the branch
       # being deleted, makes it unfetchable. The fix is to re-pin to #266's
       # current head, not to debug cargo.
-      LGS_REV: 8f41e37e766037674b4ebf608d45bdf0ada15be0
+      LGS_REV: cd4fe509badf84929135aee73972bafee30d30e8
     steps:
       - uses: actions/checkout@v7
 
