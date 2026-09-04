@@ -21,6 +21,7 @@ logos_test(
         ../src/seed_client.cpp
         ../src/local_store.cpp
         ../src/local_reader.cpp
+        ../src/local_writer.cpp
         # Linked even though the tests inject their own transport: SeedClient
         # still references httpGet as its default.
         ../src/http_client.cpp
@@ -29,6 +30,7 @@ logos_test(
         test_seed_client.cpp
         test_local_store.cpp
         test_local_reader.cpp
+        test_local_writer.cpp
     EXTRA_INCLUDES
         ../src
 )
