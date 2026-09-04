@@ -1,11 +1,11 @@
 {
   "name": "radicle",
-  "display_name": "Radicle",
+  "display_name": "Radicle Module",
   "version": "0.2.1",
   "type": "core",
   "interface": "universal",
   "category": "development",
-  "description": "Browse Radicle repositories — any public repo via a seed node, or your own via a local node",
+  "description": "Core module for Radicle — seed-node HTTP and local-node reads behind one API",
   "main": "radicle_plugin",
   "dependencies": [],
 
