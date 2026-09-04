@@ -193,6 +193,25 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # `lgs` builds the modules below. There is no flake and no release
+      # binary for logos-scaffold — `cargo install` from crates.io is the
+      # documented install path — so this is a Rust build, cached on ~/.cargo.
+      #
+      # Pinned to an exact version on purpose: an unpinned `cargo install`
+      # would silently change the tool that drives every module build here the
+      # next time upstream publishes. Bump deliberately.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-lgs-${{ runner.os }}-0.3.1
+
+      - name: Install logos-scaffold
+        run: cargo install logos-scaffold --version 0.3.1 --locked
+
       # Unit tests for the core module's logic (URL building, ref resolution,
       # pagination, error shapes, local-profile detection).
       #
@@ -205,17 +224,27 @@ jobs:
           nix build ".#checks.$(nix eval --raw --impure --expr builtins.currentSystem).unit-tests" \
             -L --out-link result-test
 
-      - name: Build core module (dev + portable)
-        run: |
-          cd radicle
-          nix build '.#lgx'          --out-link result-lgx
-          nix build '.#lgx-portable' --out-link result-lgx-portable
-
-      - name: Build UI module (dev + portable)
-        run: |
-          cd radicle-ui
-          nix build '.#lgx'          --override-input radicle path:../radicle --out-link result-lgx
-          nix build '.#lgx-portable' --override-input radicle path:../radicle --out-link result-lgx-portable
+      # Both modules, both variants, one command. `lgs` reads the captured
+      # [modules.*] table in scaffold.toml, builds in dependency order, and
+      # derives `--override-input radicle path:../radicle` for radicle-ui
+      # itself by parsing its flake.nix — which is why that input must stay on
+      # a single line (scaffold's parser is line-based).
+      #
+      # This needs NO `lgs basecamp setup`: that step exists to pin and build
+      # the basecamp + lgpm binaries and seed the alice/bob profiles, none of
+      # which a build touches. `lgs basecamp docs` names "CI / sandboxed
+      # environments where `lgs basecamp setup` can't or shouldn't run" as a
+      # supported case for a hand-authored [modules.*] table, and this job is
+      # exactly that. Verified: the build below runs green on a checkout with
+      # no `.scaffold/` in it.
+      #
+      # Artefacts land at deterministic paths, one directory per variant:
+      #   .scaffold/basecamp/lgx/<NN>-<module>.lgx        (dev)
+      #   .scaffold/basecamp/portable/<NN>-<module>.lgx   (portable)
+      # as symlinks into the nix store, NN being the load-order index. That
+      # per-module, per-variant addressing is what the steps below rely on.
+      - name: Build both modules (dev + portable)
+        run: lgs basecamp build --variant all
 
       # The `view` field must survive packaging: without it basecamp skips the
       # plugin silently. This is the check that would have caught the app
@@ -223,30 +252,35 @@ jobs:
       - name: Packaged manifest keeps its ui_qml entry points
         run: |
           set -eu
-          for variant in result-lgx result-lgx-portable; do
-            tar xzf radicle-ui/$variant/*.lgx -O manifest.json > /tmp/m.json
-            python3 - <<'PY'
-          import json
+          for variant in lgx portable; do
+            tar xzf .scaffold/basecamp/$variant/02-radicle_ui.lgx -O manifest.json > /tmp/m.json
+            python3 - "$variant" <<'PY'
+          import json, sys
           m = json.load(open("/tmp/m.json"))
           assert m.get("view"), "packaged manifest lost its 'view' — basecamp will skip this plugin"
           assert m.get("main"), "packaged manifest lost its 'main'"
           assert m.get("icon"), "packaged manifest lost its 'icon'"
-          print("ok:", m["name"], "view =", m["view"])
+          print(f"ok ({sys.argv[1]}):", m["name"], "view =", m["view"])
           PY
           done
 
+      # The release contract is the filename: the `release` job publishes
+      # exactly these four names and the catalog references them, so they are
+      # spelled out here rather than derived. `lgs` names its symlinks
+      # `<NN>-<module>.lgx` for load-order legibility — a different naming
+      # scheme with a different purpose — so this step maps one to the other
+      # explicitly. `cp -L` dereferences the symlink into the store.
+      #
+      # Dev variants get the -dev suffix; they resolve libraries from the host
+      # nix store and only work with a basecamp built from source.
       - name: Stage artifacts
         run: |
           set -eu
           mkdir -p dist
-          cp radicle/result-lgx-portable/*.lgx    dist/
-          cp radicle-ui/result-lgx-portable/*.lgx dist/
-          # Dev variants get a -dev suffix; they resolve libraries from the
-          # host nix store and only work with a basecamp built from source.
-          for f in radicle/result-lgx/*.lgx radicle-ui/result-lgx/*.lgx; do
-            base=$(basename "$f" .lgx)
-            cp "$f" "dist/${base}-dev.lgx"
-          done
+          cp -L .scaffold/basecamp/portable/01-radicle.lgx    dist/logos-radicle-module-lib.lgx
+          cp -L .scaffold/basecamp/portable/02-radicle_ui.lgx dist/logos-radicle_ui-module.lgx
+          cp -L .scaffold/basecamp/lgx/01-radicle.lgx         dist/logos-radicle-module-lib-dev.lgx
+          cp -L .scaffold/basecamp/lgx/02-radicle_ui.lgx      dist/logos-radicle_ui-module-dev.lgx
           ls -la dist/
 
       - uses: actions/upload-artifact@v4

@@ -388,12 +388,37 @@ different answers.
 
 ### A note on tooling in this repo
 
-Read files with the `Read` tool, not `cat` or `grep` through Bash. This
-session's permission setup blocks Bash commands it cannot statically analyse —
-inline `VAR=value` prefixes, `sh <relative-path>`, `cd && grep <relative>` —
-and each one costs a prompt. The test scripts take no arguments and set their
-own environment for exactly this reason. Bash is for `lgs`, `nix`, `git`, `gh`
-and running those scripts by absolute path.
+**Reach for `lgs` for anything build-, run- or install-shaped.** This is a
+scaffold-managed project; the next section is the verb table. Raw `nix build`
+has exactly two legitimate uses here (the core unit tests and the inspector
+Basecamp), both named below. If you find yourself writing a `nix build` pair
+with a hand-written `--override-input`, or `mkdir dist && cp result-*/*.lgx`,
+stop — `lgs` already does that, and does it in dependency order.
+
+Read files with the `Read` tool, not `cat` or `grep` through Bash.
+
+The permission setup blocks Bash commands it cannot statically analyse, and
+each one costs the user a manual approval click. What that means in practice:
+
+| Free — never prompts | Costs a click every time |
+|---|---|
+| the `Read` tool, for any file | `cat`, `grep`, `ls`, `head`, `tail` |
+| one plain command per call | `\|`, `&&`, `;`, `$(…)`, `<(…)` |
+| `lgs …`, `git …`, `nix build …` | a glob, a loop, a `VAR=value` prefix |
+| `gh api …`, `gh pr …`, `gh run …` | the same with `--jq` appended |
+| the test scripts, by absolute path | `sh <relative-path>` |
+| | anything resolving into `/nix/store` or `~/.cargo` |
+
+Two that catch people repeatedly:
+
+- **`gh` is free until you filter it.** `gh api repos/o/r/releases` runs
+  unprompted; adding `--jq '.[].tag_name'` makes it unanalysable and costs a
+  click. Run it plain and read the JSON — that costs nothing.
+- **Never `readlink` or `ls` a `/nix/store` path** to find out where an
+  artefact went. The paths are documented below; use them.
+
+The test scripts take no arguments and set their own environment for exactly
+this reason.
 
 ## This is a scaffold-managed project — reach for `lgs` first
 
@@ -404,67 +429,158 @@ all have an `lgs` verb, and reaching straight for `nix build` skips the part
 scaffold does for you — resolving each module's flake ref, ordering the two
 builds by dependency, and deriving the sibling `--override-input`.
 
-**Version:** everything below needs `lgs` **v0.3.0 or newer** — that release
-introduced the top-level `[modules.*]` schema this repo uses (v0.2.0 keyed them
-under `[basecamp.modules.*]`) along with `develop`, `build`, `run` and `paths`.
-The machine this was written on runs a master build, which also self-reports
-`0.3.0`; master is a handful of fix commits ahead of the tag and adds no
-subcommands, so the tagged v0.3.0 is enough. `lgs --version` cannot distinguish
-the two — if a command here is missing, you are on v0.2.0 or older.
+**Version:** everything below needs `lgs` **v0.3.1 or newer**. Two changes
+matter. v0.3.0 moved the module table from `[basecamp.modules.*]` to the
+top-level `[modules.*]` this repo uses, and added `develop`, `build`, `run` and
+`paths`. v0.3.1 (2026-09-03) is eight fix commits on top, including three
+basecamp blockers found running scaffold's own dogfooding runbook.
 
-| Instead of | Run |
+Install it from crates.io — there is no flake and no release binary:
+
+```bash
+cargo install logos-scaffold --version 0.3.1 --locked
+```
+
+**Everything documented here was verified against released v0.3.1**, so a
+teammate on the release can run all of it; nothing is master-only.
+
+One trap if you are on a build from a clone rather than the release. The
+version string was bumped 0.3.0 → 0.3.1 only in the release commit itself, so
+any master build from that eight-commit window reports `0.3.0` while carrying
+most of v0.3.1's code, and `--version` cannot tell you which. This repo was
+originally documented from exactly such a build. If `lgs --version` says
+`0.3.0`, check whether it is a path install (`cargo install` prints the package
+source when it replaces one) before assuming you are behind. A genuinely
+missing command below means v0.2.0 or older, which is a schema difference you
+will notice anyway.
+
+### The verb table
+
+| You want to | Run |
 |---|---|
-| `cd radicle && nix build '.#lgx'` (both modules, then `lgpm install`) | `lgs basecamp install` |
-| `nix build '.#lgx-portable'` in each dir, with a hand-written `--override-input` | `lgs basecamp build-portable` |
-| `nix build '.#lgx'` just to check it compiles | `lgs basecamp build --variant lgx [--module radicle_ui]` |
-| `nix develop` in a module dir | `lgs basecamp develop radicle_ui` |
-| launching Basecamp by hand | `lgs basecamp launch alice` |
+| build both modules, both variants | `lgs basecamp build --variant all` |
+| build just the portable artefacts (e2e, AppImage) | `lgs basecamp build-portable` |
+| check one module still compiles | `lgs basecamp build --variant lgx --module radicle_ui` |
+| install into the dev profiles | `lgs basecamp install` |
+| launch Basecamp for manual testing | `lgs basecamp launch alice` |
+| enter a module's dev shell | `lgs basecamp develop radicle_ui` |
+| find a profile's log / module / XDG dirs | `lgs basecamp paths alice` |
+| check `[modules.*]` against installed state | `lgs basecamp doctor` |
+| read the module-project contract | `lgs basecamp docs` |
 
-`lgs basecamp paths alice` prints where that profile's log, module and XDG dirs
-actually resolve to — quicker than guessing when a log is not where you expect.
-`lgs basecamp doctor` reports drift between `[modules.*]` and the installed
-profiles.
+`build` takes `--variant {lgx,lgx-portable,all}` and an optional
+`--module <name>`; `build-portable` is the alias for `--variant lgx-portable`.
+Both read `[modules.*]`, build in dependency order, and **derive
+`--override-input radicle path:../radicle` for `radicle-ui` themselves** — never
+write that flag by hand.
 
-Two things `lgs` deliberately does **not** cover, both kept as raw `nix` below:
-the core module's unit tests (`nix build '.#checks…'` — no `lgs` equivalent),
-and the inspector-enabled Basecamp bundle for sitometres (a third-party flake
-plus a workaround for a sitometres probe bug — outside scaffold's scope). CI
-also stays on explicit `nix build` calls on purpose: it needs per-step
-`--out-link` names and `--print-build-logs`, and per-sub-flake jobs give useful
-matrix parallelism. Do not convert `.github/workflows/`.
+### Where the artefacts land
 
-### Your local `basecamp` skill copy may be a stale v0.2.0 one
+Deterministic, and worth knowing so you never probe the filesystem for them:
+
+```
+.scaffold/basecamp/lgx/<NN>-<module>.lgx        # dev    (--variant lgx)
+.scaffold/basecamp/portable/<NN>-<module>.lgx   # portable
+```
+
+Concretely `01-radicle.lgx` and `02-radicle_ui.lgx` in each. `NN` is the
+load-order index, so the numbering *is* the dependency order. They are
+**symlinks into the nix store**; both directories are wiped and recreated on
+each build. Use `cp -L` if you need a real file.
+
+Note the two variants land in **separate directories**, so `--variant all`
+gives you per-module, per-variant addressing — not one flat directory.
+
+### `build` does not need `basecamp setup`
+
+`setup` pins and builds the basecamp + lgpm binaries and seeds the `alice` /
+`bob` profiles. A *build* touches none of that, and `lgs basecamp docs`
+explicitly supports a hand-authored `[modules.*]` table in "CI / sandboxed
+environments where `lgs basecamp setup` can't or shouldn't run". Verified here:
+`lgs basecamp build --variant all` runs green in a fresh worktree with no
+`.scaffold/` at all. Only `install` and `launch` need `setup`.
+
+### `basecamp setup` strips the comments from `scaffold.toml`
+
+It rewrites the file, and the rewrite does not preserve comments. This repo's
+`scaffold.toml` carries load-bearing ones — why `runtime_dir` is pinned to the
+session's real runtime dir (the `sun_path` 108-byte cap that made *every*
+module segfault, and Qt needing `XDG_RUNTIME_DIR` to find the Wayland socket).
+Losing them re-opens a bug that cost a full debugging session.
+
+**If you run `setup`, check `git diff scaffold.toml` afterwards and restore the
+comments.** Logged as an upstream ask below.
+
+### The two things `lgs` genuinely does not cover
+
+1. **The core module's unit tests.** There is no verb for a flake's `checks`
+   outputs, so that stays `nix build '.#checks…'`.
+2. **The inspector-enabled Basecamp bundle** the e2e layer needs.
+   `lgs basecamp setup` takes only `--quiet` — no `--rev`, no `--flake`, no way
+   to pin a different Basecamp build — so there is no `lgs` route to
+   `#bin-bundle-dir-inspector` at a chosen rev. That one raw `nix build` is
+   legitimate and is not a sign you should hand-roll the rest.
+
+Everything else has a verb. Use it.
+
+### Upstream asks against logos-scaffold
+
+Worth filing; none blocks anything today.
+
+- **A way to pin the Basecamp build.** A `--rev` on `basecamp setup`, or a
+  `[basecamp]` key in `scaffold.toml`. `lgs basecamp develop`'s own help says
+  its purpose is "verb-set symmetry so contributors stop reaching for raw
+  `nix`" — by that standard the inspector-bundle gap is against scaffold's
+  stated intent.
+- **`basecamp setup` should preserve `scaffold.toml` comments** on rewrite.
+- **`basecamp build` could take `--out-link` / `--print-build-logs`
+  passthrough.** Not needed for this repo's CI (see the CI section), but it is
+  the one place a raw `nix build` still buys something `lgs` cannot express.
+
+### Your local `basecamp` skill copy documents a different release
 
 `lgs init` generates `.claude/skills/`, `.cursor/` and `AGENTS.md`, and
-`.gitignore` excludes all three — they are regenerated, not checked in. That
-means the copy on your disk is whatever `lgs init` last wrote, and it does not
-refresh itself when you upgrade `lgs`.
+`.gitignore` excludes all three — they are regenerated, not checked in. The
+copy on your disk is whatever `lgs init` last wrote, and it does not refresh
+itself when you upgrade `lgs`.
 
-The copy on this machine is a **v0.2.0-era** one: it documents the schema as
-`[basecamp.modules.<name>]` throughout (including its own activation criteria)
-and omits `develop`, `build`, `run` and `paths`, so it reads as if `install` /
-`launch` / `build-portable` were the whole verb set and raw `nix` the only way
-to do anything else. That is exactly backwards for this repo.
+The copy on this machine describes **v0.2.0**: `[basecamp.modules.<name>]`
+throughout, and no `develop` / `build` / `run` / `paths`. It reads as if
+`install` / `launch` / `build-portable` were the whole verb set and raw `nix`
+the only way to do anything else — exactly backwards for this repo.
 
-**Upstream is already correct** — logos-scaffold's v0.3.0 skill has the
-`[modules.*]` schema and all ten subcommands, so there is nothing to report.
-Re-run `lgs init` to refresh the local copy. Until then, prefer this file, and
+It is worth being precise that this is a *version skew, not a defect*. The file
+correctly documents the release it was generated from; upstream's v0.3.x skill
+already has `[modules.*]` and the full verb set. So there is nothing to report
+upstream — the fix is to re-run `lgs init`. Until then prefer this file, and
 treat `lgs basecamp --help` as authoritative over either.
 
 ### If you are working in a git worktree
 
 A worktree has no `.scaffold/` — that directory is untracked, so it does not
-come along. `lgs basecamp doctor` there fails on missing basecamp/lgpm binaries
-and missing `alice`/`bob` profiles until you run `lgs basecamp setup` in the
-worktree itself.
+come along.
 
-What it does **not** mean is that you are building the main tree's code.
+**`build` and `build-portable` work anyway**, creating `.scaffold/basecamp/`
+as they go (see "`build` does not need `basecamp setup`" above). Only
+`install`, `launch` and `doctor` need the binaries and seeded profiles, so run
+`lgs basecamp setup` in the worktree itself when you want those — and check
+`git diff scaffold.toml` afterwards, because `setup` strips its comments.
+
+What none of this means is that you are building the main tree's code.
 `scaffold.toml`'s module refs are relative (`path:./radicle#lgx`), and `lgs`
 resolves them against the project root it was invoked from — so from a
-worktree, `install` and `build-portable` build that worktree's sources. The
-consequence is isolation, not a wrong-code hazard: the worktree's
-`launch alice` is a *separate* Basecamp instance with its own profile state,
-not the one the main tree launches.
+worktree, every verb acts on that worktree's sources. The consequence is
+isolation, not a wrong-code hazard: the worktree's `launch alice` is a
+*separate* Basecamp instance with its own profile state, not the one the main
+tree launches.
+
+This file previously said the opposite — "do not use `lgs basecamp` from a
+worktree", because `[basecamp.modules]` held **absolute** paths into the main
+tree, so a worktree run silently built `main`'s code. That was true when
+written and an agent lost time to it. It is no longer: the entries are now
+`[modules.*]` with relative `path:./…` refs (checked against `scaffold.toml`
+as of this change). If you ever see absolute paths return there, the old
+warning becomes true again — that is the thing to check, not the worktree.
 
 ## Tests are part of the change, not a follow-up
 
@@ -588,14 +704,44 @@ test and changing an `objectName` must be treated as an interface change.
 
 ## Running the end-to-end layer
 
-The specs need a Basecamp built **with the QML inspector**, which is a
-compile-time feature and is off in the shipping AppImage:
+The whole sequence, in order. Steps 1 and 2 are one-time per machine; step 3
+is the one you repeat.
 
 ```bash
+# 1. The inspector Basecamp. The ONE legitimate raw `nix build` here —
+#    `lgs basecamp setup` takes only --quiet, so there is no way to point it
+#    at a chosen rev or flake attr. See "The two things lgs does not cover".
 nix build 'github:logos-co/logos-basecamp/aa237766baf61404e12da86b7303cb41065464c9#bin-bundle-dir-inspector' -o result-bundle
+
+# 2. Work around the sitometres inspector probe (explained below).
+cp -RL result-bundle basecamp
+chmod -R u+w basecamp
+ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
+
+# 3. Build the modules and run the spec.
+lgs basecamp build-portable
+npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml \
+  --app radicle_ui \
+  --app-dir .scaffold/basecamp/portable \
+  --basecamp basecamp/bin/LogosBasecamp \
+  --variant linux-amd64 \
+  --strict
 ```
 
-sitometres 0.1.0 will then refuse it with "no Basecamp with the QML inspector
+Everything below is why each of those lines is shaped the way it is.
+
+### Why step 1 is raw `nix`
+
+The specs need a Basecamp built **with the QML inspector**, which is a
+compile-time feature and is off in the shipping AppImage. `lgs` has no route to
+it — `basecamp setup` builds the *pinned* Basecamp and exposes no `--rev` or
+`--flake` to choose another. That gap is on the upstream-asks list above; until
+it closes, this one `nix build` is correct and is not licence to hand-roll the
+module builds too.
+
+### Why step 2 exists (the inspector probe bug)
+
+sitometres 0.1.0 refuses the bundle with "no Basecamp with the QML inspector
 compiled in", even though the inspector is there. It decides by scanning for the
 inspector's log strings and probes exactly two paths: `bin/LogosBasecamp` (a
 5 KB shell wrapper) and `bin/.LogosBasecamp` (absent). The real ELF is
@@ -603,60 +749,30 @@ inspector's log strings and probes exactly two paths: `bin/LogosBasecamp` (a
 
 Do not simply point `--basecamp` at the `.elf`: that clears the check and then
 fails to spawn with `ENOENT`, because the wrapper is what sets up the bundled
-library and Qt plugin paths. Copy the bundle somewhere writable and give the
-probe the name it wants, keeping the wrapper as the binary:
+library and Qt plugin paths. So step 2 copies the bundle somewhere writable
+(the store is read-only) and adds the name the probe wants, keeping the wrapper
+as the binary. Drop all of it once sitometres also probes the `.elf` — this is
+the highest-value upstream fix anywhere in this stack.
 
-```bash
-cp -RL result-bundle basecamp && chmod -R u+w basecamp
-ln -sfn .LogosBasecamp.elf basecamp/bin/.LogosBasecamp
-# then: --basecamp basecamp/bin/LogosBasecamp
-```
-
-Drop all of this once sitometres also probes the `.elf`.
-
-### Testing a branch from a worktree: do not use `lgs basecamp`
-
-`lgs basecamp install` and `launch` read `scaffold.toml`, and its
-`[basecamp.modules]` entries are **absolute paths into the main tree**
-(`path:/…/radicle-logos-module/radicle`). Run from a worktree they therefore
-build and install `main`'s code, not the branch you are testing — and they say
-nothing about it, so the run looks fine while the change under test was never
-loaded. One agent in this session lost time to exactly that.
-
-From a worktree, build the worktree's own flakes and launch the pinned binary
-yourself: `nix build '.#lgx-portable'` in each module directory (the UI one
-with `--override-input radicle path:../radicle`), then point `--basecamp` at
-the copied bundle. That is what the commands in this section already do.
-
-Possible follow-up, not done: make `lgs` worktree-aware — a `--flake` override,
-or relative module paths in `scaffold.toml` — so the tool does the right thing
-from any checkout instead of needing this note.
-
-Stage the **portable** modules, and say so explicitly:
-
-```bash
-lgs basecamp build-portable
-# both modules land in .scaffold/basecamp/portable/ as <NN>-<module>.lgx
-# then point sitometres at that directory and pass:
---variant linux-amd64
-```
+### Why `--app-dir` points straight at the portable directory
 
 **No copying into `dist/` is needed** — and this used to say otherwise, so it
 is worth being explicit about why. sitometres has no `--dist` flag. It takes a
-single `--app-dir` search root (default: cwd) and looks for `.lgx` beneath it.
-Both modules must be findable from that one root, because `browse.yaml`
-declares `with: [radicle]`. The old instructions built each module separately —
-two sub-flake `result-*` symlinks, no single directory holding both — so they
+single `--app-dir` search root and looks for `.lgx` beneath it. Both modules
+must be findable from that one root, because `browse.yaml` declares
+`with: [radicle]`. The old instructions built each module separately — two
+sub-flake `result-*` symlinks, no single directory holding both — so they
 copied the pair into `dist/` purely to collect them. That was the entire reason
 for the copy, and `build-portable` already does the collecting.
 
 Confirmed by a real run rather than inferred: sitometres consumes
 `.scaffold/basecamp/portable/` as-is. It follows the `/nix/store` symlinks and
 is not confused by the `<NN>-` load-order prefix in the filenames — the two
-details most likely to have broken it. Do not "fix" this back into a copy step.
-
-Nothing on the sitometres side blocks this. The only sitometres bug still
+details most likely to have broken it. **Do not "fix" this back into a copy
+step.** Nothing on the sitometres side blocks it; the only sitometres bug still
 worked around here is the inspector probe above.
+
+### Keep `radicle.url` on one line
 
 `build-portable` builds both `role = "project"` modules in dependency order and
 **derives the `--override-input radicle path:<abs>` itself**, by reading
@@ -672,8 +788,7 @@ nothing warns: the override silently stops applying, and `radicle-ui` gets
 built against the locked pin instead of the working tree. If a portable build
 mysteriously ships stale core-module behaviour, check this line first.
 
-(`build-portable` is an alias for `build --variant lgx-portable`. Use
-`lgs basecamp build --module radicle_ui` when you only want one of them.)
+### Why `--variant linux-amd64`
 
 sitometres unpacks one platform variant from the `.lgx` and defaults to
 `linux-amd64-dev`, which suits the dev app (`#app`) but not the bundle. The
@@ -697,6 +812,33 @@ compiled and the plugin never loaded. `check-qml-syntax.sh` now catches that
 class before it can ship. If step 1 hangs again, read Basecamp's log in the
 throwaway user-dir first — sitometres' own output says nothing useful.
 
+### Should this be a `scaffold.toml` script, or a `run-e2e.sh`?
+
+**Neither yet — and if either, `run-e2e.sh`.**
+
+`scaffold.toml` has no general script or task surface. Its schema is
+`[repos.*]`, `[modules.*]`, `[wallet]`, `[framework]`, `[localnet]`,
+`[circuits]`, `[basecamp.env]`, `[basecamp.profiles.*]`. The one hook-like
+surface is `lgs run`'s post-deploy hooks, and those are bolted to the LEZ
+pipeline — build, localnet, topup, deploy. This repo runs no localnet and
+deploys no guest programs, so there is nothing for them to hang off. Bending
+them into a UI-test runner would be a misuse of the field.
+
+Nor is it worth asking scaffold for an `lgs basecamp test` verb. That would
+mean scaffold taking a dependency on one third-party test tool and a hardcoded
+Basecamp flake attr, and since `lgs basecamp build-portable` absorbed the
+build-and-collect dance the remaining flow is two commands. The genuinely
+valuable upstream fix is the sitometres inspector probe, which no amount of
+scaffold work removes.
+
+That leaves `radicle-ui/tests/run-e2e.sh`, matching `run-qml-tests.sh` and
+`check-qml-syntax.sh` beside it — same pattern, no arguments, sets its own
+environment. It is the right shape, and worth adding **when someone writes it
+against a verified-working invocation** rather than transcribing the workflow.
+The one thing to get right when doing so: steps 1 and 2 above are one-time and
+expensive, so the script should detect an existing `basecamp/` and skip them,
+or it will rebuild Basecamp on every run and nobody will use it.
+
 ## CI
 
 `.github/workflows/ci.yml` runs the fast layers on every push and pull request:
@@ -712,3 +854,43 @@ already globs `tests/ui/*.yaml` and needs no change. It builds Basecamp from sou
 the inspector-enabled bundle is not in the public binary cache — but a warm Nix
 store cache brings that to about three minutes. A fork PR, or the first run
 after `BASECAMP_REV` changes, pays roughly nine minutes.
+
+### Does CI use `lgs`?
+
+**`ci.yml`'s module builds do. Everything else does not, for stated reasons.**
+
+`ci.yml`'s `build` job installs `lgs` and runs a single
+`lgs basecamp build --variant all` in place of the four `nix build` calls it
+used to make. That works because:
+
+- **No `basecamp setup` is required.** A build touches neither the basecamp
+  binaries nor the profiles, and `lgs basecamp docs` names CI explicitly as a
+  supported hand-authored-table case.
+- **Artefact paths are deterministic and variant-separated** —
+  `.scaffold/basecamp/{lgx,portable}/<NN>-<module>.lgx` — which is what the
+  manifest check and the staging step address. An earlier draft of this file
+  claimed `--variant all` produced "one flat directory with no variant in the
+  names" and that `--out-link` was therefore load-bearing. That was wrong.
+- **The sibling `--override-input` stops being hand-written**, which removes
+  the workflow's copy of a flag that must otherwise stay in sync with
+  `radicle-ui/flake.nix`.
+
+`lgs` is installed with `cargo install logos-scaffold`. There is no flake and
+no release binary, so this is a Rust build; it is cached on `~/.cargo` and
+pinned to an exact version, since an unpinned `cargo install` would silently
+change the build tooling under CI.
+
+What stays on raw `nix`, and why:
+
+- **The core module unit tests** (`.#checks…`) — no `lgs` verb for flake
+  `checks` outputs.
+- **`ui-tests.yml` entirely.** Its two module builds *could* use
+  `build-portable`, but the job also builds the inspector Basecamp, which has
+  no `lgs` route at a pinned rev, and it uses `--print-build-logs` so a failed
+  build prints why in the job log rather than "builder failed".
+  `lgs basecamp build` has no passthrough for that. Converting half a job to
+  gain one line is not worth losing the failure diagnostics.
+
+An earlier draft also argued CI needed per-sub-flake **matrix parallelism**.
+There is no matrix in either workflow — `ci.yml` has one `build` job running
+its `nix build` calls sequentially. That reason was withdrawn.
