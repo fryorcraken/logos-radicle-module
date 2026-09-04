@@ -38,7 +38,7 @@ use serde_json::{json, Value};
 /// `Storage::open`'s type, and used when *signing*, which this module never
 /// does. Reading it needs only `keys/radicle.pub`, no passphrase: the
 /// private key stays encrypted on disk and is never touched.
-fn open_storage(home: &str) -> Result<Storage, String> {
+pub(crate) fn open_storage(home: &str) -> Result<Storage, String> {
     if home.is_empty() {
         return Err("no Radicle home given".to_string());
     }
@@ -59,11 +59,11 @@ fn open_storage(home: &str) -> Result<Storage, String> {
         .map_err(|e| format!("failed to open Radicle storage at {}: {e}", storage_dir.display()))
 }
 
-fn parse_rid(rid: &str) -> Result<RepoId, String> {
+pub(crate) fn parse_rid(rid: &str) -> Result<RepoId, String> {
     RepoId::from_urn(rid).map_err(|e| format!("invalid repository id '{rid}': {e}"))
 }
 
-fn error(msg: impl Into<String>) -> String {
+pub(crate) fn error(msg: impl Into<String>) -> String {
     json!({ "error": msg.into() }).to_string()
 }
 
@@ -137,6 +137,17 @@ fn get_repo_inner(home: &str, rid: &str) -> Result<Value, String> {
         tags.insert(name.to_string(), json!(oid.to_string()));
     }
 
+    // `Visibility` derives `tag = "type"` + camelCase, so this serializes to
+    // exactly `{"type":"private",...}` / `{"type":"public"}` — the shape
+    // `RepoList.qml` checks with `visibility.type === "private"` to decide
+    // whether to draw the private badge.
+    let visibility = serde_json::to_value(doc.visibility()).unwrap_or_else(|_| json!({}));
+    let delegates: Vec<Value> = doc
+        .delegates()
+        .iter()
+        .map(|did| json!({ "id": did.to_string() }))
+        .collect();
+
     Ok(json!({
         "rid": id.urn(),
         "payloads": {
@@ -158,27 +169,68 @@ fn get_repo_inner(home: &str, rid: &str) -> Result<Value, String> {
                 },
             }
         },
+        "delegates": delegates,
+        "visibility": visibility,
+        "threshold": doc.threshold(),
         "refs": { "refs": Value::Object(refs), "tags": Value::Object(tags) },
     }))
 }
 
-/// Repos in local storage. `scope` is accepted for shape-parity with
-/// `remoteListRepos`'s pagination envelope but not yet filtered by
-/// delegate/private/seeded — every repo `storage.repositories()` returns is
-/// listed. Narrowing by scope is follow-up work, not implemented this pass.
-pub fn list_repos(home: &str, _scope: &str, page: i64, per_page: i64) -> String {
-    match list_repos_inner(home, page, per_page) {
+/// Repos in local storage, narrowed by `scope`:
+///
+/// - `"delegate"` — repos this node is a delegate of, i.e. ones you can sign
+///   changes to. Determined by matching the local node's own key against the
+///   identity document's delegate list.
+/// - `"private"` — repos whose identity document marks them private. These are
+///   the ones a seed will never show, so this is the scope that justifies
+///   local browsing existing at all.
+/// - `"seeded"` — repos held in local storage that you are neither a delegate
+///   of nor which are private: replicated copies of other people's public work.
+/// - `"all"`, `""` or anything else — no filtering.
+///
+/// The scopes partition the set (a repo is delegate, else private, else
+/// seeded), so a UI can offer them as exclusive chips without a repo showing
+/// up twice or vanishing.
+pub fn list_repos(home: &str, scope: &str, page: i64, per_page: i64) -> String {
+    match list_repos_inner(home, scope, page, per_page) {
         Ok(v) => v.to_string(),
         Err(e) => error(e),
     }
 }
 
-fn list_repos_inner(home: &str, page: i64, per_page: i64) -> Result<Value, String> {
+fn list_repos_inner(home: &str, scope: &str, page: i64, per_page: i64) -> Result<Value, String> {
     let storage = open_storage(home)?;
+
+    // The local node's own key: what "delegate" is measured against. Read from
+    // the public half of the keystore only — same file `open_storage` already
+    // reads, no passphrase.
+    let keys_dir = std::path::Path::new(home).join("keys");
+    let local_key = Keystore::new(&keys_dir).public_key().ok().flatten();
 
     let mut infos = storage
         .repositories()
         .map_err(|e| format!("could not list local repositories: {e}"))?;
+
+    infos.retain(|info| {
+        let is_delegate = local_key
+            .map(|key| {
+                let me = radicle::identity::Did::from(key);
+                info.doc.delegates().iter().any(|d| *d == me)
+            })
+            .unwrap_or(false);
+        let is_private = info.doc.visibility().is_private();
+
+        match scope {
+            "delegate" => is_delegate,
+            "private" => is_private,
+            "seeded" => !is_delegate && !is_private,
+            // "all", "", and any unrecognized value: everything. An unknown
+            // scope showing all repos beats it showing none, which would look
+            // identical to an empty node.
+            _ => true,
+        }
+    });
+
     infos.sort_by_key(|info| info.rid);
 
     let start = (page.max(0) as usize) * (per_page.max(0) as usize);

@@ -1180,7 +1180,9 @@ dependencies = [
 name = "radicle-local-ffi"
 version = "0.1.0"
 dependencies = [
+ "git2",
  "radicle",
+ "serde",
  "serde_json",
  "tempfile",
 ]
