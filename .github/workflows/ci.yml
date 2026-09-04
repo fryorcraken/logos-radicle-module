@@ -188,7 +188,16 @@ jobs:
       # One place, so the cache key cannot desync from the installed version —
       # a desync would silently serve an older binary under a key claiming the
       # new one. Keep in step with ui-tests.yml.
-      LGS_VERSION: "0.3.1"
+      #
+      # TEMPORARY: a git rev, not a crates.io version. `build --print-output`
+      # is from logos-co/scaffold#266, which is open, so no published release
+      # carries it. ui-tests.yml needs the same build for `setup --inspector`,
+      # and the two must stay on one rev — a job pair on different scaffold
+      # builds is exactly the desync this env var exists to prevent.
+      #
+      # Revert to `LGS_VERSION: "<next release>"` and a plain
+      # `cargo install logos-scaffold --version …` once #266 ships in one.
+      LGS_REV: 7ba5f9819e0619084d646c7bac34d2c2540229da
     steps:
       - uses: actions/checkout@v4
 
@@ -199,12 +208,12 @@ jobs:
             experimental-features = nix-command flakes
 
       # `lgs` builds the modules below. There is no flake and no release
-      # binary for logos-scaffold — `cargo install` from crates.io is the
-      # documented install path — so this is a Rust build, cached on ~/.cargo.
+      # binary for logos-scaffold — `cargo install` is the documented install
+      # path — so this is a Rust build, cached on ~/.cargo.
       #
-      # Pinned to an exact version on purpose: an unpinned `cargo install`
-      # would silently change the tool that drives every module build here the
-      # next time upstream publishes. Bump deliberately.
+      # Pinned to an exact rev on purpose: an unpinned `cargo install` would
+      # silently change the tool that drives every module build here. Bump
+      # deliberately.
       # Cache the BINARY, not `~/.cargo`. `cargo install` builds in a throwaway
       # target dir, so caching the registry saves only the crates.io download
       # and still pays the full ~60s compile of ~130 crates on every run. And
@@ -214,13 +223,13 @@ jobs:
       # Exact-match key with NO restore-keys, deliberately: a prefix match
       # would restore a different version's binary and the gate below would
       # then skip installing the version we actually pinned. Bumping
-      # LGS_VERSION starts a clean cache, which is the point.
+      # LGS_REV starts a clean cache, which is the point.
       - name: Cache lgs
         id: lgs-cache
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/lgs
-          key: lgs-${{ runner.os }}-${{ env.LGS_VERSION }}
+          key: lgs-${{ runner.os }}-git-${{ env.LGS_REV }}
 
       # Gated on the cache miss rather than using `--force`: on a hit there is
       # nothing to do, and `--force` would unconditionally rebuild. Without the
@@ -228,7 +237,7 @@ jobs:
       # exists in destination".
       - name: Install logos-scaffold
         if: steps.lgs-cache.outputs.cache-hit != 'true'
-        run: cargo install logos-scaffold --version ${{ env.LGS_VERSION }} --locked
+        run: cargo install --git https://github.com/logos-co/scaffold.git --rev ${{ env.LGS_REV }} logos-scaffold --locked
 
       # Unit tests for the core module's logic (URL building, ref resolution,
       # pagination, error shapes, local-profile detection).
@@ -262,12 +271,13 @@ jobs:
       # as symlinks into the nix store, NN being the load-order index. That
       # per-module, per-variant addressing is what the steps below rely on.
       #
-      # NOTE: `lgs basecamp build` has no `--print-build-logs` passthrough, so
-      # a failing module build reports less here than the raw `nix build -L`
-      # this replaced. Upstream ask filed. To debug one, reproduce locally with
-      # `nix build .#lgx -L` (or `.#lgx-portable`) in the module directory.
+      # `--print-output` streams nix's output into this step's log rather than
+      # writing it to `.scaffold/logs/` on a runner that is about to be
+      # destroyed. It only matters when a build fails — but that is the only
+      # time anyone reads it. Restores what `nix build -L` gave before the
+      # conversion to `lgs`.
       - name: Build both modules (dev + portable)
-        run: lgs basecamp build --variant all
+        run: lgs basecamp build --variant all --print-output
 
       # The `view` field must survive packaging: without it basecamp skips the
       # plugin silently. This is the check that would have caught the app
