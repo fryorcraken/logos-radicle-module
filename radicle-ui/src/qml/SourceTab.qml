@@ -94,10 +94,11 @@ Item {
     /// tick it starts, since a fresh sync makes the flag's answer moot until
     /// it completes and repolls.
     property bool updateAvailable: false
-    /// Bumped on reset() (repo/branch change) and cancelled polls, mirroring
-    /// syncEpoch's role for sync requests: a poll reply that lands after the
-    /// repository or branch has moved on must not flip updateAvailable for
-    /// data nobody is looking at anymore.
+    /// Bumped on reset(), mirroring syncEpoch's role for sync requests: a
+    /// poll reply that lands after this tab has been reset must not flip
+    /// updateAvailable for data nobody is looking at anymore. reset() is the
+    /// only bump site — there is no separate "cancel a poll" path, since a
+    /// poll is one cheap request with nothing to unwind.
     property int pollEpoch: 0
 
     /// True while a directory listing is in flight.
@@ -474,6 +475,16 @@ Item {
             // Drop a reply for a repository/branch/sync the user has already
             // moved on from — the same guard shape as every other loader
             // here, just against pollEpoch instead of syncEpoch.
+            //
+            // The pollEpoch term is NOT redundant with the rid/branch terms,
+            // though it looks that way: reset() is the only place it is
+            // bumped, and reset() usually accompanies a rid or branch change.
+            // The case it alone catches is a reset with rid and branch
+            // UNCHANGED — re-opening the same repository — where the other two
+            // terms match and the stale reply would otherwise be compared
+            // against a baseline reset() has just cleared. Pinned by
+            // tst_staleness.qml's ..._after_a_reset_on_the_same_repo_... test,
+            // which fails with this term removed and the other two kept.
             if (epoch !== pollEpoch || tab.rid !== wantRid || tab.branch !== wantBranch) return;
             var items = (data && data.items) ? data.items : [];
             for (var i = 0; i < items.length; i++) {

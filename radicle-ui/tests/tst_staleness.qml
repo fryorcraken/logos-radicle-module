@@ -227,6 +227,40 @@ Item {
                     "a poll reply for the abandoned branch must not flip updateAvailable for the new one");
         }
 
+        function test_a_poll_reply_after_a_reset_on_the_same_repo_is_dropped() {
+            // The case that makes pollEpoch load-bearing rather than
+            // redundant. The two tests above also change rid/branch, so their
+            // guards fire on those terms and would still pass with the
+            // pollEpoch check removed — they do not actually pin it. Here rid
+            // and branch are UNCHANGED across the reset (re-opening the same
+            // repository), so the epoch is the only thing that can tell the
+            // in-flight poll apart from a live one.
+            deferredSource.reset();
+            deferredSource.rid = "rad:zTEST";
+            deferredSource.branch = "main";
+            deferredApp.deferBranches = false;
+            deferredApp.pendingBranches = null;
+            deferredSource.syncAll();
+            compare(deferredSource.lastSyncedCommit, "sha-at-sync-time");
+
+            deferredApp.deferBranches = true;
+            deferredSource.checkForUpdate();
+            verify(deferredApp.pendingBranches !== null, "expected checkForUpdate()'s ListBranches call");
+
+            // Same repository, same branch — only a reset in between.
+            deferredSource.reset();
+            deferredSource.rid = "rad:zTEST";
+            deferredSource.branch = "main";
+
+            deferredApp.deliverBranches("sha-after-new-commits");
+
+            // reset() cleared lastSyncedCommit, so there is nothing to compare
+            // against and nothing to report. Without the pollEpoch term the
+            // stale reply would flip the flag against a cleared baseline.
+            compare(deferredSource.updateAvailable, false,
+                    "a poll reply from before the reset must not flip updateAvailable");
+        }
+
         /*
          * The two tests below cover lastSyncedCommit being recorded WRONGLY —
          * a different and worse failure than the guards above, which only

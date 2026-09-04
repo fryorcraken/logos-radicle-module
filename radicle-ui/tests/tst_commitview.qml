@@ -172,6 +172,22 @@ Item {
             var backButton = findByName(view, "commitBackButton");
             verify(backButton !== null, "no commitBackButton delegate was rendered");
 
+            // Assert the OVERLAY stood aside, not merely that the button
+            // emits when clicked. TestCase.mouseClick delivers straight to
+            // the item it is handed rather than hit-testing down from the
+            // window, and LoadingState has no MouseArea of its own, so a
+            // click test cannot see an overlay covering the button at all —
+            // it passed just as happily with the overlay keyed on
+            // files.length, which is the bug this test is named for. What
+            // actually broke was the overlay never becoming invisible for a
+            // commit whose diff is empty, so that is what is asserted.
+            var overlay = findByName(view, "commitLoadingOverlay");
+            verify(overlay !== null, "no commitLoadingOverlay was found");
+            verify(view.loadedOnce, "the commit finished loading");
+            verify(!overlay.visible,
+                   "the loading overlay must step aside once a commit has loaded, "
+                   + "even when its diff is empty — otherwise it covers the back button");
+
             var seen = false;
             function grab() { seen = true; }
             view.back.connect(grab);

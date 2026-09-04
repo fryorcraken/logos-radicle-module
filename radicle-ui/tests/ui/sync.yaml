@@ -144,7 +144,9 @@ steps:
   # real seed, the reply is parsed, the head is compared, the flag flips, and
   # the button re-labels and re-colours from it. The comparison itself — head
   # equal means no update, head different means update — is what the component
-  # tests in tst_staleness.qml pin down, including both pollEpoch guards.
+  # tests in tst_staleness.qml pin down, along with the pollEpoch guard (whose
+  # load-bearing case is a reset with rid and branch unchanged; the repo- and
+  # branch-switch tests pass on their rid/branch terms alone).
   # Two properties are set, because the button's idle label is a function of
   # both: syncedOnce decides "Download All" vs "Re-sync", and updateAvailable
   # overrides either with "Update". A sync that completed would have set both;

@@ -322,6 +322,11 @@ Item {
     }
 
     LoadingState {
+        // Addressable so a test can assert this overlay actually steps aside
+        // once a commit has loaded. A click test cannot: mouseClick delivers
+        // to the item it is given rather than hit-testing from the window,
+        // and this has no MouseArea, so it is invisible to one either way.
+        objectName: "commitLoadingOverlay"
         anchors.fill: parent
         loading: view.loading
         loaded: view.loadedOnce
