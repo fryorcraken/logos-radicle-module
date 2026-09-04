@@ -116,12 +116,20 @@ jobs:
       LGS_REV: 7ba5f9819e0619084d646c7bac34d2c2540229da
 
     steps:
-      - uses: actions/checkout@v4
+      # Action majors are the Node-24 ones. GitHub retired the Node 20 runtime,
+      # and until these were bumped every job here logged a deprecation warning
+      # naming checkout/cache/setup-node: the runner was already force-running
+      # them on Node 24, so the bump matches what was happening anyway rather
+      # than changing it. `node-version` is a separate axis — that is the Node
+      # sitometres itself runs on, and 20 is EOL, so it moved with them.
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
+      # Not a GitHub-authored action, so the Node-20 retirement does not reach
+      # it — install-nix-action is a composite/Docker action. Left on its pin.
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -196,7 +204,7 @@ jobs:
       # own rust shims). Exact-match key, no restore-keys, on purpose.
       - name: Cache lgs
         id: lgs-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/lgs
           key: lgs-${{ runner.os }}-git-${{ env.LGS_REV }}
@@ -467,7 +475,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Per spec: upload-artifact@v4 refuses a name another job in the same
           # run already claimed, so a shared name would fail three of the four.

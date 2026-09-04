@@ -19,7 +19,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: metadata.json is valid and self-consistent
         run: |
@@ -104,7 +104,7 @@ jobs:
     name: QML lint and component tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         run: |
@@ -160,11 +160,11 @@ jobs:
     name: UI spec validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Specs parse against the sitometres schema
         run: |
@@ -199,7 +199,7 @@ jobs:
       # `cargo install logos-scaffold --version …` once #266 ships in one.
       LGS_REV: 7ba5f9819e0619084d646c7bac34d2c2540229da
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: cachix/install-nix-action@v27
         with:
@@ -226,7 +226,7 @@ jobs:
       # LGS_REV starts a clean cache, which is the point.
       - name: Cache lgs
         id: lgs-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/lgs
           key: lgs-${{ runner.os }}-git-${{ env.LGS_REV }}
@@ -347,7 +347,7 @@ jobs:
           done
           ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: radicle-lgx-bundle
           path: dist/*.lgx
@@ -360,7 +360,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: radicle-lgx-bundle
           path: dist
