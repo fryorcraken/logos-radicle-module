@@ -52,16 +52,20 @@ version = "0.4.1"
 # is 88 chars under this project path — the socket name then overflowed and
 # every module segfaulted at "Failed to register module for remote access",
 # basecamp's own bundled ones included. macOS gets a short /tmp/lgs-<profile>
-# by default; Linux keeps the long in-profile path, so `runtime_dir` is set
-# explicitly on each profile below.
+# by default; Linux keeps the long in-profile path, so the `runtime_dir` on
+# each profile below is set explicitly.
 #
 # It must be the session's real runtime dir, not just any short path: Qt finds
 # the Wayland compositor socket (wayland-0) through XDG_RUNTIME_DIR, so a
 # private dir like /tmp/lgs-alice starts basecamp with no display and it exits
 # immediately.
+#
+# NOTE: `lgs basecamp setup` rewrites this file and strips comments. If these
+# are missing after running it, restore them — they are the record of two bugs
+# that each cost a debugging session.
 [basecamp.env]
-# Send Qt's own logging to stderr so `lgs basecamp launch` and the profile log
-# capture it at all, rather than it vanishing into the platform log sink.
+# Qt's own logging otherwise vanishes into the platform log sink, so neither
+# `lgs basecamp launch` nor the profile log captures it.
 QT_FORCE_STDERR_LOGGING = "1"
 # Surface QML errors. Basecamp does not log them itself, so a ui_qml plugin
 # that fails to load looks exactly like one that was never clicked.
