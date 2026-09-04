@@ -220,24 +220,40 @@ jobs:
       # logos-basecamp's own doctests workflow.
       #
       # The runner image preconfigures third-party apt repos this job does not
-      # use, and one of them failing takes `apt-get update` down with it. Seen
-      # for real (run 33826324704, the `sync` job, while its three siblings
-      # passed the identical step minutes apart):
+      # use, and one of them failing takes `apt-get update` — and so the whole
+      # job — down with it. Seen for real (run 33826324704, the `sync` job,
+      # while its three siblings passed the identical step minutes apart):
       #
       #   E: Failed to fetch https://packages.microsoft.com/ubuntu/24.04/prod/…
       #      403  Forbidden
       #   E: The repository '… noble InRelease' is no longer signed.
       #
-      # Every package below comes from Ubuntu's own archive, so a Microsoft
-      # mirror having a bad day must not fail this job. Drop those extra lists
-      # first, and let `update` warn rather than exit non-zero — `install` is
-      # the real gate, and it still fails loudly if a package is genuinely
-      # unavailable.
+      # Not a momentary blip worth retrying through: the runner image already
+      # sets `APT::Acquire::Retries "10"`, so apt had retried ten times before
+      # surfacing that.
+      #
+      # All six packages below come from Ubuntu's own archive, so nothing here
+      # needs any third-party source. Rather than name one file — the image's
+      # layout is not a contract, and a `.list` that has become a deb822
+      # `.sources` would make a targeted `rm` silently do nothing — move every
+      # extra source out of the way by pattern and keep only the distribution's
+      # own. Prints what it disabled, so the log says what actually happened
+      # instead of leaving it to be inferred.
+      #
+      # `update` is then still allowed to fail without failing the step:
+      # `install` is the real gate and fails loudly if a package cannot be
+      # resolved, which is the outcome that actually matters here.
       - name: Install graphics runtime libraries
         run: |
           set -eu
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq || echo "::warning::apt-get update reported errors; continuing to install"
+          sudo mkdir -p /etc/apt/disabled-sources.d
+          # `find -exec` rather than a glob: no match must not be an error.
+          sudo find /etc/apt/sources.list.d -maxdepth 1 \
+            \( -name '*.list' -o -name '*.sources' \) \
+            ! -name 'ubuntu.sources' ! -name 'ubuntu.list' \
+            -exec mv -v -t /etc/apt/disabled-sources.d {} +
+          sudo apt-get update -qq \
+            || echo "::warning::apt-get update reported errors; install is the gate, continuing"
           sudo apt-get install -y --no-install-recommends \
             libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
 
