@@ -41,10 +41,32 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    // Only the remote (seed-node) source exists. Local-node browsing needs a
-    // backend that is not written yet, and a disabled control for it was a
-    // placeholder that looked like a broken feature.
-    readonly property string source: "remote"
+    // Which source every browsing call goes to: "remote" (a seed node over
+    // HTTPS) or "local" (this machine's ~/.radicle, read in-process).
+    //
+    // One property rather than a parameter at each of the fourteen call sites.
+    // The two sources answer different questions — a seed sees only public
+    // repos it replicates, the local node sees your private ones and works
+    // offline — but they return identical JSON, so every view renders either
+    // without branching. That is the contract radicle_impl.h states, and it is
+    // what lets this be a single switch instead of a second set of views.
+    property string source: "remote"
+
+    /// True when this machine has a Radicle profile to browse. Drives whether
+    /// the source toggle appears at all: offering "Local" to someone with no
+    /// node would be a control that can only produce an error.
+    readonly property bool localAvailable: caps.localAvailable === true
+
+    /// Switch source and start over. A repo id from one source is meaningless
+    /// to the other — the seed's repos are not the local node's — so the whole
+    /// navigation stack resets rather than trying to carry the current screen
+    /// across.
+    function setSource(next) {
+        if (next === source) return;
+        if (next === "local" && !localAvailable) return;
+        source = next;
+        nav.reset();
+    }
 
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
@@ -80,13 +102,14 @@ Item {
     }
 
     /// Source-routed backend call. `method` is the suffix after remote/local.
-    /// `source` defaults to "remote" — every call site today browses via a
-    /// seed node. Threading it through now, ahead of any caller actually
-    /// needing "local", is cheaper than retrofitting a source parameter
-    /// across every call site once M2 adds local-node browsing.
+    ///
+    /// The optional `source` argument overrides `root.source` for one call.
+    /// No caller uses it today — the toggle moves every view at once, which is
+    /// the point — but it is the seam for a future screen that wants to show
+    /// both sources side by side.
     function call(method, args, onOk, onFail, source) {
         if (!backend) return;
-        var name = (source || "remote") + method;
+        var name = (source || root.source) + method;
         if (typeof backend[name] !== "function") {
             nav.error = "unsupported operation: " + name;
             if (onFail) onFail();
@@ -221,9 +244,23 @@ Item {
                         font.bold: true
                     }
 
+                    SourceToggle {
+                        id: sourceToggle
+                        objectName: "sourceToggle"
+                        current: root.source
+                        localAvailable: root.localAvailable
+                        reason: "No Radicle profile on this machine — "
+                                + "install Radicle and run `rad auth` to browse local repositories"
+                        onSourceChosen: function (next) { root.setSource(next); }
+                    }
+
                     SeedPicker {
                         id: seedPicker
                         objectName: "seedPicker"
+                        // Which seed is proxied to is a remote-source concern;
+                        // showing the picker while browsing local storage would
+                        // imply it affects what is on screen, which it does not.
+                        visible: root.source === "remote"
                         currentSeed: root.caps.remoteSeed || ""
                         fetchSeeds: function (cb) {
                             root.callPlain("listKnownSeeds", [], cb);
@@ -243,7 +280,10 @@ Item {
 
                     FilterField {
                         id: searchField
-                        visible: nav.view === "repos"
+                        // Local listing takes a scope, not a search string —
+                        // see RepoList.fetch(). A search box that silently did
+                        // nothing would be worse than no search box.
+                        visible: nav.view === "repos" && root.source === "remote"
                         Layout.preferredWidth: 260
                         placeholder: "Search repositories"
                         onAccepted: repoList.reload()
