@@ -72,9 +72,13 @@ std::string LocalStore::unavailableReason() const
              + " — install Radicle and run `rad auth` to browse local repositories";
     }
 
-    // A profile exists, so the only thing missing is the backend itself.
-    return "local repository browsing is not available in this build "
-           "(profile found at " + m_home + ")";
+    // Unreachable in practice: callers check available() first, and when a
+    // profile exists the read goes to the backend, which reports its own more
+    // specific failure. Kept as a total function rather than an assert so a
+    // future caller that forgets the guard still gets a sentence a user can
+    // act on instead of an empty string.
+    return "a Radicle profile was found at " + m_home
+         + " but the request could not be served";
 }
 
 bool LocalStore::nodeRunning() const
