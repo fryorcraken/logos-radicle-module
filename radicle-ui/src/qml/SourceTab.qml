@@ -49,6 +49,15 @@ Item {
     /// Entries in the current directory — read by the UI tests.
     readonly property int entryCount: entries.count
 
+    /// The viewer pane's state, surfaced so RepoView (and through it the
+    /// end-to-end specs) can assert on what the right-hand pane is showing
+    /// without reaching into a nested id. Aliases, not a second copy: the
+    /// viewer remains the only thing that sets them.
+    readonly property string viewerTitle: viewer.title
+    /// The length, not the text — a spec asks whether content arrived, and a
+    /// whole blob pasted into a test report is noise.
+    readonly property int viewerBodyLength: viewer.body.length
+
     /// Sync: walk the whole tree up front and pull every file into the cache,
     /// so navigation afterwards is instant rather than a request per click.
     property bool syncing: false
@@ -73,6 +82,24 @@ Item {
     /// True once a sync has completed for this repository, so the idle button
     /// label can read "first download" vs "refresh" differently.
     property bool syncedOnce: false
+
+    /// The branch's head commit at the moment the last sync completed, so a
+    /// later poll (see checkForUpdate() / pollTimer below) has something to
+    /// compare a fresh head against. "" until a sync has completed.
+    property string lastSyncedCommit: ""
+    /// True once a poll finds the branch's head has moved past
+    /// lastSyncedCommit. Deliberately does NOT disable or relabel the sync
+    /// button — re-syncing is never wrong, just sometimes unnecessary — it
+    /// only flags that one is worth doing. Cleared by any syncAll() the same
+    /// tick it starts, since a fresh sync makes the flag's answer moot until
+    /// it completes and repolls.
+    property bool updateAvailable: false
+    /// Bumped on reset(), mirroring syncEpoch's role for sync requests: a
+    /// poll reply that lands after this tab has been reset must not flip
+    /// updateAvailable for data nobody is looking at anymore. reset() is the
+    /// only bump site — there is no separate "cancel a poll" path, since a
+    /// poll is one cheap request with nothing to unwind.
+    property int pollEpoch: 0
 
     /// True while a directory listing is in flight.
     property bool treeLoading: false
@@ -102,6 +129,14 @@ Item {
         viewer.title = "";
         viewer.body = "";
         viewer.loading = false;
+        // Orphan any poll in flight for the previous repository/branch, the
+        // same way syncEpoch orphans a running sync's requests above — a
+        // reply landing after this reset must not flip updateAvailable for
+        // data nobody is looking at anymore.
+        pollEpoch++;
+        lastSyncedCommit = "";
+        updateAvailable = false;
+        pendingSyncHead = "";
     }
 
     function load() {
@@ -288,8 +323,51 @@ Item {
         syncQueued = 0;
         syncDone = 0;
         syncProgress = 0;
+        // Whatever prompted this sync, it is about to catch up to the
+        // branch's current head — the stale flag from a previous poll no
+        // longer means anything the moment fresh data starts arriving.
+        updateAvailable = false;
+
+        // Capture the branch's head SHA now, under this sync's own epoch, so
+        // finishSyncIfDone() can record it as lastSyncedCommit once the sync
+        // actually completes. ListBranches is the same lightweight call
+        // checkForUpdate() polls with — one request either way, no dedicated
+        // "get branch head" endpoint needed.
+        // Clear the previous sync's captured head before asking for this
+        // one's. Without this, a sync whose ListBranches FAILS leaves
+        // pendingSyncHead holding the head an EARLIER sync captured, and
+        // finishSyncIfDone() below then records that stale value as this
+        // sync's lastSyncedCommit — claiming the repo is synced to a commit
+        // this sync never fetched. reset() cleared it, but reset() only runs
+        // on a repo/branch change, not between two syncs of the same repo.
+        pendingSyncHead = "";
+
+        // wantBranch is captured, not read live in the callback. The epoch
+        // alone is not enough: it only moves in reset()/cancelSync(), so a
+        // caller that changes `branch` without either — which is exactly what
+        // assigning the property directly does — would leave the loop below
+        // matching the NEW branch's name and storing ITS head as the head of
+        // a sync that downloaded the OLD branch's files.
+        var epoch = syncEpoch;
+        var wantRid = rid, wantBranch = branch;
+        app.call("ListBranches", [rid], function (data) {
+            if (epoch !== syncEpoch) return;   // sync already abandoned
+            if (tab.rid !== wantRid || tab.branch !== wantBranch) return;
+            var items = (data && data.items) ? data.items : [];
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].name === wantBranch) { pendingSyncHead = items[i].head || ""; break; }
+            }
+        }, function () { /* head unknown; pendingSyncHead stays "" */ });
+
         syncDir("", syncEpoch);
     }
+
+    /// Set by syncAll()'s ListBranches lookup, consumed by
+    /// finishSyncIfDone(). A plain property rather than a local closure
+    /// variable so it survives being read from a different call stack (the
+    /// ListBranches reply and the last GetTree/GetBlob reply usually land in
+    /// either order).
+    property string pendingSyncHead: ""
 
     function cancelSync() {
         // Bumping the epoch orphans every request already in flight, so their
@@ -365,7 +443,69 @@ Item {
         if (syncing && syncDone >= syncQueued) {
             syncing = false;
             syncedOnce = true;
+            // pendingSyncHead may still be "" if its ListBranches lookup is
+            // slower than every GetTree/GetBlob in the sync (a small repo)
+            // or failed outright — lastSyncedCommit then simply stays at
+            // whatever it was, and the next poll (or the next sync) gets
+            // another chance to record it.
+            //
+            // That is only safe because syncAll() clears pendingSyncHead
+            // before each sync. It used to be cleared solely in reset(), so a
+            // failed lookup here would silently commit the PREVIOUS sync's
+            // head and claim the repo was current at a commit it had never
+            // fetched — which is the one thing this must never do. Staying
+            // stale for a cycle only makes updateAvailable fire late.
+            if (pendingSyncHead !== "") lastSyncedCommit = pendingSyncHead;
         }
+    }
+
+    /// Lightweight staleness check: ask what the branch's head is right now
+    /// and compare against the commit captured at the last completed sync.
+    /// Does NOT fetch the tree or any file — one ListBranches call, the same
+    /// one syncAll() itself makes to record lastSyncedCommit in the first
+    /// place. Never touches syncing/syncQueued/syncDone: a sync in progress
+    /// and a staleness poll are independent questions answered by
+    /// independent requests, and the button stays clickable regardless of
+    /// either.
+    function checkForUpdate() {
+        if (!app || rid === "" || lastSyncedCommit === "") return;
+        var epoch = pollEpoch;
+        var wantRid = rid, wantBranch = branch;
+        app.call("ListBranches", [rid], function (data) {
+            // Drop a reply for a repository/branch/sync the user has already
+            // moved on from — the same guard shape as every other loader
+            // here, just against pollEpoch instead of syncEpoch.
+            //
+            // The pollEpoch term is NOT redundant with the rid/branch terms,
+            // though it looks that way: reset() is the only place it is
+            // bumped, and reset() usually accompanies a rid or branch change.
+            // The case it alone catches is a reset with rid and branch
+            // UNCHANGED — re-opening the same repository — where the other two
+            // terms match and the stale reply would otherwise be compared
+            // against a baseline reset() has just cleared. Pinned by
+            // tst_staleness.qml's ..._after_a_reset_on_the_same_repo_... test,
+            // which fails with this term removed and the other two kept.
+            if (epoch !== pollEpoch || tab.rid !== wantRid || tab.branch !== wantBranch) return;
+            var items = (data && data.items) ? data.items : [];
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].name === wantBranch) {
+                    tab.updateAvailable = (items[i].head || "") !== lastSyncedCommit;
+                    return;
+                }
+            }
+        }, function () { /* transient failure: leave updateAvailable as-is */ });
+    }
+
+    /// Polls checkForUpdate() every five minutes while this tab has synced
+    /// data to compare against. Deliberately not started until the first
+    /// sync completes — polling before there is a lastSyncedCommit to
+    /// compare against has nothing to report, and would just be a periodic
+    /// no-op request against every repository ever opened, synced or not.
+    Timer {
+        interval: 5 * 60 * 1000
+        running: tab.lastSyncedCommit !== ""
+        repeat: true
+        onTriggered: tab.checkForUpdate()
     }
 
     function goUp() {
@@ -455,6 +595,7 @@ Item {
                         }
                         MouseArea {
                             id: upMouse
+                            objectName: "fileUpRow"
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
@@ -499,6 +640,12 @@ Item {
                                 font.pixelSize: Theme.fontSm
                             }
                             Text {
+                                // Named so a spec can address a row by the
+                                // file's NAME and still be sure it hit the
+                                // tree: the viewer's title bar shows the same
+                                // string once a file is open, and a bare text
+                                // selector matched that instead.
+                                objectName: "fileRowName"
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: parent.width - 26
                                 text: name
@@ -511,6 +658,11 @@ Item {
 
                         MouseArea {
                             id: rowMouse
+                            // Named on the MouseArea, not the delegate Rectangle:
+                            // UI specs select by objectName AND clickability, and
+                            // naming a non-clickable parent matches one element
+                            // instead of one per row (see SectionTabs.qml).
+                            objectName: "fileRow"
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor

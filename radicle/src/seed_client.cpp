@@ -156,6 +156,35 @@ nlohmann::json SeedClient::getRepo(const std::string& rid)
     return getJson("/repos/" + urlEncode(rid));
 }
 
+nlohmann::json SeedClient::listBranches(const std::string& rid)
+{
+    const nlohmann::json repo = getRepo(rid);
+    if (isError(repo)) return repo;
+
+    // Same map resolveSha() reads: refs.refs is "refs/heads/main" -> sha,
+    // plus tag refs under the same object that this deliberately ignores —
+    // branches and tags are different concepts and a picker for one should
+    // not silently include the other.
+    static const std::string kHeadsPrefix = "refs/heads/";
+    const auto& refs = repo.value("refs", nlohmann::json::object());
+    const auto& inner = refs.value("refs", nlohmann::json::object());
+
+    nlohmann::json items = nlohmann::json::array();
+    for (const auto& [key, value] : inner.items()) {
+        if (key.rfind(kHeadsPrefix, 0) != 0) continue;   // not a branch ref
+        if (!value.is_string()) continue;
+        items.push_back({{"name", key.substr(kHeadsPrefix.size())},
+                          {"head", value.get<std::string>()}});
+    }
+
+    const auto& payloads = repo.value("payloads", nlohmann::json::object());
+    const auto& project = payloads.value("xyz.radicle.project", nlohmann::json::object());
+    const std::string defaultBranch =
+        project.value("data", nlohmann::json::object()).value("defaultBranch", "");
+
+    return nlohmann::json{{"items", items}, {"default", defaultBranch}};
+}
+
 std::string SeedClient::resolveSha(const std::string& rid, const std::string& ref)
 {
     if (isFullSha(ref)) return ref;

@@ -14,6 +14,12 @@ import "../src/qml" as Ui
  *
  * These tests use TestCase's mouseClick against the real delegate, so removing
  * an onClicked makes them fail.
+ *
+ * PatchesTab's threadRow had the same shape of risk (a click-driven detail
+ * view) with no coverage here at all — flagged by the pre-release coverage
+ * review alongside nav.busy/nav.error, the syncEpoch race, and CommitView.
+ * Covered below the same way commits is: shown for real for the duration of
+ * one test, since it overlaps issues/commits and stays hidden otherwise.
  */
 Item {
     width: 900
@@ -50,6 +56,14 @@ Item {
         app: parent
         rid: "rad:zTEST"
         branch: "main"
+    }
+
+    Ui.PatchesTab {
+        id: patches
+        anchors.fill: parent
+        visible: false
+        app: parent
+        rid: "rad:zTEST"
     }
 
     /// Find the first descendant carrying `name` as its objectName.
@@ -109,14 +123,40 @@ Item {
                     "clicking a commit row must activate it");
         }
 
+        function test_a_patch_row_click_activates_it() {
+            // PatchesTab shares its "threadRow" objectName with IssuesTab
+            // (both feed the same detail view via RepoView), and all three
+            // tabs overlap (anchors.fill: parent) while hidden by default —
+            // same reason as commits above: mouseClick cannot reach an
+            // invisible item's children, so this test needs the tab shown
+            // for real, or it would silently hit issues' row instead.
+            patches.load();
+            wait(50);
+
+            var row = findByName(patches, "threadRow");
+            verify(row !== null, "no threadRow delegate was rendered");
+
+            patches.visible = true;
+            var seen = "";
+            function grab(id) { seen = id; }
+            patches.itemActivated.connect(grab);
+            mouseClick(row, row.width / 2, row.height / 2);
+            patches.itemActivated.disconnect(grab);
+            patches.visible = false;
+
+            compare(seen, "i1", "clicking a patch row must activate it");
+        }
+
         function test_rows_show_a_pointer_cursor() {
             // A row that does nothing should not look clickable, and one that
             // does should. Both rows failed this before they had handlers.
             issues.load();
             commits.load();
+            patches.load();
             wait(50);
             compare(findByName(issues, "threadRow").cursorShape, Qt.PointingHandCursor);
             compare(findByName(commits, "commitRow").cursorShape, Qt.PointingHandCursor);
+            compare(findByName(patches, "threadRow").cursorShape, Qt.PointingHandCursor);
         }
     }
 }

@@ -75,7 +75,6 @@ Item {
             required property var repo
             required property int index
 
-            objectName: "repoRow"
             width: list.width
             height: Theme.rowHeight
             color: mouse.containsMouse ? Theme.surfaceAlt : Theme.bg
@@ -178,6 +177,21 @@ Item {
 
             MouseArea {
                 id: mouse
+                // On the MouseArea, not the delegate Rectangle above.
+                //
+                // A selector resolves a non-clickable node by climbing to an
+                // ANCESTOR that is clickable, and failing that by searching
+                // each ancestor's descendants for a mouse handler. For a list
+                // delegate there is no clickable ancestor, so every row
+                // climbed to the shared ListView and found the SAME first
+                // MouseArea — the matches then deduplicated onto one target
+                // and `nth: 1` reported "out of range, matched 1 element",
+                // making every row but the first unaddressable by a spec.
+                //
+                // Same trap SectionTabs.qml documents. The name is unchanged,
+                // so specs that already select "repoRow" keep working; only
+                // which element carries it moves.
+                objectName: "repoRow"
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor

@@ -116,6 +116,93 @@ LOGOS_TEST(resolve_sha_falls_back_to_head_for_an_unknown_branch)
 }
 
 // ---------------------------------------------------------------------------
+// Branch listing.
+//
+// No dedicated seed endpoint exists for this: getRepo() already returns the
+// full refs map (the same one resolveSha() reads), so listBranches() reuses
+// that single request instead of adding another round trip.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(list_branches_reads_refs_heads_from_the_repo_document)
+{
+    FakeSeed seed;
+    seed.replies["/repos/rad%3AzTEST"] = kRepoJson;
+    SeedClient client("https://example.test");
+    client.setTransport(seed.transport());
+
+    const auto out = client.listBranches("rad:zTEST");
+    LOGOS_ASSERT_FALSE(isError(out));
+    LOGOS_ASSERT_EQ(out["items"].size(), size_t(2));
+    LOGOS_ASSERT_EQ(out["default"].get<std::string>(), std::string("main"));
+}
+
+LOGOS_TEST(list_branches_strips_the_refs_heads_prefix)
+{
+    FakeSeed seed;
+    seed.replies["/repos/rad%3AzTEST"] = kRepoJson;
+    SeedClient client("https://example.test");
+    client.setTransport(seed.transport());
+
+    const auto out = client.listBranches("rad:zTEST");
+    bool sawMain = false, sawDev = false;
+    for (const auto& item : out["items"]) {
+        const std::string name = item["name"].get<std::string>();
+        // The raw ref key ("refs/heads/main") must never leak into the name.
+        LOGOS_ASSERT_TRUE(name.find("refs/heads/") == std::string::npos);
+        if (name == "main") { sawMain = true; LOGOS_ASSERT_EQ(item["head"].get<std::string>(), kFullSha); }
+        if (name == "dev")  { sawDev = true;  LOGOS_ASSERT_EQ(item["head"].get<std::string>(), kDevSha); }
+    }
+    LOGOS_ASSERT_TRUE(sawMain);
+    LOGOS_ASSERT_TRUE(sawDev);
+}
+
+LOGOS_TEST(list_branches_excludes_tags)
+{
+    FakeSeed seed;
+    seed.replies["/repos/rad%3AzTAGGED"] = R"({
+      "rid": "rad:zTAGGED",
+      "payloads": { "xyz.radicle.project": {
+          "data": { "name": "demo", "defaultBranch": "main" },
+          "meta": { "head": "1111111111111111111111111111111111111111" } } },
+      "refs": { "refs": { "refs/heads/main": "1111111111111111111111111111111111111111" },
+                "tags": { "refs/tags/v1.0": "3333333333333333333333333333333333333333" } }
+    })";
+    SeedClient client("https://example.test");
+    client.setTransport(seed.transport());
+
+    const auto out = client.listBranches("rad:zTAGGED");
+    LOGOS_ASSERT_EQ(out["items"].size(), size_t(1));
+    LOGOS_ASSERT_EQ(out["items"][0]["name"].get<std::string>(), std::string("main"));
+}
+
+LOGOS_TEST(list_branches_propagates_a_repo_lookup_failure)
+{
+    FakeSeed seed;
+    seed.failEverything = true;
+    SeedClient client("https://example.test");
+    client.setTransport(seed.transport());
+
+    const auto out = client.listBranches("rad:zTEST");
+    LOGOS_ASSERT_TRUE(isError(out));
+}
+
+LOGOS_TEST(list_branches_on_a_repo_with_no_refs_returns_an_empty_list_not_an_error)
+{
+    FakeSeed seed;
+    seed.replies["/repos/rad%3AzEMPTY"] = R"({
+      "rid": "rad:zEMPTY",
+      "payloads": { "xyz.radicle.project": {
+          "data": { "name": "demo" }, "meta": {} } }
+    })";
+    SeedClient client("https://example.test");
+    client.setTransport(seed.transport());
+
+    const auto out = client.listBranches("rad:zEMPTY");
+    LOGOS_ASSERT_FALSE(isError(out));
+    LOGOS_ASSERT_EQ(out["items"].size(), size_t(0));
+}
+
+// ---------------------------------------------------------------------------
 // URL shapes. Both of these were found by probing the live API and are easy to
 // regress silently — a wrong one yields a bare 404 or 400 with no clue.
 // ---------------------------------------------------------------------------

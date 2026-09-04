@@ -23,6 +23,7 @@ class RadicleUi
     // --- remote: proxied to a public seed, no local node needed ------------
     SLOT(QString remoteListRepos(QString query, int page, int perPage))
     SLOT(QString remoteGetRepo(QString rid))
+    SLOT(QString remoteListBranches(QString rid))
     SLOT(QString remoteGetTree(QString rid, QString sha, QString path))
     SLOT(QString remoteGetBlob(QString rid, QString sha, QString path))
     SLOT(QString remoteGetReadme(QString rid, QString sha))
@@ -36,6 +37,7 @@ class RadicleUi
     // --- local: this machine's node, offline-capable, sees private repos ---
     SLOT(QString localListRepos(QString scope, int page, int perPage))
     SLOT(QString localGetRepo(QString rid))
+    SLOT(QString localListBranches(QString rid))
     SLOT(QString localGetTree(QString rid, QString sha, QString path))
     SLOT(QString localGetBlob(QString rid, QString sha, QString path))
     SLOT(QString localGetReadme(QString rid, QString sha))

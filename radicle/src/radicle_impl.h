@@ -109,6 +109,13 @@ public:
      */
     std::string remoteGetRepo(const std::string& rid);
 
+    /**
+     * Branches (refs/heads/*), each with the commit it currently points at,
+     * plus which one is the repo's default.
+     * -> {"items":[{"name":"main","head":"<sha>"}],"default":"main"}
+     */
+    std::string remoteListBranches(const std::string& rid);
+
     /// Directory listing at `path` ("" = root) for `sha`.
     /// -> {"path":"...","entries":[{"name","path","kind":"tree"|"blob","oid"}]}
     std::string remoteGetTree(const std::string& rid, const std::string& sha,
@@ -154,6 +161,8 @@ public:
     std::string localListRepos(const std::string& scope, int64_t page, int64_t perPage);
 
     std::string localGetRepo(const std::string& rid);
+
+    std::string localListBranches(const std::string& rid);
 
     std::string localGetTree(const std::string& rid, const std::string& sha,
                              const std::string& path);

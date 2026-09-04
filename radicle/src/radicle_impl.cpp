@@ -117,6 +117,11 @@ std::string RadicleImpl::remoteGetRepo(const std::string& rid)
     return dump(seed().getRepo(rid));
 }
 
+std::string RadicleImpl::remoteListBranches(const std::string& rid)
+{
+    return dump(seed().listBranches(rid));
+}
+
 std::string RadicleImpl::remoteGetTree(const std::string& rid, const std::string& sha,
                                        const std::string& path)
 {
@@ -178,6 +183,7 @@ std::string RadicleImpl::remoteGetPatch(const std::string& rid, const std::strin
 
 std::string RadicleImpl::localListRepos(const std::string&, int64_t, int64_t)      { return localUnavailable(); }
 std::string RadicleImpl::localGetRepo(const std::string&)                  { return localUnavailable(); }
+std::string RadicleImpl::localListBranches(const std::string&)             { return localUnavailable(); }
 std::string RadicleImpl::localGetTree(const std::string&, const std::string&,
                                       const std::string&)                 { return localUnavailable(); }
 std::string RadicleImpl::localGetBlob(const std::string&, const std::string&,

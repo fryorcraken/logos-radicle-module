@@ -26,3 +26,7 @@ radicle-ui/tests/results.txt
 dist/
 basecamp/
 ui-results/
+
+# local scratch: the inspector-enabled Basecamp copy, staged .lgx files,
+# throwaway user-dirs and build logs from running the end-to-end layer by hand
+tmp/

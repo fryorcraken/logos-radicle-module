@@ -78,17 +78,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  browse:
-    name: sitometres browse spec
+  spec:
+    name: sitometres ${{ matrix.spec }} spec
     runs-on: ubuntu-latest
     # Basecamp's own doctests use 120 for the same from-source bundle build.
     timeout-minutes: 120
+
+    # One job per spec, in parallel. They share the expensive prefix — the
+    # Basecamp build — but that is served from the store cache after the first
+    # of them warms it, and running them in one job instead would serialise
+    # four real-seed runs behind each other for no gain.
+    #
+    # fail-fast is off: when two specs break it is worth seeing both, and a
+    # spec that fails for seed-side reasons should not hide a real failure in
+    # another.
+    strategy:
+      fail-fast: false
+      matrix:
+        spec: [browse, branches, source, sync]
 
     env:
       # Pinned: Basecamp 0.2.3. Bump deliberately — an unpinned rev recompiles
       # on every upstream commit and invalidates the store cache with it.
       BASECAMP_REV: aa237766baf61404e12da86b7303cb41065464c9
-      SPEC: radicle-ui/tests/ui/browse.yaml
+      SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
 
     steps:
       - uses: actions/checkout@v4
@@ -258,7 +271,7 @@ jobs:
               || { echo "::error::$f has no linux-amd64 variant — is this .#lgx instead of .#lgx-portable?"; exit 1; }
           done
 
-      - name: Run the browse spec
+      - name: Run the spec
         # Bounded well inside the job's 120, so a spec that hangs fails HERE —
         # leaving the later steps to collect logs and upload evidence. If the
         # job-level timeout fires instead it kills the whole run, artifacts and
@@ -281,8 +294,8 @@ jobs:
             --basecamp basecamp/bin/LogosBasecamp \
             --variant linux-amd64 \
             --strict \
-            --json  ui-results/browse.json \
-            --junit ui-results/browse.xml \
+            --json  "ui-results/${{ matrix.spec }}.json" \
+            --junit "ui-results/${{ matrix.spec }}.xml" \
             --artifacts ui-results/screenshots \
             2>&1 | tee ui-results/sitometres.log
 
@@ -302,6 +315,10 @@ jobs:
         # step broke and why. It cannot rescue a failed run: this step only ever
         # adds a failure, never removes one.
         if: always()
+        # The heredoc below is quoted, so it cannot interpolate ${{ }} — the
+        # two paths come through the environment instead.
+        env:
+          REPORT: ui-results/${{ matrix.spec }}.json
         run: |
           set -eu
           # Explicit rather than assumed: the runner image happens to ship
@@ -310,17 +327,20 @@ jobs:
           python3 - <<'PY'
           import json, os, sys, yaml
 
+          report_path = os.environ["REPORT"]
+          spec_path = os.environ["SPEC"]
+
           # sitometres writes --json from a `finally`, so a report is missing
           # only when the process never got to exit — killed by the job's
           # timeout-minutes, or OOM. Say that, rather than dying on a traceback
           # about a missing file.
-          if not os.path.exists("ui-results/browse.json"):
+          if not os.path.exists(report_path):
               print("::error::no JSON report — sitometres was killed before it could "
                     "write one (job timeout?), so nothing was proved")
               sys.exit(1)
 
-          report = json.load(open("ui-results/browse.json"))
-          spec = yaml.safe_load(open("radicle-ui/tests/ui/browse.yaml"))
+          report = json.load(open(report_path))
+          spec = yaml.safe_load(open(spec_path))
           expected = len(spec["steps"])
           steps = report.get("steps", [])
 
@@ -372,6 +392,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-test-evidence
+          # Per spec: upload-artifact@v4 refuses a name another job in the same
+          # run already claimed, so a shared name would fail three of the four.
+          name: ui-test-evidence-${{ matrix.spec }}
           path: ui-results/
           if-no-files-found: warn
