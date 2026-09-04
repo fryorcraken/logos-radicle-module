@@ -102,6 +102,8 @@ jobs:
       # on every upstream commit and invalidates the store cache with it.
       BASECAMP_REV: aa237766baf61404e12da86b7303cb41065464c9
       SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
+      # Keep in step with ci.yml's build job.
+      LGS_VERSION: "0.3.1"
 
     steps:
       - uses: actions/checkout@v4
@@ -180,20 +182,19 @@ jobs:
       # install path. Pinned to an exact version: an unpinned install would
       # silently change the tool driving every module build the next time
       # upstream publishes.
-      - name: Cache cargo
+      # Cache the binary, not `~/.cargo` — see the same pair of steps in
+      # ci.yml for why (throwaway target dir, and not overlaying the runner's
+      # own rust shims). Exact-match key, no restore-keys, on purpose.
+      - name: Cache lgs
+        id: lgs-cache
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-lgs-${{ runner.os }}-0.3.1
+          path: ~/.cargo/bin/lgs
+          key: lgs-${{ runner.os }}-${{ env.LGS_VERSION }}
 
-      # `--force` because `~/.cargo/bin` is cached above: on a cache hit the
-      # binaries already exist and plain `cargo install` fails with "binary
-      # `lgs` already exists in destination". See the same step in ci.yml.
       - name: Install logos-scaffold
-        run: cargo install logos-scaffold --version 0.3.1 --locked --force
+        if: steps.lgs-cache.outputs.cache-hit != 'true'
+        run: cargo install logos-scaffold --version ${{ env.LGS_VERSION }} --locked
 
       # The bundle carries its own Qt but NOT host graphics libraries — you
       # cannot bundle a GPU driver — so it resolves libGL/glvnd through the
@@ -273,6 +274,12 @@ jobs:
       # No `basecamp setup` here: a build touches neither the basecamp binaries
       # nor the profiles, and `lgs basecamp docs` names CI explicitly as a
       # supported hand-authored-[modules]-table case.
+      #
+      # NOTE: `lgs basecamp build` has no `--print-build-logs` passthrough, so
+      # a failing module build reports less here than the raw `nix build -L`
+      # this replaced — and ci.yml's build job lost it too, so there is no
+      # log-carrying build left in CI. To debug one, reproduce locally with
+      # `nix build .#lgx-portable -L` in the module directory.
       - name: Build both modules (portable)
         run: lgs basecamp build-portable
 
