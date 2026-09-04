@@ -141,6 +141,62 @@ jobs:
         with:
           node-version: "24"
 
+      # Two unrelated needs, one apt transaction, so the job pays the
+      # update-and-install cost once:
+      #
+      #   * the graphics libraries the Basecamp bundle resolves at load time.
+      #     It carries its own Qt but NOT host graphics — you cannot bundle a
+      #     GPU driver — so a bare runner dies with `libOpenGL.so.0: cannot
+      #     open shared object file`. Same list as logos-basecamp's own
+      #     doctests workflow.
+      #   * `tomlq`, which the next step uses to read the Basecamp pin. That
+      #     is why this sits up here rather than just before the bundle is
+      #     built: the resolve step needs it, and the cache step needs the
+      #     resolve step.
+      #
+      # `yq` is the Python package that ships `tomlq`. The runner preinstalls
+      # a `yq` already, but that is the Go one (v4) and has no `tomlq` — two
+      # different tools sharing a name, so this install is not redundant.
+      #
+      # The runner image preconfigures third-party apt repos this job does not
+      # use, and one of them failing takes `apt-get update` — and so the whole
+      # job — down with it. Seen for real (run 33826324704, the `sync` job,
+      # while its three siblings passed the identical step minutes apart):
+      #
+      #   E: Failed to fetch https://packages.microsoft.com/ubuntu/24.04/prod/…
+      #      403  Forbidden
+      #   E: The repository '… noble InRelease' is no longer signed.
+      #
+      # Not a momentary blip worth retrying through: the runner image already
+      # sets `APT::Acquire::Retries "10"`, so apt had retried ten times before
+      # surfacing that.
+      #
+      # Every package below comes from Ubuntu's own archive, so nothing here
+      # needs a third-party source. Rather than name one file — the image's
+      # layout is not a contract, and a `.list` that has become a deb822
+      # `.sources` would make a targeted `rm` silently do nothing — move every
+      # extra source out of the way by pattern and keep only the distribution's
+      # own. `mv -v` so the log says what was disabled rather than leaving it
+      # to be inferred.
+      #
+      # `update` is then allowed to fail without failing the step: `install`
+      # is the real gate and fails loudly if a package cannot be resolved,
+      # which is the outcome that actually matters.
+      - name: Install graphics runtime libraries and tomlq
+        run: |
+          set -eu
+          sudo mkdir -p /etc/apt/disabled-sources.d
+          # `find -exec` rather than a glob: no match must not be an error.
+          sudo find /etc/apt/sources.list.d -maxdepth 1 \
+            \( -name '*.list' -o -name '*.sources' \) \
+            ! -name 'ubuntu.sources' ! -name 'ubuntu.list' \
+            -exec mv -v -t /etc/apt/disabled-sources.d {} +
+          sudo apt-get update -qq \
+            || echo "::warning::apt-get update reported errors; install is the gate, continuing"
+          sudo apt-get install -y --no-install-recommends \
+            libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1 yq
+          tomlq --version
+
       # ONE source of truth for the Basecamp rev: `[repos.basecamp].pin`.
       #
       # `lgs basecamp setup` takes no --rev — it reads that pin — so anything
@@ -149,31 +205,34 @@ jobs:
       # a cache keyed on a rev the build does not use restores a store that
       # cannot help, and the only symptom is that every run is slow.
       #
-      # Must run before the cache step, which is why it is this early. Python
-      # with tomllib (3.11+, and the runner ships 3.12) rather than a regex:
-      # the pin is a TOML value and should be read as one.
+      # Must run before the cache step, which is why it is this early — and
+      # before the apt step that installs tomlq, which is why that step moved
+      # up too. `tomlq` (from the `yq` package) reads the pin as the TOML value
+      # it is rather than regexing the file.
+      #
+      # Note the runner's preinstalled `yq` is the Go one (v4), which has no
+      # `tomlq`; the apt `yq` is the Python one, which does. They are different
+      # tools sharing a name, so the install is not redundant.
       - name: Resolve the pinned Basecamp rev
         run: |
           set -eu
-          python3 - <<'PY'
-          import os, tomllib
-          with open("scaffold.toml", "rb") as fh:
-              pin = tomllib.load(fh)["repos"]["basecamp"]["pin"]
+          pin=$(tomlq -r '.repos.basecamp.pin' scaffold.toml)
           # A short, empty or branch-name pin would still produce a perfectly
           # usable cache key while silently not being the rev anyone meant.
+          # `tomlq -r` also prints the string "null" for a missing key, which
+          # this rejects along with the rest.
           #
           # Lowercase is required, not merely conventional: the pin goes into
           # the cache key verbatim, so `AA23…` and `aa23…` would key two
           # separate caches for one rev and halve the hit rate for no visible
-          # reason. Rejecting it is better than normalising it here, because
-          # scaffold builds whatever the file says and only the file should
-          # decide the rev.
-          assert len(pin) == 40 and all(c in "0123456789abcdef" for c in pin), \
-              f"[repos.basecamp].pin is {pin!r}, expected a full 40-char lowercase sha"
-          with open(os.environ["GITHUB_ENV"], "a") as fh:
-              fh.write(f"BASECAMP_REV={pin}\n")
-          print(f"BASECAMP_REV={pin} (from scaffold.toml)")
-          PY
+          # reason. Rejecting is better than normalising, because scaffold
+          # builds whatever the file says and only the file should decide.
+          printf '%s' "$pin" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "::error::[repos.basecamp].pin is '$pin', expected a full 40-char lowercase sha"
+            exit 1
+          }
+          echo "BASECAMP_REV=$pin" >> "$GITHUB_ENV"
+          echo "BASECAMP_REV=$pin (from scaffold.toml)"
 
       # Not a GitHub-authored action, so the Node-20 retirement does not reach
       # it — install-nix-action is a composite/Docker action. Left on its pin.
@@ -264,50 +323,6 @@ jobs:
       - name: Install logos-scaffold
         if: steps.lgs-cache.outputs.cache-hit != 'true'
         run: cargo install --git https://github.com/logos-co/scaffold.git --rev ${{ env.LGS_REV }} logos-scaffold --locked
-
-      # The bundle carries its own Qt but NOT host graphics libraries — you
-      # cannot bundle a GPU driver — so it resolves libGL/glvnd through the
-      # normal loader path. A bare runner has none, and the binary dies at load
-      # with `libOpenGL.so.0: cannot open shared object file`. Same list as
-      # logos-basecamp's own doctests workflow.
-      #
-      # The runner image preconfigures third-party apt repos this job does not
-      # use, and one of them failing takes `apt-get update` — and so the whole
-      # job — down with it. Seen for real (run 33826324704, the `sync` job,
-      # while its three siblings passed the identical step minutes apart):
-      #
-      #   E: Failed to fetch https://packages.microsoft.com/ubuntu/24.04/prod/…
-      #      403  Forbidden
-      #   E: The repository '… noble InRelease' is no longer signed.
-      #
-      # Not a momentary blip worth retrying through: the runner image already
-      # sets `APT::Acquire::Retries "10"`, so apt had retried ten times before
-      # surfacing that.
-      #
-      # All six packages below come from Ubuntu's own archive, so nothing here
-      # needs any third-party source. Rather than name one file — the image's
-      # layout is not a contract, and a `.list` that has become a deb822
-      # `.sources` would make a targeted `rm` silently do nothing — move every
-      # extra source out of the way by pattern and keep only the distribution's
-      # own. Prints what it disabled, so the log says what actually happened
-      # instead of leaving it to be inferred.
-      #
-      # `update` is then still allowed to fail without failing the step:
-      # `install` is the real gate and fails loudly if a package cannot be
-      # resolved, which is the outcome that actually matters here.
-      - name: Install graphics runtime libraries
-        run: |
-          set -eu
-          sudo mkdir -p /etc/apt/disabled-sources.d
-          # `find -exec` rather than a glob: no match must not be an error.
-          sudo find /etc/apt/sources.list.d -maxdepth 1 \
-            \( -name '*.list' -o -name '*.sources' \) \
-            ! -name 'ubuntu.sources' ! -name 'ubuntu.list' \
-            -exec mv -v -t /etc/apt/disabled-sources.d {} +
-          sudo apt-get update -qq \
-            || echo "::warning::apt-get update reported errors; install is the gate, continuing"
-          sudo apt-get install -y --no-install-recommends \
-            libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
 
       # `lgs`, not raw `nix build`. `setup --inspector` selects
       # `.#bin-bundle-dir-inspector` and — the part that matters and the reason

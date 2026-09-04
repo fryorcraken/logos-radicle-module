@@ -210,9 +210,12 @@ persists them, so a later plain `setup` cannot silently drop the opt-in;
 The rev needs no flag: scaffold reads `[repos.basecamp].pin` from
 `scaffold.toml`, and that pin is already the `aa237766…` the e2e layer wants.
 **That pin is the single source of truth for the rev** — `ui-tests.yml` derives
-its `BASECAMP_REV` from it (a `tomllib` one-liner in the "Resolve the pinned
-Basecamp rev" step, which must stay before the cache step) rather than carrying
-its own literal. It used to carry one, which was safe only while the workflow
+its `BASECAMP_REV` from it with `tomlq` in the "Resolve the pinned Basecamp
+rev" step, rather than carrying its own literal. Two ordering constraints, both
+load-bearing: that step must run before the cache step (which keys on the
+value), and after the apt step (which installs `tomlq`). Note the runner's
+preinstalled `yq` is the **Go** one and has no `tomlq`; the apt `yq` is the
+Python one that does, so the install is not redundant. It used to carry one, which was safe only while the workflow
 also did the build; once `setup` took that over, a hardcoded copy became a
 second source of truth for one fact, and the divergence would have been
 invisible — the store cache would key on the stale rev, restore a store that
@@ -1035,13 +1038,16 @@ Four things that are CI-specific and not obvious from the local workflow:
 - **`BASECAMP_REV` is derived from `scaffold.toml`, not written in the
   workflow.** With `setup` doing the build, the rev comes from
   `[repos.basecamp].pin`; the Nix store cache is keyed on the same value, read
-  out by the "Resolve the pinned Basecamp rev" step. Keep that step **before**
-  the cache step — that ordering is the whole reason it is a separate step
-  rather than part of the setup one. A literal in the job's `env:` would be a
-  second source of truth whose divergence nothing reports: the cache would key
-  on the stale rev and every run would recompile Basecamp, with green specs
-  and no error. The step after `setup` still cross-checks what was actually
-  built against that value.
+  out with `tomlq` by the "Resolve the pinned Basecamp rev" step. That step is
+  fenced by two orderings: **after** the apt step, which installs `tomlq`, and
+  **before** the cache step, which keys on what it exports. That is the whole
+  reason it is a separate step rather than part of the setup one, and the
+  reason the apt step sits near the top of the job rather than beside the
+  bundle build it also serves. A literal in the job's `env:` would be a second
+  source of truth whose divergence nothing reports: the cache would key on the
+  stale rev and every run would recompile Basecamp, with green specs and no
+  error. The step after `setup` still cross-checks what was actually built
+  against that value.
 - **The staging step spells out the four release filenames.** `lgs` names its
   symlinks `<NN>-<module>.lgx` for load order; the release contract is the
   published names, and the module catalog references them. The mapping is
