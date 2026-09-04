@@ -159,10 +159,17 @@ jobs:
           import os, tomllib
           with open("scaffold.toml", "rb") as fh:
               pin = tomllib.load(fh)["repos"]["basecamp"]["pin"]
-          # A short or empty pin would still produce a usable cache key while
-          # silently not being the rev anyone meant.
+          # A short, empty or branch-name pin would still produce a perfectly
+          # usable cache key while silently not being the rev anyone meant.
+          #
+          # Lowercase is required, not merely conventional: the pin goes into
+          # the cache key verbatim, so `AA23…` and `aa23…` would key two
+          # separate caches for one rev and halve the hit rate for no visible
+          # reason. Rejecting it is better than normalising it here, because
+          # scaffold builds whatever the file says and only the file should
+          # decide the rev.
           assert len(pin) == 40 and all(c in "0123456789abcdef" for c in pin), \
-              f"[repos.basecamp].pin is {pin!r}, expected a full 40-char sha"
+              f"[repos.basecamp].pin is {pin!r}, expected a full 40-char lowercase sha"
           with open(os.environ["GITHUB_ENV"], "a") as fh:
               fh.write(f"BASECAMP_REV={pin}\n")
           print(f"BASECAMP_REV={pin} (from scaffold.toml)")
