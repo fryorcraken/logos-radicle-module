@@ -175,6 +175,23 @@ jobs:
           purge-prefixes: nix-ui-${{ runner.os }}-
           purge-created: 604800
 
+      # `lgs` builds the modules below. logos-scaffold has no flake and no
+      # release binary, so `cargo install` from crates.io is the documented
+      # install path. Pinned to an exact version: an unpinned install would
+      # silently change the tool driving every module build the next time
+      # upstream publishes.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-lgs-${{ runner.os }}-0.3.1
+
+      - name: Install logos-scaffold
+        run: cargo install logos-scaffold --version 0.3.1 --locked
+
       # The bundle carries its own Qt but NOT host graphics libraries — you
       # cannot bundle a GPU driver — so it resolves libGL/glvnd through the
       # normal loader path. A bare runner has none, and the binary dies at load
@@ -243,32 +260,36 @@ jobs:
       # So: build `.#lgx-portable` (verified with `tar tzf` to contain exactly
       # `variants/linux-amd64`) and pass --variant to override the -dev default.
       # Both halves are needed; either alone reproduces the failure above.
-      - name: Build the core module
-        run: nix build '.#lgx-portable' --out-link result-lgx-portable --print-build-logs
-        working-directory: radicle
+      #
+      # `lgs basecamp build-portable` builds both modules in dependency order,
+      # derives the `--override-input radicle path:../radicle` itself by
+      # parsing radicle-ui/flake.nix, and collects the results into ONE
+      # directory — which is exactly what sitometres needs, since --app-dir is
+      # a single search root and browse.yaml declares `with: [radicle]`.
+      #
+      # No `basecamp setup` here: a build touches neither the basecamp binaries
+      # nor the profiles, and `lgs basecamp docs` names CI explicitly as a
+      # supported hand-authored-[modules]-table case.
+      - name: Build both modules (portable)
+        run: lgs basecamp build-portable
 
-      - name: Build the UI module
-        run: nix build '.#lgx-portable' --override-input radicle path:../radicle --out-link result-lgx-portable --print-build-logs
-        working-directory: radicle-ui
-
-      # sitometres discovers apps under <app-dir>/dist/*.lgx among other places
-      # (src/app/discover.ts). Staging both there lets one --app-dir serve the
-      # app under test and the `with: [radicle]` dependency the spec declares.
-      - name: Stage the modules for discovery
+      # sitometres reads .scaffold/basecamp/portable/ directly — verified by a
+      # real run. It follows the /nix/store symlinks and is not confused by the
+      # <NN>- load-order prefix, the two details most likely to have broken it.
+      # There is deliberately NO copy into dist/: that only ever existed to
+      # collect two separate sub-flake result-* symlinks into one directory,
+      # and build-portable already does the collecting.
+      - name: The built packages carry the variant the bundle accepts
+        # Getting this wrong does not fail loudly: Basecamp logs one warning,
+        # declines to load the module, and the spec then times out on its first
+        # step for no visible reason. So assert it here, where the message says
+        # what happened.
         run: |
           set -eu
-          rm -rf dist
-          mkdir -p dist
-          cp radicle/result-lgx-portable/*.lgx    dist/
-          cp radicle-ui/result-lgx-portable/*.lgx dist/
-          # Assert the staged packages really carry the variant the bundle
-          # accepts. Getting this wrong does not fail loudly: Basecamp logs one
-          # warning, declines to load the module, and the spec then times out on
-          # its first step for no visible reason.
-          for f in dist/*.lgx; do
+          for f in .scaffold/basecamp/portable/*.lgx; do
             echo "$f: $(tar tzf "$f" | grep -oE 'variants/[^/]+' | sort -u | tr '\n' ' ')"
             tar tzf "$f" | grep -q '^variants/linux-amd64/' \
-              || { echo "::error::$f has no linux-amd64 variant — is this .#lgx instead of .#lgx-portable?"; exit 1; }
+              || { echo "::error::$f has no linux-amd64 variant — did build-portable fall back to .#lgx?"; exit 1; }
           done
 
       - name: Run the spec
@@ -290,7 +311,7 @@ jobs:
           # sitometres exits 0 on INCONCLUSIVE by design.
           npx --yes @paradoxcomputer/sitometres@0.1.0 run "$SPEC" \
             --app radicle_ui \
-            --app-dir . \
+            --app-dir .scaffold/basecamp/portable \
             --basecamp basecamp/bin/LogosBasecamp \
             --variant linux-amd64 \
             --strict \

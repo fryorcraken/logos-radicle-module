@@ -500,6 +500,23 @@ environments where `lgs basecamp setup` can't or shouldn't run". Verified here:
 `lgs basecamp build --variant all` runs green in a fresh worktree with no
 `.scaffold/` at all. Only `install` and `launch` need `setup`.
 
+### Environment goes in `scaffold.toml`, not on the command line
+
+Do not prefix commands with `VAR=value`. It trips the permission checker (an
+approval click every time) and it puts configuration somewhere nothing else
+can see it.
+
+`lgs` reads `[basecamp.env]` and `[basecamp.profiles.<name>]` from
+`scaffold.toml` and exports them to the Basecamp process itself. That is
+already where `QT_LOGGING_RULES` and `QT_FORCE_STDERR_LOGGING` live — which is
+why QML import failures are visible at all — and where `runtime_dir` is pinned
+per profile. If you need a variable set for a run, add it there; then every
+future launch has it too, and the reason can be written down beside it.
+
+The same principle covers the test scripts: `run-qml-tests.sh` and
+`check-qml-syntax.sh` take no arguments and set their own environment
+deliberately. Extend that when adding a script rather than inventing flags.
+
 ### `basecamp setup` strips the comments from `scaffold.toml`
 
 It rewrites the file, and the rewrite does not preserve comments. This repo's
@@ -515,27 +532,67 @@ comments.** Logged as an upstream ask below.
 
 1. **The core module's unit tests.** There is no verb for a flake's `checks`
    outputs, so that stays `nix build '.#checks…'`.
-2. **The inspector-enabled Basecamp bundle** the e2e layer needs.
-   `lgs basecamp setup` takes only `--quiet` — no `--rev`, no `--flake`, no way
-   to pin a different Basecamp build — so there is no `lgs` route to
-   `#bin-bundle-dir-inspector` at a chosen rev. That one raw `nix build` is
-   legitimate and is not a sign you should hand-roll the rest.
+2. **The inspector-enabled Basecamp bundle** the e2e layer needs. That one raw
+   `nix build` is legitimate and is not a sign you should hand-roll the rest.
+   The gap is narrower than it looks, though — see below.
 
 Everything else has a verb. Use it.
+
+### How close `lgs` is to building the inspector Basecamp
+
+Worth writing down, because "no `lgs` route" is the obvious conclusion and it
+is not quite right.
+
+`lgs basecamp setup` has no `--rev` or `--flake` flag — its whole surface is
+`--quiet`. But it does not need one: scaffold reads **`[repos.basecamp].pin`
+and `.attr` from `scaffold.toml`**, and its default pin is
+`aa237766aa…` — byte-identical to the rev this repo's e2e layer pins. The
+`attr` even accepts a per-system map:
+
+```toml
+[repos.basecamp]
+attr = "bin-bundle-dir-inspector"    # would build the right derivation
+```
+
+So the *build* is expressible today. What is not is the **classification**.
+Scaffold decides dev-vs-portable stack from a hardcoded list:
+
+```rust
+pub(crate) const BASECAMP_PORTABLE_ATTRS: &[&str] =
+    &["bin-macos-app", "bin-appimage", "bin-bundle-dir"];
+```
+
+`bin-bundle-dir-inspector` is absent, and the comment says anything
+unrecognised "is treated as dev". That picks the wrong XDG subpath
+(`Logos/LogosBasecampDev` instead of `Logos/LogosBasecamp`) and the wrong lgpm
+variant (`cli`, which accepts `-dev` `.lgx` variants, instead of
+`cli-portable`) — so `setup` would build the right binary and then seed
+profiles the bundle cannot load, which is the silent-failure shape this repo
+has been bitten by repeatedly.
+
+Hence the upstream ask below is a one-line list addition, not a new flag. Until
+it lands, keep the raw `nix build` — and do not "helpfully" set
+`attr = "bin-bundle-dir-inspector"` in `scaffold.toml` expecting it to work.
 
 ### Upstream asks against logos-scaffold
 
 Worth filing; none blocks anything today.
 
-- **A way to pin the Basecamp build.** A `--rev` on `basecamp setup`, or a
-  `[basecamp]` key in `scaffold.toml`. `lgs basecamp develop`'s own help says
-  its purpose is "verb-set symmetry so contributors stop reaching for raw
-  `nix`" — by that standard the inspector-bundle gap is against scaffold's
-  stated intent.
+- **Add `bin-bundle-dir-inspector` to `BASECAMP_PORTABLE_ATTRS`** so the
+  inspector bundle can be selected via `[repos.basecamp].attr` and classified
+  as the portable stack it is. **Filed:
+  [logos-co/scaffold#265](https://github.com/logos-co/scaffold/issues/265).**
+  One-line change; see "How close `lgs` is to building the inspector Basecamp"
+  above for why the pin and attr are already expressible and only the
+  classification is missing. If it lands, step 1 of the e2e sequence becomes
+  `lgs basecamp setup` and this file loses its last raw `nix build` for
+  Basecamp.
 - **`basecamp setup` should preserve `scaffold.toml` comments** on rewrite.
-- **`basecamp build` could take `--out-link` / `--print-build-logs`
-  passthrough.** Not needed for this repo's CI (see the CI section), but it is
-  the one place a raw `nix build` still buys something `lgs` cannot express.
+- **`basecamp build` should pass `--print-build-logs` through.** This one is
+  no longer hypothetical: converting `ui-tests.yml` to `build-portable` gave
+  up that flag, so a module build that fails in that job now says less than it
+  used to. `--out-link` would be nice too, but the deterministic
+  `.scaffold/basecamp/{lgx,portable}/` paths removed the need for it.
 
 ### Your local `basecamp` skill copy documents a different release
 
@@ -674,11 +731,11 @@ Pick the cheapest layer that can actually see the behaviour you changed.
 |---|---|---|---|
 | Core module unit tests | `radicle/tests/` | `cd radicle && nix build '.#checks.x86_64-linux.unit-tests'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
 | QML component tests | `radicle-ui/tests/tst_*.qml` | `sh radicle-ui/tests/run-qml-tests.sh` | One component in isolation: selection state, layout invariants, load ordering |
-| End-to-end UI specs | `radicle-ui/tests/ui/*.yaml` | `npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml` | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
+| End-to-end UI specs | `radicle-ui/tests/ui/*.yaml` | `lgs basecamp build-portable`, then the sitometres command in "Running the end-to-end layer" | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
 
 The unit-test row is raw `nix` on purpose — `lgs` has no verb for a flake's
-`checks` outputs. Everything *building* the modules goes through `lgs` instead;
-see the tooling note above.
+`checks` outputs. Everything *building* the modules goes through `lgs`, in CI
+as well as locally; see the tooling note above.
 
 Logic that does not need a view belongs in the core module, where it is testable
 without Qt at all. A component test is the right layer for anything one QML file
@@ -857,40 +914,51 @@ after `BASECAMP_REV` changes, pays roughly nine minutes.
 
 ### Does CI use `lgs`?
 
-**`ci.yml`'s module builds do. Everything else does not, for stated reasons.**
+**Yes — every module build in both workflows, sitometres included.** Only two
+things still call `nix build` directly, and both are named gaps rather than
+preferences.
 
-`ci.yml`'s `build` job installs `lgs` and runs a single
-`lgs basecamp build --variant all` in place of the four `nix build` calls it
-used to make. That works because:
+Both workflows `cargo install logos-scaffold --version 0.3.1 --locked` (there
+is no flake and no release binary, so this is a Rust build — cached on
+`~/.cargo`, and version-pinned so an upstream publish cannot silently change
+the tool driving every build here).
+
+- **`ci.yml`'s `build` job**: four `nix build` calls became one
+  `lgs basecamp build --variant all`.
+- **`ui-tests.yml`**: two `nix build` calls became one
+  `lgs basecamp build-portable`, and sitometres now points `--app-dir`
+  straight at `.scaffold/basecamp/portable/`. The `rm -rf dist && mkdir dist
+  && cp …` staging step is gone entirely — that copy only ever existed to
+  collect two separate sub-flake `result-*` symlinks into the single search
+  root `--app-dir` requires, and `build-portable` already collects them.
+
+Three things make this work:
 
 - **No `basecamp setup` is required.** A build touches neither the basecamp
   binaries nor the profiles, and `lgs basecamp docs` names CI explicitly as a
-  supported hand-authored-table case.
+  supported hand-authored-`[modules]`-table case. Verified against released
+  v0.3.1 in a tree with no `.scaffold/` at all.
 - **Artefact paths are deterministic and variant-separated** —
-  `.scaffold/basecamp/{lgx,portable}/<NN>-<module>.lgx` — which is what the
-  manifest check and the staging step address. An earlier draft of this file
-  claimed `--variant all` produced "one flat directory with no variant in the
-  names" and that `--out-link` was therefore load-bearing. That was wrong.
-- **The sibling `--override-input` stops being hand-written**, which removes
-  the workflow's copy of a flag that must otherwise stay in sync with
+  `.scaffold/basecamp/{lgx,portable}/<NN>-<module>.lgx`. An earlier draft of
+  this file claimed `--variant all` produced "one flat directory with no
+  variant in the names", making `--out-link` load-bearing. That was wrong.
+- **The sibling `--override-input` stops being hand-written**, so the workflow
+  no longer keeps a copy of a flag that must stay in sync with
   `radicle-ui/flake.nix`.
 
-`lgs` is installed with `cargo install logos-scaffold`. There is no flake and
-no release binary, so this is a Rust build; it is cached on `~/.cargo` and
-pinned to an exact version, since an unpinned `cargo install` would silently
-change the build tooling under CI.
+What is still raw `nix`, and precisely what `lgs` lacks:
 
-What stays on raw `nix`, and why:
+| Step | Missing verb |
+|---|---|
+| Core module unit tests (`.#checks…`) | no verb for a flake's `checks` outputs |
+| The inspector Basecamp bundle | `basecamp setup` takes only `--quiet` — no `--rev`/`--flake` to pin a different build |
 
-- **The core module unit tests** (`.#checks…`) — no `lgs` verb for flake
-  `checks` outputs.
-- **`ui-tests.yml` entirely.** Its two module builds *could* use
-  `build-portable`, but the job also builds the inspector Basecamp, which has
-  no `lgs` route at a pinned rev, and it uses `--print-build-logs` so a failed
-  build prints why in the job log rather than "builder failed".
-  `lgs basecamp build` has no passthrough for that. Converting half a job to
-  gain one line is not worth losing the failure diagnostics.
+One thing genuinely lost in the conversion: `ui-tests.yml` used
+`--print-build-logs`, so a failed module build printed *why* in the job log.
+`lgs basecamp build` has no passthrough for it, so a build failure there now
+reports less. That is the third upstream ask below, and it is a real
+regression — worth reverting that one job if it ever bites during a debugging
+session.
 
 An earlier draft also argued CI needed per-sub-flake **matrix parallelism**.
-There is no matrix in either workflow — `ci.yml` has one `build` job running
-its `nix build` calls sequentially. That reason was withdrawn.
+There is no matrix in either workflow. That reason was withdrawn.
