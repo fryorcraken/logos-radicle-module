@@ -737,7 +737,7 @@ Pick the cheapest layer that can actually see the behaviour you changed.
 
 The unit-test row is raw `nix` on purpose — `lgs` has no verb for a flake's
 `checks` outputs. Everything *building* the modules goes through `lgs`, in CI
-as well as locally; see the tooling note above.
+as well as locally; see "This is a scaffold-managed project" at the top.
 
 Logic that does not need a view belongs in the core module, where it is testable
 without Qt at all. A component test is the right layer for anything one QML file
@@ -936,12 +936,18 @@ core unit tests, and the inspector Basecamp.
 
 Three things that are CI-specific and not obvious from the local workflow:
 
-- **`cargo install … --force` is load-bearing.** `~/.cargo/bin` is in the
-  cache key, so on a cache *hit* the binaries already exist and a plain
-  `cargo install` exits 101 with "binary `lgs` already exists in destination"
-  rather than no-opping. `--force` also means a bumped version actually
-  replaces the cached binary instead of being silently ignored. The version is
-  pinned so an upstream publish cannot change the tool mid-stream.
+- **The `lgs` install is gated on a cache miss, and must stay that way.**
+  Both workflows cache the single binary `~/.cargo/bin/lgs` and run
+  `cargo install` only `if: steps.lgs-cache.outputs.cache-hit != 'true'`.
+  Do **not** "fix" this into a plain unconditional `cargo install` (it exits
+  101 with "binary `lgs` already exists in destination" on a hit) or into
+  `cargo install --force`. `--force` was tried and reverted: `cargo install`
+  builds in a throwaway target dir, so it recompiled ~130 crates on every
+  cache hit — 60s per job, buying nothing. The key is an exact match with no
+  `restore-keys`, deliberately: a prefix match would restore a *different*
+  version's binary and the gate would then skip installing the pinned one.
+  The version lives in one `LGS_VERSION` env var so the key cannot desync
+  from what is installed.
 - **Both workflows lost `--print-build-logs`.** `lgs basecamp build` has no
   passthrough, so a failing module build now reports less in CI than the raw
   `nix build -L` it replaced — and this applies to `ci.yml` as well, so there
