@@ -126,6 +126,12 @@ jobs:
       #
       # Revert to `LGS_VERSION: "<next release>"` and a plain
       # `cargo install logos-scaffold --version …` the moment #266 ships in one.
+      #
+      # If EVERY job in both workflows suddenly fails in `cargo install`, this
+      # is the first thing to check: the rev lives on an unmerged PR branch,
+      # kept alive only by that PR. A force-push plus a close, or the branch
+      # being deleted, makes it unfetchable. The fix is to re-pin to #266's
+      # current head, not to debug cargo.
       LGS_REV: 7ba5f9819e0619084d646c7bac34d2c2540229da
 
     steps:
@@ -205,10 +211,17 @@ jobs:
       # a cache keyed on a rev the build does not use restores a store that
       # cannot help, and the only symptom is that every run is slow.
       #
-      # Must run before the cache step, which is why it is this early — and
-      # before the apt step that installs tomlq, which is why that step moved
-      # up too. `tomlq` (from the `yq` package) reads the pin as the TOML value
-      # it is rather than regexing the file.
+      # Three ordering constraints, all load-bearing:
+      #   * AFTER the apt step, which installs tomlq — which is why that step
+      #     moved up to the top of the job rather than sitting beside the
+      #     bundle build it also serves.
+      #   * BEFORE the cache step, which keys on what this exports.
+      #   * BEFORE `setup --inspector`, which rewrites scaffold.toml's `attr`
+      #     keys IN PLACE. Safe today because setup never touches `pin`, but
+      #     the read happening first is what makes that a non-question; a
+      #     reorder should be a deliberate choice, not an accident.
+      # `tomlq` (from the `yq` package) reads the pin as the TOML value it is
+      # rather than regexing the file.
       #
       # Note the runner's preinstalled `yq` is the Go one (v4), which has no
       # `tomlq`; the apt `yq` is the Python one, which does. They are different
@@ -360,7 +373,28 @@ jobs:
       - name: The built Basecamp is the pinned rev, with the inspector in it
         run: |
           set -eu
-          . .scaffold/state/basecamp.state
+          # Parsed, not sourced. `. file` would execute it — and `basecamp_bin`
+          # is a path, so a value carrying $(...) would run. It also makes a
+          # missing key surface as a bare `pin: unbound variable` from `set -u`,
+          # which is the least legible failure in the file at the exact moment
+          # someone bumps LGS_REV and the state format has moved under them.
+          # scaffold writes each key CONDITIONALLY (`if !state.pin.is_empty()`),
+          # so an absent key is a shape this really can hit.
+          state=.scaffold/state/basecamp.state
+          test -f "$state" || {
+            echo "::error::$state missing — lgs basecamp setup wrote no state"
+            exit 1
+          }
+          pin=$(sed -n 's/^pin=//p' "$state")
+          basecamp_bin=$(sed -n 's/^basecamp_bin=//p' "$state")
+          [ -n "$pin" ] || {
+            echo "::error::$state has no 'pin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
+            exit 1
+          }
+          [ -n "$basecamp_bin" ] || {
+            echo "::error::$state has no 'basecamp_bin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
+            exit 1
+          }
           echo "basecamp_bin=$basecamp_bin"
           [ "$pin" = "$BASECAMP_REV" ] || {
             echo "::error::setup built $pin but scaffold.toml resolved to $BASECAMP_REV —"
@@ -368,8 +402,23 @@ jobs:
             exit 1
           }
           test -x "$basecamp_bin"
-          strings -a "$(dirname "$basecamp_bin")/.LogosBasecamp.elf" \
-            | grep -q 'Inspector server listening on port'
+          # Two DIFFERENT failures, kept apart on purpose. Without the -f test,
+          # a bundle whose layout moved makes `strings` write to stderr and
+          # print nothing; `grep -q` then sees empty input and returns 1, and
+          # the step blames a missing inspector for what is really a wrong
+          # path. There is no pipefail here, so the exit status is grep's
+          # alone — the left-hand side's failure would be invisible.
+          elf="$(dirname "$basecamp_bin")/.LogosBasecamp.elf"
+          test -f "$elf" || {
+            echo "::error::no .LogosBasecamp.elf beside $basecamp_bin —"
+            echo "::error::lgs's bundle layout moved; the sitometres probe workaround below assumes it too"
+            exit 1
+          }
+          strings -a "$elf" | grep -q 'Inspector server listening on port' || {
+            echo "::error::$elf carries no inspector —"
+            echo "::error::setup --inspector did not select the inspector output"
+            exit 1
+          }
           echo "ok: inspector present"
           echo "BASECAMP_BIN=$basecamp_bin" >> "$GITHUB_ENV"
 
@@ -456,7 +505,27 @@ jobs:
         # what happened.
         run: |
           set -eu
-          for f in .scaffold/basecamp/portable/*.lgx; do
+          # nullglob first. Without it a directory with no .lgx leaves the
+          # literal pattern as "$f", the loop runs once, `tar tzf` fails on a
+          # path that does not exist, and `grep -q` — reading empty input,
+          # with no pipefail to notice — returns 1. The step does fail, but it
+          # blames a missing linux-amd64 variant for what is really
+          # "build-portable produced nothing", sending the reader after a
+          # variant bug that is not there.
+          shopt -s nullglob
+          files=(.scaffold/basecamp/portable/*.lgx)
+          [ ${#files[@]} -gt 0 ] || {
+            echo "::error::build-portable produced no .lgx in .scaffold/basecamp/portable/"
+            exit 1
+          }
+          # Two modules, radicle and radicle_ui. A count that drops to one is
+          # the shape browse.yaml's `with: [radicle]` would fail on later, in a
+          # spec timeout that says nothing about the cause.
+          [ ${#files[@]} -eq 2 ] || {
+            echo "::error::expected 2 .lgx (radicle, radicle_ui), found ${#files[@]}: ${files[*]}"
+            exit 1
+          }
+          for f in "${files[@]}"; do
             echo "$f: $(tar tzf "$f" | grep -oE 'variants/[^/]+' | sort -u | tr '\n' ' ')"
             tar tzf "$f" | grep -q '^variants/linux-amd64/' \
               || { echo "::error::$f has no linux-amd64 variant — did build-portable fall back to .#lgx?"; exit 1; }

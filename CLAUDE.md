@@ -53,38 +53,35 @@ all have an `lgs` verb, and reaching straight for `nix build` skips the part
 scaffold does for you — resolving each module's flake ref, ordering the two
 builds by dependency, and deriving the sibling `--override-input`.
 
-**Version:** everything below needs `lgs` **v0.3.1 or newer**. Two changes
-matter. v0.3.0 moved the module table from `[basecamp.modules.*]` to the
-top-level `[modules.*]` this repo uses, and added `develop`, `build`, `run` and
-`paths`. v0.3.1 (2026-09-03) is eight fix commits on top, including three
-basecamp blockers found running scaffold's own dogfooding runbook.
-
-Install it from crates.io — there is no flake and no release binary:
-
-```bash
-cargo install logos-scaffold --version 0.3.1 --locked
-```
-
-**Except right now, where this repo needs an unreleased build.** Two things
-this repo depends on are on [logos-co/scaffold#266](https://github.com/logos-co/scaffold/pull/266),
-which is open: `basecamp setup --inspector` (the whole reason the last raw
-`nix build` for Basecamp is gone) and `--print-output` on `basecamp build` /
-`build-portable`. Both CI workflows pin the same commit in `LGS_REV`; match it
-locally:
+**Version: this repo currently needs an UNRELEASED build, not a crates.io
+release.** Install this and nothing else:
 
 ```bash
 cargo install --git https://github.com/logos-co/scaffold.git \
   --rev 7ba5f9819e0619084d646c7bac34d2c2540229da logos-scaffold --locked
 ```
 
-When #266 ships in a release, revert all three to
+That is the same commit both CI workflows pin in `LGS_REV`, and it is a
+pinned **commit** rather than the branch: a moving ref would silently change
+the tool driving every build here.
+
+Two things this repo depends on are on
+[logos-co/scaffold#266](https://github.com/logos-co/scaffold/pull/266), which
+is still open — `basecamp setup --inspector` (the whole reason the last raw
+`nix build` for Basecamp is gone) and `--print-output` on `basecamp build` /
+`build-portable`. **Neither exists in v0.3.1**, so installing the release and
+following the e2e sequence below gets you an unrecognised-flag error on step 1.
+
+When #266 ships in a release, revert all three sites to
 `cargo install logos-scaffold --version <that release>` and put `LGS_VERSION`
 back in both workflows. Nothing else changes — the flags keep their names.
 
-**`build`, `build-portable` and the e2e sequence below were run against
-released v0.3.1 in this repo**; the rest of the verb table comes from
-`lgs basecamp --help` on that same release. Nothing here is master-only, so a
-teammate on the release can run it.
+For background on the last release: v0.3.0 moved the module table from
+`[basecamp.modules.*]` to the top-level `[modules.*]` this repo uses, and added
+`develop`, `build`, `run` and `paths`; v0.3.1 (2026-09-03) is eight fix commits
+on top. **The verb table below was written against released v0.3.1** and every
+verb in it still behaves the same on the pinned build — only `--inspector` and
+`--print-output` are additions.
 
 Do not be misled by `version = "0.2.0"` at the top of `scaffold.toml`: that is
 the **file schema** version, not the CLI version, and `0.2.0` is what `lgs`
@@ -211,16 +208,23 @@ The rev needs no flag: scaffold reads `[repos.basecamp].pin` from
 `scaffold.toml`, and that pin is already the `aa237766…` the e2e layer wants.
 **That pin is the single source of truth for the rev** — `ui-tests.yml` derives
 its `BASECAMP_REV` from it with `tomlq` in the "Resolve the pinned Basecamp
-rev" step, rather than carrying its own literal. Two ordering constraints, both
-load-bearing: that step must run before the cache step (which keys on the
-value), and after the apt step (which installs `tomlq`). Note the runner's
-preinstalled `yq` is the **Go** one and has no `tomlq`; the apt `yq` is the
-Python one that does, so the install is not redundant. It used to carry one, which was safe only while the workflow
-also did the build; once `setup` took that over, a hardcoded copy became a
-second source of truth for one fact, and the divergence would have been
-invisible — the store cache would key on the stale rev, restore a store that
-cannot help, and recompile Basecamp on every run forever without anything
+rev" step, rather than carrying its own literal.
+
+`ui-tests.yml` used to carry that literal, which was safe only while the
+workflow also did the build; once `setup` took that over, a hardcoded copy
+became a second source of truth for one fact, and the divergence would have
+been invisible — the store cache would key on the stale rev, restore a store
+that cannot help, and recompile Basecamp on every run forever without anything
 failing.
+
+Three ordering constraints on the resolve step, all load-bearing: it must run
+**after** the apt step (which installs `tomlq`), **before** the cache step
+(which keys on the value it exports), and **before** `setup --inspector`, which
+rewrites `scaffold.toml`'s `attr` keys in place. That last one is safe today
+because `setup` never touches `pin` — but it is why the read happens first, and
+a reorder would be a deliberate choice rather than an accident. Note the
+runner's preinstalled `yq` is the **Go** one and has no `tomlq`; the apt `yq`
+is the Python one that does, so the install is not redundant.
 
 **Where the binary lands.** Not a `./result` symlink — `setup` writes it to
 `~/.cache/logos-scaffold/basecamp/<pin>/app-result/` and records the path in

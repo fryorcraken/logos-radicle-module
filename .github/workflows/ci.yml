@@ -197,6 +197,12 @@ jobs:
       #
       # Revert to `LGS_VERSION: "<next release>"` and a plain
       # `cargo install logos-scaffold --version …` once #266 ships in one.
+      #
+      # If EVERY job in both workflows suddenly fails in `cargo install`, this
+      # is the first thing to check: the rev lives on an unmerged PR branch,
+      # kept alive only by that PR. A force-push plus a close, or the branch
+      # being deleted, makes it unfetchable. The fix is to re-pin to #266's
+      # current head, not to debug cargo.
       LGS_REV: 7ba5f9819e0619084d646c7bac34d2c2540229da
     steps:
       - uses: actions/checkout@v7
