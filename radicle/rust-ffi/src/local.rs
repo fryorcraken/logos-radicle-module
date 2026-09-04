@@ -238,24 +238,33 @@ fn list_repos_inner(home: &str, scope: &str, page: i64, per_page: i64) -> Result
 
     infos.sort_by_key(|info| info.rid);
 
-    let start = (page.max(0) as usize) * (per_page.max(0) as usize);
-    let end = per_page
-        .max(0)
-        .checked_add(start as i64)
-        .map(|v| v as usize)
-        .unwrap_or(infos.len());
+    // Saturating rather than plain arithmetic throughout. `page` and
+    // `per_page` cross the FFI boundary as raw i64s from a caller this crate
+    // does not control, and `page * per_page` on two large values panics in a
+    // debug build. A panic here would unwind across the `extern "C"` boundary,
+    // which is undefined behaviour — not merely a bad answer. Saturating to
+    // "past the end" instead yields an empty page, which is the right answer
+    // for an absurd page number anyway.
+    let start = (page.max(0) as usize).saturating_mul(per_page.max(0) as usize);
+    let end = start.saturating_add(per_page.max(0) as usize);
     let has_more = infos.len() > end;
     let page_infos = infos
         .into_iter()
         .skip(start)
         .take(end.saturating_sub(start));
 
-    let items: Result<Vec<Value>, String> = page_infos
-        .map(|info| get_repo_inner(home, &info.rid.urn()))
+    // One unreadable repository must not sink the whole list — the same rule
+    // `cobs.rs` applies to COBs, and it matters more here because this is the
+    // entry screen. A local node accumulates partially-replicated repos, and
+    // `collect::<Result<_,_>>()` is fail-fast: a single malformed identity
+    // document or unresolvable head would replace every row with one error,
+    // with no way to tell which repo was at fault.
+    let items: Vec<Value> = page_infos
+        .filter_map(|info| get_repo_inner(home, &info.rid.urn()).ok())
         .collect();
 
     Ok(json!({
-        "items": items?,
+        "items": items,
         "page": page,
         "hasMore": has_more,
     }))

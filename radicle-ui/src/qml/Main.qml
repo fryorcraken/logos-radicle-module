@@ -41,39 +41,32 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    // Which source every browsing call goes to: "remote" (a seed node over
-    // HTTPS) or "local" (this machine's ~/.radicle, read in-process).
-    //
-    // One property rather than a parameter at each of the fourteen call sites.
-    // The two sources answer different questions — a seed sees only public
-    // repos it replicates, the local node sees your private ones and works
-    // offline — but they return identical JSON, so every view renders either
-    // without branching. That is the contract radicle_impl.h states, and it is
-    // what lets this be a single switch instead of a second set of views.
-    property string source: "remote"
+    // Which source every browsing call goes to. The state and the routing it
+    // implies live in SourceState so they can be tested as a unit — inside
+    // this file they could only be covered by a stub reproducing them, which
+    // is a copy asserted against itself. See SourceState.qml.
+    readonly property SourceState sourceState: SourceState {
+        localAvailable: root.caps.localAvailable === true
 
-    /// True when this machine has a Radicle profile to browse. Drives whether
-    /// the source toggle appears at all: offering "Local" to someone with no
-    /// node would be a control that can only produce an error.
-    readonly property bool localAvailable: caps.localAvailable === true
+        // A repo id from one source is meaningless to the other, so the whole
+        // navigation stack resets. `nav.reset()` clears state but does NOT
+        // refetch — NavState is a pure holder and the caller owns reloading,
+        // which is why onBackendReady and setSeed both call reload() alongside
+        // it. Omitting the reload here shipped once: the toggle flipped, the
+        // screen cleared, and no request was ever issued.
+        onChanged: {
+            nav.reset();
+            repoList.reload();
+        }
+    }
 
-    /// Switch source and start over. A repo id from one source is meaningless
-    /// to the other — the seed's repos are not the local node's — so the whole
-    /// navigation stack resets rather than trying to carry the current screen
-    /// across.
-    ///
-    /// `nav.reset()` clears navigation state but does NOT refetch: NavState is
-    /// a pure state holder and the caller owns reloading, which is why
-    /// `onBackendReady` and `setSeed` both call `repoList.reload()` alongside
-    /// it. Omitting it here left the list showing the previous source's
-    /// repositories — or, switching to local first, nothing at all, because
-    /// no local request was ever issued.
+    /// Convenience aliases. Views read these rather than reaching through
+    /// `sourceState`, so moving the state again does not touch every consumer.
+    readonly property string source: sourceState.current
+    readonly property bool localAvailable: sourceState.localAvailable
+
     function setSource(next) {
-        if (next === source) return;
-        if (next === "local" && !localAvailable) return;
-        source = next;
-        nav.reset();
-        repoList.reload();
+        sourceState.select(next);
     }
 
     onCapsJsonChanged: {
@@ -118,7 +111,7 @@ Item {
     /// both sources side by side.
     function call(method, args, onOk, onFail, source) {
         if (!backend) return;
-        var name = (source || root.source) + method;
+        var name = sourceState.methodFor(method, source);
         if (typeof backend[name] !== "function") {
             // No request was started (inflight was never incremented), so
             // this sets the error directly rather than going through fail(),

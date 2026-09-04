@@ -85,132 +85,93 @@ Item {
     }
 
     // -----------------------------------------------------------------------
-    // Routing: which backend method a call actually reaches.
+    // Routing and switching, against the REAL component.
     //
-    // The toggle is only useful if flipping it changes where calls go. This
-    // stands in for Main.qml's `call()`, whose real body cannot run here (it
-    // needs a QtRO replica), reproducing the one line that does the routing:
-    // `(source || root.source) + method`. A regression that hardcoded
-    // "remote" again would leave the toggle visibly working and silently
-    // inert, which is the failure worth pinning.
+    // An earlier version of this block drove hand-written QtObject stubs that
+    // reproduced Main.qml's logic — which meant deleting `setSource` from
+    // Main.qml, or reverting `call()` to a hardcoded "remote", left every test
+    // green while the local backend became unreachable. A copy asserted
+    // against itself is not a test.
+    //
+    // The logic now lives in SourceState.qml (extracted the way M1.1 extracted
+    // NavState, for the same reason), so these drive the real object. Break
+    // `methodFor` or `select` and these go red.
     // -----------------------------------------------------------------------
 
-    QtObject {
-        id: router
-        property string source: "remote"
-        property string lastMethod: ""
-
-        function call(method, args, onOk, onFail, source) {
-            lastMethod = (source || router.source) + method;
-        }
+    Ui.SourceState {
+        id: sourceState
+        localAvailable: true
+        onChanged: reloads++
     }
 
-    // -----------------------------------------------------------------------
-    // Switching source must REFETCH, not just reset navigation state.
-    //
-    // Regression test. `setSource()` originally called only `nav.reset()`,
-    // which was right when NavState did its own reload — but M1.1 extracted
-    // NavState into a pure state holder and made every caller responsible for
-    // reloading (see `onBackendReady` and `setSeed`, which both call
-    // `repoList.reload()` alongside it). The merge left setSource() on the old
-    // assumption, so flipping to "Local" in a live Basecamp switched the
-    // toggle, cleared the screen, and issued no local request at all: an
-    // empty repository list that looked like "your node has no repos".
-    //
-    // This reproduces the shape rather than the whole component: a state
-    // holder that resets without reloading, plus the caller's obligation to
-    // reload. Written to fail against the one-line version — remove the
-    // `reload()` from `switcher.setSource` and `reloads` stays 0.
-    // -----------------------------------------------------------------------
-
-    QtObject {
-        id: navStub
-        property string view: "repo"
-        function reset() { view = "repos"; }   // no reload — as NavState is
-    }
-
-    QtObject {
-        id: switcher
-        property string source: "remote"
-        property int reloads: 0
-        property bool localAvailable: true
-
-        function reload() { reloads++; }
-
-        function setSource(next) {
-            if (next === switcher.source) return;
-            if (next === "local" && !switcher.localAvailable) return;
-            switcher.source = next;
-            navStub.reset();
-            switcher.reload();
-        }
-    }
-
-    TestCase {
-        name: "SourceSwitchRefetches"
-
-        function init() {
-            switcher.source = "remote";
-            switcher.reloads = 0;
-            switcher.localAvailable = true;
-            navStub.view = "repo";
-        }
-
-        function test_switching_source_refetches_the_repository_list() {
-            switcher.setSource("local");
-            compare(switcher.source, "local");
-            // The actual bug: without this the list keeps the previous
-            // source's rows, or shows none at all.
-            compare(switcher.reloads, 1,
-                    "switching source must refetch, not only reset nav state");
-        }
-
-        function test_switching_source_returns_to_the_repository_list() {
-            switcher.setSource("local");
-            compare(navStub.view, "repos",
-                    "a repo id from one source is meaningless to the other");
-        }
-
-        function test_switching_to_the_same_source_does_nothing() {
-            switcher.setSource("remote");
-            compare(switcher.reloads, 0, "no refetch when nothing changed");
-        }
-
-        /// Guarding here as well as by hiding the segment: a spec or a future
-        /// caller can reach setSource() directly.
-        function test_local_is_refused_when_no_profile_exists() {
-            switcher.localAvailable = false;
-            switcher.setSource("local");
-            compare(switcher.source, "remote");
-            compare(switcher.reloads, 0);
-        }
-    }
+    property int reloads: 0
 
     TestCase {
         name: "SourceRouting"
 
+        function init() {
+            sourceState.current = "remote";
+            sourceState.localAvailable = true;
+            reloads = 0;
+        }
+
         function test_calls_go_to_the_remote_surface_by_default() {
-            router.source = "remote";
-            router.call("ListRepos", [], function () {});
-            compare(router.lastMethod, "remoteListRepos");
+            compare(sourceState.methodFor("ListRepos"), "remoteListRepos");
         }
 
         function test_calls_follow_the_selected_source() {
-            router.source = "local";
-            router.call("ListRepos", [], function () {});
-            compare(router.lastMethod, "localListRepos");
-
-            router.call("GetCommit", [], function () {});
-            compare(router.lastMethod, "localGetCommit",
+            sourceState.select("local");
+            compare(sourceState.methodFor("ListRepos"), "localListRepos");
+            compare(sourceState.methodFor("GetCommit"), "localGetCommit",
                     "every method follows the source, not just listing");
         }
 
-        /// The per-call override still wins, so a future screen can show both
-        /// sources at once without changing the global setting.
+        /// The per-call override, the seam for a screen showing both sources.
         function test_an_explicit_source_overrides_the_selected_one() {
-            router.source = "local";
-            router.call("GetRepo", [], function () {}, null, "remote");
-            compare(router.lastMethod, "remoteGetRepo");
+            sourceState.select("local");
+            compare(sourceState.methodFor("GetRepo", "remote"), "remoteGetRepo");
+        }
+    }
+
+    TestCase {
+        name: "SourceSwitching"
+
+        function init() {
+            sourceState.current = "remote";
+            sourceState.localAvailable = true;
+            reloads = 0;
+        }
+
+        /// Regression test. `setSource()` once called only `nav.reset()`,
+        /// which was right when NavState did its own reload — M1.1 made it a
+        /// pure state holder and every caller responsible for reloading. The
+        /// stale assumption meant flipping to "Local" in a live Basecamp
+        /// switched the toggle, cleared the screen, and issued no request at
+        /// all: an empty list that read as "your node has no repositories".
+        ///
+        /// Main.qml responds to `changed` by resetting nav AND reloading, so
+        /// the signal firing exactly once per real switch is what makes that
+        /// possible. Suppress the signal and this goes red.
+        function test_a_real_switch_signals_once_so_the_caller_can_refetch() {
+            verify(sourceState.select("local"), "the switch should be accepted");
+            compare(sourceState.current, "local");
+            compare(reloads, 1, "a real switch must notify exactly once");
+        }
+
+        function test_switching_to_the_same_source_changes_nothing() {
+            verify(!sourceState.select("remote"), "a no-op returns false");
+            compare(reloads, 0, "no notification when nothing changed");
+        }
+
+        /// Guarded here as well as by hiding the segment: a spec, or a future
+        /// caller, can reach select() directly.
+        function test_local_is_refused_when_no_profile_exists() {
+            sourceState.localAvailable = false;
+            verify(!sourceState.select("local"), "local must be refused");
+            compare(sourceState.current, "remote");
+            compare(reloads, 0);
+            // And the routing must not have moved either.
+            compare(sourceState.methodFor("ListRepos"), "remoteListRepos");
         }
     }
 }

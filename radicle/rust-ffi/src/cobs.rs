@@ -90,10 +90,22 @@ fn state_value<S: serde::Serialize>(state: &S) -> Value {
 }
 
 /// One page of a sorted, filtered list, plus whether more follow.
-fn paginate(mut items: Vec<(u64, Value)>, page: i64, per_page: i64) -> Value {
+///
+/// `items` carries `(timestamp, id, value)` so the sort has a tiebreaker; see
+/// below for why the id is not optional.
+fn paginate(mut items: Vec<(u64, String, Value)>, page: i64, per_page: i64) -> Value {
     // Newest first, matching the seed's ordering — the views show no sort
     // control, so this ordering *is* the contract.
-    items.sort_by_key(|(timestamp, _)| std::cmp::Reverse(*timestamp));
+    //
+    // The id breaks ties, and that is load-bearing rather than tidiness.
+    // `secs()` truncates to whole seconds, so anything filed in the same
+    // second compares equal; ties would then fall back to the order
+    // `store.all()` happened to walk the git refs in, which the crate does not
+    // guarantee. Each page is a SEPARATE FFI call that re-reads storage from
+    // scratch, so two calls could order a tied group differently and an item
+    // could land on both pages or on neither. This is the same failure
+    // `gitread.rs` guards against for commits with TIME | TOPOLOGICAL.
+    items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let start = (page.max(0) as usize).saturating_mul(per_page.max(0) as usize);
     let want = per_page.max(0) as usize;
@@ -103,7 +115,7 @@ fn paginate(mut items: Vec<(u64, Value)>, page: i64, per_page: i64) -> Value {
         .into_iter()
         .skip(start)
         .take(want)
-        .map(|(_, v)| v)
+        .map(|(_, _, v)| v)
         .collect();
 
     json!({ "items": page_items, "page": page, "hasMore": has_more })
@@ -153,6 +165,7 @@ fn list_issues_inner(
         let timestamp = secs(issue.timestamp());
         items.push((
             timestamp,
+            id.to_string(),
             json!({
                 "id": id.to_string(),
                 "title": issue.title(),
@@ -237,6 +250,7 @@ fn list_patches_inner(
         let timestamp = secs(patch.timestamp());
         items.push((
             timestamp,
+            id.to_string(),
             json!({
                 "id": id.to_string(),
                 "title": patch.title(),

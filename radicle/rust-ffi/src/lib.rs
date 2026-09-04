@@ -35,6 +35,31 @@ fn to_c_string(json: String) -> *mut c_char {
         .into_raw()
 }
 
+/// Run one read and hand back its JSON, converting a panic into an error
+/// object rather than letting it cross the C ABI.
+///
+/// **This is a soundness guard, not error handling.** A Rust panic unwinding
+/// through an `extern "C"` frame is undefined behaviour — the process may
+/// abort, or corrupt itself quietly. The read paths are written not to panic
+/// (every fallible call returns `Result`, and the pagination arithmetic
+/// saturates rather than overflowing), but "written not to" is a claim about
+/// code that will keep changing, and the `radicle` crate's own internals can
+/// panic for reasons this crate does not control.
+///
+/// `AssertUnwindSafe` is justified because the closure owns everything it
+/// touches: the arguments are freshly-copied `String`s and the return value is
+/// a `String`. There is no `&mut` to shared state that a partial unwind could
+/// leave inconsistent — a panic mid-read abandons a `git2` handle, which is
+/// exactly what dropping it would do anyway.
+fn guarded(f: impl FnOnce() -> String) -> *mut c_char {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    to_c_string(result.unwrap_or_else(|_| {
+        // Deliberately generic: the panic payload may be a non-UTF-8 or
+        // non-string type, and formatting it here risks panicking again.
+        "{\"error\":\"the local backend hit an internal error reading storage\"}".to_string()
+    }))
+}
+
 /// Directory listing at `path` for one repo's local storage.
 ///
 /// # Safety

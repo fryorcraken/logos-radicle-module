@@ -67,6 +67,22 @@ fn init_profile(name: &str) -> Fixture {
 /// Create a git working copy with one commit and push it into storage as a
 /// Radicle repo, returning its RID.
 fn init_repo(fixture: &Fixture, name: &str, description: &str) -> String {
+    init_repo_with(fixture, name, description, Visibility::default())
+}
+
+/// As `init_repo`, but private. A private repository is the case that
+/// justifies local browsing existing at all — a seed never shows one — so the
+/// `scope: "private"` filter needs a positive example, not only the empty one.
+fn init_private_repo(fixture: &Fixture, name: &str, description: &str) -> String {
+    init_repo_with(fixture, name, description, Visibility::private([]))
+}
+
+fn init_repo_with(
+    fixture: &Fixture,
+    name: &str,
+    description: &str,
+    visibility: Visibility,
+) -> String {
     let work = fixture.dir.join(format!("work-{name}"));
     std::fs::create_dir_all(&work).expect("could not create working copy dir");
 
@@ -93,7 +109,7 @@ fn init_repo(fixture: &Fixture, name: &str, description: &str) -> String {
         ProjectName::from_str(name).expect("invalid project name"),
         description,
         RefString::try_from("master").expect("invalid branch name"),
-        Visibility::default(),
+        visibility,
         &signer,
         storage,
     )

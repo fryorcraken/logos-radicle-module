@@ -193,6 +193,63 @@ fn list_issues_paginates() {
     }
 }
 
+/// Paging must be stable across calls, and each page is a SEPARATE FFI call
+/// that re-reads storage from scratch. Issues created in a tight loop share a
+/// timestamp — `secs()` truncates to whole seconds — so without a tiebreaker
+/// the order within a tied group falls back to whatever order the git ref walk
+/// produced, which the crate does not guarantee to be stable. A tied item
+/// could then appear on both pages or on neither.
+///
+/// `list_issues_paginates` asserts no overlap but cannot distinguish "stable
+/// by construction" from "stable by luck in one process". This asks the
+/// stronger question: does the same request twice give byte-identical answers,
+/// and do the pages partition the set exactly?
+#[test]
+fn paging_is_deterministic_across_calls_when_timestamps_tie() {
+    let f = init_profile("issues-tiebreak");
+    let (rid, _) = init_repo(&f, "issue-repo", "issues");
+    // Created in a loop, so these almost certainly share one second.
+    let created = create_issues(&f, &rid, 6);
+    let home = f.home();
+
+    let ids_of = |v: &serde_json::Value| -> Vec<String> {
+        v["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter_map(|i| i["id"].as_str().map(|s| s.to_string()))
+            .collect()
+    };
+
+    // The same request twice must give the same answer.
+    let a = parse(&radicle_local_ffi::cobs::list_issues(&home, &rid, "", 0, 3));
+    let b = parse(&radicle_local_ffi::cobs::list_issues(&home, &rid, "", 0, 3));
+    assert_eq!(
+        ids_of(&a),
+        ids_of(&b),
+        "the same page requested twice must be identical"
+    );
+
+    // And the two pages together must cover every issue exactly once —
+    // the property that breaks when a tied group reorders between calls.
+    let page0 = ids_of(&parse(&radicle_local_ffi::cobs::list_issues(
+        &home, &rid, "", 0, 3,
+    )));
+    let page1 = ids_of(&parse(&radicle_local_ffi::cobs::list_issues(
+        &home, &rid, "", 1, 3,
+    )));
+
+    let mut seen: Vec<String> = page0.iter().chain(page1.iter()).cloned().collect();
+    seen.sort();
+    let mut expected = created.clone();
+    expected.sort();
+    assert_eq!(
+        seen, expected,
+        "the pages together must partition the issues exactly, with no \
+         duplicate and nothing dropped"
+    );
+}
+
 #[test]
 fn get_issue_returns_the_discussion_thread() {
     let f = init_profile("issue-detail");
