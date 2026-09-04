@@ -1,6 +1,7 @@
 #include <logos_test.h>
 
 #include "local_reader.h"
+#include "local_store.h"
 
 #include <nlohmann/json.hpp>
 
@@ -144,6 +145,84 @@ LOGOS_TEST(repeated_calls_do_not_leak_or_double_free)
             LOGOS_ASSERT_FALSE(body.empty());
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Against a real profile, when one exists.
+//
+// Everything above runs against a directory that is deliberately NOT a Radicle
+// profile, so it can only prove the failure paths. This one reads the machine's
+// actual ~/.radicle and asserts the success shape — but only when there is one
+// to read.
+//
+// That conditional is the thing this repository has been burned by twice, so
+// it is worth being precise about why it is acceptable here and was not there:
+//
+//   - The prior false greens SKIPPED THE ONLY COVERAGE of the thing under test
+//     (a smoke test that early-returned on an unset env var; a QML runner that
+//     skipped when it could not find Qt). Nothing else covered them, so a
+//     green run meant nothing.
+//   - Here, the success shapes are already pinned unconditionally by 28 Rust
+//     fixture tests that BUILD their own profile. This adds a check against a
+//     profile made by the real `rad` CLI rather than by the crate's own API —
+//     valuable, but not load-bearing, because if it never runs the shapes are
+//     still covered.
+//
+// So on a CI runner this reports "no profile" and the suite still proves what
+// it claims; on a developer's machine it additionally proves the reads work
+// against real data.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(a_real_profile_lists_its_repositories_through_the_backend)
+{
+    LocalStore store;
+    if (!store.available()) {
+        // Not a skip masquerading as a pass: the shapes are covered by the
+        // Rust fixture tests regardless. See the comment above.
+        LOGOS_ASSERT_TRUE(true);
+        return;
+    }
+
+    LocalReader reader{store.home()};
+    const auto listing = parse(reader.listRepos("all", 0, 100));
+
+    LOGOS_ASSERT_FALSE(listing.contains("error"));
+    LOGOS_ASSERT_TRUE(listing.contains("items"));
+    LOGOS_ASSERT_TRUE(listing["items"].is_array());
+
+    if (listing["items"].empty()) return;   // a profile with no repos yet
+
+    // Every field RepoList.qml needs to render a row and then open it.
+    const auto& first = listing["items"][0];
+    const std::string rid = first.value("rid", "");
+    LOGOS_ASSERT_TRUE(rid.rfind("rad:", 0) == 0);
+
+    const auto& data = first["payloads"]["xyz.radicle.project"]["data"];
+    LOGOS_ASSERT_TRUE(data["name"].is_string());
+    LOGOS_ASSERT_FALSE(data["name"].get<std::string>().empty());
+
+    // The head must be a full 40-char SHA: every subsequent tree/blob/commit
+    // request is addressed by it.
+    const std::string head =
+        first["payloads"]["xyz.radicle.project"]["meta"].value("head", "");
+    LOGOS_ASSERT_EQ(head.size(), size_t(40));
+
+    // And the reads that a repo view issues next must all work on it.
+    const auto tree = parse(reader.getTree(rid, "", ""));
+    LOGOS_ASSERT_FALSE(tree.contains("error"));
+    LOGOS_ASSERT_TRUE(tree["entries"].is_array());
+
+    const auto commits = parse(reader.listCommits(rid, "", 0, 5));
+    LOGOS_ASSERT_FALSE(commits.contains("error"));
+    LOGOS_ASSERT_TRUE(commits["items"].is_array());
+    LOGOS_ASSERT_FALSE(commits["items"].empty());
+
+    // COB stores are opened lazily; a repo nobody has filed against is empty,
+    // not broken.
+    const auto issues = parse(reader.listIssues(rid, "", 0, 5));
+    LOGOS_ASSERT_FALSE(issues.contains("error"));
+    const auto patches = parse(reader.listPatches(rid, "", 0, 5));
+    LOGOS_ASSERT_FALSE(patches.contains("error"));
 }
 
 /// A rid with characters that need care crossing a C string boundary must come

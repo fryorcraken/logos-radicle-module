@@ -1,0 +1,124 @@
+# End-to-end UI test: browsing the LOCAL node instead of a seed.
+#
+#   npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/local.yaml
+#
+# See browse.yaml's header for how to run these at all.
+#
+# This is the only spec that exercises the `local*` half of the module. Every
+# other one goes through a seed over HTTPS; this one reads ~/.radicle in
+# process, which is a completely different code path (a Rust staticlib over
+# the `radicle` crate) behind an identical JSON contract.
+#
+# ---------------------------------------------------------------------------
+# IT NEEDS A RADICLE PROFILE, AND IT SAYS SO RATHER THAN SKIPPING
+# ---------------------------------------------------------------------------
+#
+# On a machine with no ~/.radicle there is nothing to browse, and the toggle
+# deliberately hides its "Local" segment — so the first click below finds no
+# target and the spec FAILS. That is intended. This repository has twice been
+# burned by a check that skipped silently and reported green (a smoke test
+# that early-returned on an unset env var, and a QML runner that skipped when
+# it could not find Qt), so this one is written to fail loudly on an
+# unprepared machine rather than quietly prove nothing.
+#
+# It is consequently NOT wired into CI yet: a CI runner has no Radicle profile
+# and seeding one is its own piece of work. Run it locally, against your own
+# node, after `lgs basecamp install`.
+#
+# The assertions avoid anything specific to one person's node. "How many
+# repositories" and "which repository is first" vary per machine, so what is
+# pinned is the shape: the source actually switched, data arrived through the
+# local path, and no error surfaced.
+
+app: radicle_ui
+with: [radicle]
+timeout: 30s
+
+steps:
+  - name: the app opens
+    open: radicle_ui
+
+  - name: it becomes ready
+    wait_for:
+      state: "root.ready === true"
+    timeout: 45s
+
+  # getCapabilities() drives whether the toggle offers a local segment at all.
+  # Asserting it before clicking turns "this machine has no node" into a clear
+  # failure here rather than a confusing missing-element failure one step down.
+  - name: this machine has a local Radicle profile
+    wait_for:
+      state: "root.localAvailable === true"
+    timeout: 45s
+
+  - name: switch to the local node
+    click: { objectName: "sourceToggle_local" }
+
+  - name: every call now routes to the local surface
+    wait_for:
+      state: "root.source === 'local'"
+    timeout: 30s
+
+  # The payoff: repositories read out of ~/.radicle/storage, with no network
+  # involved. A node with a profile but no repositories would legitimately
+  # report zero, so this asserts data arrived AND nothing errored — the two
+  # together are what distinguish "empty node" from "broken read".
+  - name: local repositories arrive
+    wait_for:
+      state: "root.repoCount > 0"
+    timeout: 60s
+
+  - name: no error surfaced while listing local repositories
+    expect:
+      state: "root.navError === ''"
+
+  - name: open the first local repository
+    click: { objectName: "repoRow", nth: 0 }
+
+  # Tree reads go through localGetTree — git-native, out of the bare repo in
+  # storage rather than over HTTP.
+  - name: its source tree loads from local storage
+    wait_for:
+      state:
+        - "root.navView === 'repo'"
+        - "root.treeCount > 0"
+        - "root.treePath === ''"
+    timeout: 60s
+
+  - name: no error surfaced while reading the tree
+    expect:
+      state: "root.navError === ''"
+
+  # ---- commits ------------------------------------------------------------
+  #
+  # Tab 1. localListCommits walks the repository's own history with git2 and
+  # has to page it the same way the seed's endpoint does.
+  - name: switch to the commits tab
+    click: { objectName: "sectionTab", nth: 1 }
+
+  - name: commits arrive from local storage
+    wait_for:
+      state:
+        - "root.repoTab === 1"
+        - "root.commitCount > 0"
+    timeout: 60s
+
+  - name: no error surfaced while listing commits
+    expect:
+      state: "root.navError === ''"
+
+  # ---- back to the seed ---------------------------------------------------
+  #
+  # Switching back must reset cleanly: a repository id from local storage is
+  # meaningless to a seed, so setSource() drops the whole navigation stack
+  # rather than carrying the current screen across. Ending on the remote source
+  # also leaves the app in its default state for the next run.
+  - name: switch back to the seed
+    click: { objectName: "sourceToggle_remote" }
+
+  - name: the switch resets to the repository list on the remote source
+    wait_for:
+      state:
+        - "root.source === 'remote'"
+        - "root.navView === 'repos'"
+    timeout: 30s
