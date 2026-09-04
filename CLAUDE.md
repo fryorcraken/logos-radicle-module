@@ -897,6 +897,90 @@ end-to-end spec for local browsing. It needs a real Radicle profile, which a CI
 runner does not have, so it is run by hand via `run-local-e2e.sh` (which passes
 `RAD_HOME` — see the section on it above) rather than skipped quietly in CI.
 
+### 0.2.1 — the Rust staticlib was amd64-only on every platform
+
+M2.1 shipped an arm64 regression, and it is worth reading as a lesson about
+what a green local gate can and cannot mean.
+
+`radicle/flake.nix` passed `stageRustFfi "x86_64-linux"` — one hardcoded
+literal — plus the same literal twice more in `tests.extraCmakeFlags` and
+`tests.extraBuildInputs`. `mkLogosModule` fans out over four systems but takes
+`preConfigure` as **one value shared by all of them**, so every platform's
+build staged the amd64 archive. `linux-arm64` and `darwin-arm64` both failed in
+the catalog's release workflow; `linux-amd64` passed. The ~65s arm64 failure
+was the tell: far too fast to be a real compile of `radicle 0.25.1`, because
+nothing was compiled — Nix simply declined to realise an x86_64 derivation with
+no x86_64 builder.
+
+This is a **regression, not a missing feature**. The 0.1.1 catalog release
+built all three platforms in 5m19s, before the Rust crate existed.
+
+**Why every gate missed it, and the general lesson.** This machine is x86_64,
+this repo's CI is x86_64, and this repo's own release attaches only amd64
+assets. The catalog is the first thing that ever builds arm64. So the entire
+local gate set — QML syntax, component tests, core unit tests, `cargo test`,
+`lgs basecamp build --variant all` — was green and *structurally incapable* of
+seeing this. Same shape as the `SMOKE_*` skips and the Qt5 `qmltestrunner`: a
+check that cannot observe the failure is worth no more than one that cannot
+fail. **When a change touches `flake.nix`'s system handling, the only real
+check is the derivation graph, not a build on this machine.**
+
+**How to verify it, since a build cannot.** `nix build` on x86_64 proves
+nothing about arm64. What does prove it is evaluating the aarch64 derivation
+and reading its dependencies — free, and it takes seconds:
+
+```
+nix path-info --derivation <flake>/radicle#packages.aarch64-linux.lgx
+nix-store --query --requisites <that .drv>      # grep for radicle-local-ffi
+nix derivation show <the ffi .drv>              # check its "system"
+```
+
+Before the fix both systems' lgx pulled the byte-identical
+`radicle-local-ffi-…drv` with `"system": "x86_64-linux"`. After, each pulls a
+different derivation carrying its own platform. That is the assertion to
+re-run if this file is ever touched again.
+
+**The fix, and the plausible fix that is worse than the bug.** The comment in
+`flake.nix` used to describe emitting a shell `case "$system" in` and letting
+the builder pick its own arm. `$system` really is in the builder env, so this
+looks right — and it is wrong. Every arm's store path sits in the string, so
+**every arm becomes an inputDrv of every system's derivation**, whether or not
+it runs. Tried and measured: `nix build .#packages.x86_64-linux.lgx` then fails
+on this machine with "Required system: 'aarch64-linux'". It trades an arm64
+failure for an amd64 one.
+
+What works is `externalLibInputs`, the builder's own per-system escape hatch.
+`resolveExtInput` resolves each entry as `value.packages.${system}.default`
+*inside* `forAllSystems`, and `buildExternalLibs` passes a value that is
+already a derivation straight through. Declaring the archive as a
+`nix.external_libraries` entry also makes **both** builds stage it into `lib/`
+themselves — logos-plugin-qt's "Copy external libraries" block for the plugin,
+`copyExternals = true` for the unit tests — so no `preConfigure` is needed on
+either side and the two `CMakeLists.txt` `find_library` calls just work. Do not
+add a `cp` back on top: the builder's copy arrives mode-444 from the store and
+a second one fails the build with "Permission denied".
+
+**One site the fix deliberately does not reach.** `tests.extraBuildInputs`
+still names an x86_64 zlib, because it is resolved outside `forAllSystems` and
+is not an `externalLibInputs` entry. So `checks.aarch64-linux.unit-tests` will
+not realise on an arm64 machine. Left alone on purpose: `checks` are not on the
+release path (CI runs only the x86_64 one, and the catalog builds
+`packages.<system>.lgx`), and fixing it means either an upstream per-system
+`tests` hook or calling `mkLogosModule` once per system. Revisit only if the
+unit tests ever need to run on arm64.
+
+Darwin is excluded from `ffiSystems` deliberately — the crate links a native
+libgit2/openssl through the *-sys crates, so a Darwin arm would mean
+cross-compiling Rust for Darwin from Linux. A Darwin build now fails with the
+builder's own "does not provide packages.aarch64-darwin.default", naming the
+platform instead of silently linking a Linux archive.
+
+Also in 0.2.1: `ci.yml`'s metadata lint now asserts the **two modules' versions
+match**. It only ever checked that a `version` key was present, despite two
+release commit messages claiming otherwise — so a bump touching one file could
+publish a mismatched pair. The check lives in the step that already loads both
+files.
+
 ### M1 shipped — status as of 2026-09-03
 
 1. ✅ **Committed and pushed** to both remotes.
@@ -937,6 +1021,9 @@ Both were developed in separate worktrees and are now on `main`:
   followed by PR #4 (the lgs-first agent docs, `9a45838`) and PR #5
   (`e1c6b64`, the inspector Basecamp via `lgs basecamp setup --inspector`).
   Released as `v0.2.0` — see below.
+
+**0.2.1** fixes the arm64 regression M2.1 introduced — see "the Rust staticlib
+was amd64-only on every platform" below.
 
 **M2.2** (write actions — issues/patches/comments, a GitHub-Desktop-style
 workflow) remains a planning task, not started.

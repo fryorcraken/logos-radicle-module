@@ -1,7 +1,7 @@
 {
   "name": "radicle",
   "display_name": "Radicle",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "core",
   "interface": "universal",
   "category": "development",
@@ -14,7 +14,11 @@
       "build": [],
       "runtime": []
     },
-    "external_libraries": [],
+    "external_libraries": [
+      {
+        "name": "radicle_local_ffi"
+      }
+    ],
     "cmake": {
       "find_packages": [],
       "extra_sources": [],
