@@ -45,6 +45,38 @@ Item {
     }
 
 
+    // A whole RepoView, hosted the way Main.qml hosts it, so the tab bar and
+    // the tab bodies below it can be measured against each other. The fake
+    // backend only has to answer enough for the view to lay itself out.
+    function call(method, args, onOk, onFail) {
+        if (method === "ListBranches")
+            onOk({ items: [{ name: "main", head: "aaa" }], default: "main" });
+        else if (method === "GetTree")
+            onOk({ entries: [{ name: "src", kind: "tree", path: "src" }] });
+        else if (method === "GetReadme")
+            onOk({ path: "README.md", content: "hi" });
+        else
+            onOk({ items: [], hasMore: false });
+    }
+    property string source: "remote"
+    property bool canWrite: false
+    property string writeUnavailableReason: ""
+
+    ColumnLayout {
+        id: repoViewHost
+        width: 1000
+        height: 700
+        spacing: 0
+
+        Ui.RepoView {
+            id: repoPage
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            app: repoViewHost.parent
+            active: true
+        }
+    }
+
     // A list with rows in it, to check the rows stack rather than overlap.
     ColumnLayout {
         id: sizedHost
@@ -79,6 +111,47 @@ Item {
                    + "; its root must declare Layout.fillWidth");
         }
 
+
+        // The tab bar is fixed-height chrome; the tab bodies below it get
+        // everything else. Wrapping SectionTabs in a RowLayout to sit a button
+        // beside it broke that: the RowLayout had a Layout.preferredHeight but
+        // no Layout.maximumHeight, and a child asking for Layout.fillHeight
+        // makes a RowLayout's own maximum unbounded — so the ColumnLayout grew
+        // the strip to 625px and left the StackLayout below it 15px.
+        //
+        // Nothing looked broken from the outside: the tabs still rendered, the
+        // tree still loaded, treeCount was still > 0. Only the rows had
+        // nowhere to be, so clicking one reached nothing. That is what the
+        // source.yaml spec saw as "the click did neither of the two things".
+        function test_the_tab_strip_does_not_eat_the_tab_bodies() {
+            var src = repoPage.sourceTabItem;
+            verify(src !== null, "RepoView must expose its SourceTab");
+            verify(src.height > repoViewHost.height / 2,
+                   "the tab body got " + src.height + "px of "
+                   + repoViewHost.height + "; the tab strip above it is "
+                   + "taking space that belongs to the tab contents");
+        }
+
+        // The same failure stated against a chrome budget rather than against
+        // one suspect element. This is the broader of the two: it goes red if
+        // EITHER the header or the tab strip starts stretching, where the test
+        // above only names the tab strip. Both are kept because the narrow one
+        // says which element to look at and this one says the invariant.
+        //
+        // sourceTabItem IS a child of the content StackLayout, so its height
+        // is that area's height — no new property, and no second copy of the
+        // layout's own arithmetic.
+        //
+        // From a parallel investigation that reached this diagnosis
+        // independently; see the commit message.
+        function test_repo_view_content_area_gets_the_leftover_height() {
+            var content = repoPage.sourceTabItem.height;
+            var chrome = Theme.headerHeight + Theme.tabHeight;
+            verify(content > repoPage.height - chrome - 2,
+                   "RepoView content area was " + content + "px of "
+                   + repoPage.height + "; the chrome above it should take only "
+                   + chrome + "px. Something in the chrome is stretching.");
+        }
 
         function test_rows_stack_instead_of_overlapping() {
             // Independent of the component under test: proves the assertion

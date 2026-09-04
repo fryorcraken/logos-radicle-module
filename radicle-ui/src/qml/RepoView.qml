@@ -423,10 +423,18 @@ Item {
         }
 
         // ---- tabs (fixed height) ----
+        // Layout.maximumHeight is load-bearing, not belt-and-braces. A
+        // RowLayout whose child asks for Layout.fillHeight reports an
+        // unbounded maximum of its own, so the ColumnLayout above honoured
+        // fillHeight over preferredHeight and grew this strip to fill the
+        // page — leaving the StackLayout below it 15px. The tabs still drew
+        // and the tree still loaded, so the only visible symptom was that
+        // clicking a file row reached nothing.
         RowLayout {
             Layout.fillWidth: true
             visible: !page.showingDetail
             Layout.preferredHeight: visible ? Theme.tabHeight : 0
+            Layout.maximumHeight: visible ? Theme.tabHeight : 0
             spacing: 0
 
             SectionTabs {
