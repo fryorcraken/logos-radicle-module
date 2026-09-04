@@ -998,12 +998,14 @@ files.
    catalog's release-action `@v1` tag can only handle `module_path` pointing
    at a submodule's *root* — it fails checkout with "pathspec did not match
    any file(s) known to git" for any `module_path` that's a subdirectory of
-   a submodule. The fix (`module_path` may point inside a submodule) exists
-   on the action's `master` branch
-   (`logos-co/logos-modules-release-action@974960591a8d`) but isn't in a
-   tagged `v1.x` yet — the catalog's `_release-module.yml` is pinned to that
-   exact commit rather than a moving ref. **Re-pin to a tagged `v1.x` once
-   the fix ships in one.** Also: `release-all.yml`'s auto-discovery reads
+   a submodule. The fix (`module_path` may point inside a submodule) is
+   commit `974960591a8d`. **This follow-up is now closed** — that commit is
+   the tip of tag `v1.3`, and the catalog's `_release-module.yml` is pinned
+   to `@v1.3` (catalog commit `06078c6`), not to a raw SHA. Upstream has
+   since advanced the moving `v1` tag to the same commit, so `@v1` would
+   also work; `@v1.3` is kept deliberately, because a moving tag would let
+   the release pipeline change under the catalog without a commit here
+   saying so. Also: `release-all.yml`'s auto-discovery reads
    module paths straight from `.gitmodules` submodule paths, so it can't see
    the two modules inside one submodule either — `radicle` and `radicle_ui`
    each need their own manually-triggered workflow
