@@ -5,7 +5,7 @@
   "type": "ui_qml",
   "interface": "universal",
   "category": "development",
-  "description": "Browse Radicle repositories, issues and patches",
+  "description": "Explore repositories, issues and patches on the Radicle network",
   "main": "radicle_ui_plugin",
   "icon": "src/icons/icon.png",
   "view": "qml/Main.qml",
