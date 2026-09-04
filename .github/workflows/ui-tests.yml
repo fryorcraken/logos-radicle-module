@@ -218,9 +218,26 @@ jobs:
       # normal loader path. A bare runner has none, and the binary dies at load
       # with `libOpenGL.so.0: cannot open shared object file`. Same list as
       # logos-basecamp's own doctests workflow.
+      #
+      # The runner image preconfigures third-party apt repos this job does not
+      # use, and one of them failing takes `apt-get update` down with it. Seen
+      # for real (run 33826324704, the `sync` job, while its three siblings
+      # passed the identical step minutes apart):
+      #
+      #   E: Failed to fetch https://packages.microsoft.com/ubuntu/24.04/prod/…
+      #      403  Forbidden
+      #   E: The repository '… noble InRelease' is no longer signed.
+      #
+      # Every package below comes from Ubuntu's own archive, so a Microsoft
+      # mirror having a bad day must not fail this job. Drop those extra lists
+      # first, and let `update` warn rather than exit non-zero — `install` is
+      # the real gate, and it still fails loudly if a package is genuinely
+      # unavailable.
       - name: Install graphics runtime libraries
         run: |
-          sudo apt-get update -qq
+          set -eu
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq || echo "::warning::apt-get update reported errors; continuing to install"
           sudo apt-get install -y --no-install-recommends \
             libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
 
@@ -287,7 +304,12 @@ jobs:
       #
       # Copied out of the store because the store is read-only — and scaffold's
       # `basecamp_bin` is inside a nix out-link, so moving to `lgs` does not
-      # change that. Remove all of this once sitometres also probes the .elf.
+      # change that.
+      #
+      # Filed upstream with the one-line fix:
+      # https://github.com/paradoxcomputer/sitometres/issues/1
+      # `hasInspector` builds its candidate list as [bin, .bin] and needs
+      # [bin, .bin, .bin.elf]. Delete this whole step when that ships.
       - name: Work around the sitometres inspector probe
         run: |
           set -eu

@@ -856,6 +856,24 @@ library and Qt plugin paths. So step 2 copies the bundle somewhere writable
 as the binary. Drop all of it once sitometres also probes the `.elf` — this is
 the highest-value upstream fix anywhere in this stack.
 
+**Filed, with the fix, as
+[paradoxcomputer/sitometres#1](https://github.com/paradoxcomputer/sitometres/issues/1).**
+Confirmed in their source rather than inferred from the symptom:
+`hasInspector()` in `src/app/discover.ts` builds its candidate list as
+`[binPath, .<base>]`, which for `bin/LogosBasecamp` misses the real ELF at
+`bin/.LogosBasecamp.elf`. Its own doc comment describes the intent correctly
+("execs a sibling dot-file that holds the real ELF"), and the bundle's wrapper
+spells the convention out (`REAL="$SELF_DIR/.$BASE.elf"`) — the probe just does
+not account for the `.elf` suffix nix's `dirBundler` appends. One line:
+`[binPath, .<base>, .<base>.elf]`. Their existing test does not catch it
+because its fixture is named `.LogosBasecamp`, without the suffix. When the fix
+ships, delete the workaround step in `ui-tests.yml` and step 2 above.
+
+**Check the issue before re-filing.** This was filed twice in this repo's
+history — the second time by an agent that went looking for the bug in
+sitometres' source, found it, and opened a duplicate without checking the
+tracker first.
+
 **Moving step 1 to `lgs` did not remove this**, which was the open question
 when `setup --inspector` landed. Re-checked directly: pointing `--basecamp` at
 scaffold's own `basecamp_bin` still fails with the same "no Basecamp with the
