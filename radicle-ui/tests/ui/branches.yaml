@@ -97,6 +97,22 @@ steps:
   # by onBranchChanged and repopulated from the new branch, so a non-zero
   # treeCount here proves the reload completed rather than leaving the pane
   # empty — the visible symptom if the reset were done without the refetch.
+  #
+  # Note what this step can and cannot see. `treeCount > 0` is true both when
+  # the tree genuinely reloaded and when the OLD branch's entries were simply
+  # left on screen, so it does not by itself prove a refetch happened. That
+  # gap was not theoretical: onBranchChanged called maybeLoad() synchronously,
+  # before the branch bindings on SourceTab/CommitsTab had been re-evaluated,
+  # so the refetch went out for the branch the tabs were already on and
+  # switching branch did nothing at all. This spec stayed green throughout.
+  #
+  # What actually pins it is tst_branch_switch.qml's
+  # test_switching_branch_resets_source_and_commits, whose fake returns a
+  # DIFFERENT number of entries per branch, so the count itself says which
+  # branch was fetched. A real seed cannot be relied on for that — two
+  # branches of an arbitrary repository may well have identical trees — which
+  # is exactly the kind of property the component layer can pin and this one
+  # cannot. Left here as a smoke check that the pane is populated at all.
   - name: the source tree reloads for the branch now selected
     wait_for:
       state: "root.treeCount > 0"

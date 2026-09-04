@@ -13,6 +13,11 @@ Item {
 
     property var branchesCalls: []
     property var lastArgs: []
+    /// The branch each GetTree / ListCommits was asked for, so a test can
+    /// assert a refetch actually happened rather than inferring it from a
+    /// count that would look the same either way.
+    property var treeCalls: []
+    property var commitCalls: []
 
     function makeRepo(rid, defaultBranch) {
         return {
@@ -38,9 +43,26 @@ Item {
                 onOk({ items: [], default: "" });
             }
         } else if (method === "GetTree") {
-            onOk({ entries: [] });
+            // Branch-DEPENDENT, deliberately. An empty reply for every branch
+            // makes "the tree reloaded" indistinguishable from "nothing
+            // happened" — treeCount is 0 either way — so a test asserting on
+            // it would pass with the whole reset/refetch deleted. Each branch
+            // returns a different number of entries so the count itself is
+            // evidence of which branch was fetched.
+            treeCalls.push(args[1]);
+            var wanted = args[1] === "dev" ? 3 : 2;
+            var list = [];
+            for (var i = 0; i < wanted; i++)
+                list.push({ name: args[1] + "-file-" + i, kind: "blob", path: args[1] + "/" + i });
+            onOk({ entries: list });
         } else if (method === "ListCommits") {
-            onOk({ items: [], hasMore: false });
+            commitCalls.push(args[1]);
+            var many = args[1] === "dev" ? 4 : 1;
+            var items = [];
+            for (var j = 0; j < many; j++)
+                items.push({ id: args[1] + "-c" + j, summary: "on " + args[1],
+                             author: { name: "A" }, committer: { time: 1700000000 } });
+            onOk({ items: items, hasMore: false });
         } else {
             onOk({ items: [], hasMore: false });
         }
@@ -72,6 +94,8 @@ Item {
 
         function init() {
             branchesCalls = [];
+            treeCalls = [];
+            commitCalls = [];
             // Force a real rid change before each test, even for a test that
             // is about to set the SAME rid a previous test left behind —
             // otherwise onRidChanged never fires (no change, no signal) and
@@ -119,22 +143,39 @@ Item {
             page.rid = "rad:zTEST";
             page.repo = makeRepo("rad:zTEST", "main");
             page.tab = 0;   // Source tab active, so loadTab() actually fires
+            wait(20);
 
-            // Force something into source/commits so there's state to lose.
+            // main's tree, so there is real state to lose. The fake returns a
+            // different number of entries per branch precisely so this is
+            // distinguishable from the post-switch state.
+            compare(page.treeCount, 2, "main's tree loaded");
+            var treesBefore = treeCalls.length;
+
             page.branch = "dev";
             wait(20);
 
-            // The regression this guards: switching branch must not leave
-            // the OLD branch's tree/commits on screen forever because
-            // loadedTabs still says "already loaded" for the new branch.
-            // treeCount/commitCount come back to a fetched (here: empty)
-            // state rather than staying whatever they were before — proven
-            // indirectly by loadedTabs having been cleared and reload having
-            // actually been attempted (fetch would append zero entries from
-            // the fake backend either way, so the meaningful assertion is
-            // that a fetch happened at all, not what it returned).
-            compare(page.treeCount, 0);
-            compare(page.commitCount, 0);
+            // The regression this guards: switching branch must not leave the
+            // OLD branch's tree and commits on screen because loadedTabs
+            // still says "already loaded".
+            //
+            // This asserts on dev's OWN entry count rather than on zero. An
+            // earlier version compared against 0 with a fake that returned an
+            // empty tree for every branch — which is what you get whether the
+            // reset ran, the refetch ran, both, or neither. Gutting
+            // RepoView's onBranchChanged left that version green; it fails
+            // this one.
+            compare(page.treeCount, 3, "dev's tree replaced main's");
+            verify(treeCalls.length > treesBefore, "a GetTree was actually issued for the new branch");
+            compare(treeCalls[treeCalls.length - 1], "dev", "and it asked for the branch just picked");
+
+            // CommitsTab is branch-scoped too, and is reset by the same
+            // handler — but it is on a different tab, so it reloads when that
+            // tab is next shown rather than immediately. What must hold now is
+            // that it is not still holding main's commits.
+            page.tab = 1;
+            wait(20);
+            compare(page.commitCount, 4, "commits reloaded for dev, not left at main's");
+            compare(commitCalls[commitCalls.length - 1], "dev");
         }
 
         function test_switching_repository_reverts_to_the_new_repos_default_branch() {

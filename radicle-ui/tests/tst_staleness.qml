@@ -73,6 +73,14 @@ Item {
             pendingBranches = null;
             p.onOk({ items: [{ name: "main", head: head }], default: "main" });
         }
+        // Deliver a reply naming a branch other than "main", so a test can
+        // check what happens when the reply describes the branch the user
+        // switched TO rather than the one the request was made for.
+        function deliverBranchesNamed(name, head) {
+            var p = pendingBranches;
+            pendingBranches = null;
+            p.onOk({ items: [{ name: name, head: head }], default: "main" });
+        }
     }
 
     Ui.SourceTab {
@@ -218,5 +226,103 @@ Item {
             compare(deferredSource.updateAvailable, false,
                     "a poll reply for the abandoned branch must not flip updateAvailable for the new one");
         }
+
+        /*
+         * The two tests below cover lastSyncedCommit being recorded WRONGLY —
+         * a different and worse failure than the guards above, which only
+         * ever drop an update. A wrong lastSyncedCommit makes checkForUpdate()
+         * compare against a commit that was never synced, so the button can
+         * sit on "Re-sync" while the local cache is genuinely behind. The
+         * staleness feature exists to make that state visible; getting the
+         * recorded head wrong is the one bug that silently defeats it.
+         */
+
+        function test_a_failed_head_lookup_does_not_record_the_previous_syncs_head() {
+            // pendingSyncHead used to be cleared only in reset(), i.e. only on
+            // a repo/branch change — never between two syncs of the SAME repo.
+            // So a sync whose ListBranches failed would find the previous
+            // sync's head still sitting in pendingSyncHead and record THAT as
+            // its own lastSyncedCommit, claiming the repo was current at a
+            // commit this sync never fetched.
+            failApp.failBranches = false;
+            failApp.branchesHead = "sha-first-sync";
+            failSource.reset();
+            failSource.rid = "rad:zTEST";
+            failSource.branch = "main";
+
+            failSource.syncAll();
+            compare(failSource.lastSyncedCommit, "sha-first-sync",
+                    "first sync records the head normally");
+
+            // Second sync of the same repo, but the head lookup fails this
+            // time. The correct outcome is that lastSyncedCommit is simply
+            // left alone — stale by one cycle, which only makes an update
+            // report late. What it must NOT do is silently re-affirm
+            // "sha-first-sync" as though this sync had confirmed it.
+            failApp.failBranches = true;
+            failSource.syncAll();
+
+            compare(failSource.pendingSyncHead, "",
+                    "a failed head lookup must leave no head for finishSyncIfDone() to consume");
+            compare(failSource.lastSyncedCommit, "sha-first-sync",
+                    "lastSyncedCommit stays as it was; the next sync or poll gets another chance");
+        }
+
+        function test_a_head_lookup_answering_after_a_branch_switch_is_dropped() {
+            // syncAll()'s own ListBranches used to read `branch` live in its
+            // callback rather than capturing it. The epoch alone does not
+            // cover this: syncEpoch only moves in reset()/cancelSync(), so a
+            // caller that changes `branch` without either — which is what
+            // assigning the property directly does — left the loop matching
+            // the NEW branch's name and storing ITS head as the head of a sync
+            // that had downloaded the OLD branch's files.
+            deferredSource.reset();
+            deferredSource.rid = "rad:zTEST";
+            deferredSource.branch = "main";
+            deferredApp.pendingBranches = null;
+
+            // Hold the head lookup this sync issues.
+            deferredApp.deferBranches = true;
+            deferredSource.syncAll();
+            verify(deferredApp.pendingBranches !== null,
+                   "expected syncAll()'s own ListBranches head lookup");
+
+            // The branch moves while that lookup is still in flight.
+            deferredSource.branch = "dev";
+
+            // The reply names the branch the user is on NOW. Before the fix
+            // the loop matched it and recorded its head as the head of a sync
+            // that fetched main's files.
+            deferredApp.deliverBranchesNamed("dev", "sha-on-dev");
+
+            compare(deferredSource.pendingSyncHead, "",
+                    "a head lookup answering after a branch switch must not be recorded");
+        }
+    }
+
+    // A fake whose ListBranches can be made to fail, so a sync can complete
+    // with no head available. Separate from fakeApp/deferredApp so neither
+    // grows a flag the tests above would have to reset.
+    QtObject {
+        id: failApp
+        property bool failBranches: false
+        property string branchesHead: "sha-first-sync"
+        function call(method, args, onOk, onFail) {
+            if (method === "ListBranches") {
+                if (failBranches) { onFail("seed unreachable"); return; }
+                onOk({ items: [{ name: "main", head: branchesHead }], default: "main" });
+                return;
+            }
+            onOk({ entries: [] });
+        }
+    }
+
+    Ui.SourceTab {
+        id: failSource
+        anchors.fill: parent
+        visible: false
+        app: failApp
+        rid: "rad:zTEST"
+        branch: "main"
     }
 }

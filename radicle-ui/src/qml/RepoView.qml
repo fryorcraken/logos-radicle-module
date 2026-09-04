@@ -154,11 +154,41 @@ Item {
         // COBs with no branch concept — so only their loadedTabs entries are
         // cleared, and only they refetch. Clearing all four would refetch
         // issues/patches for no reason on every branch switch.
-        delete loadedTabs[0];
-        delete loadedTabs[1];
+        // Rebuilt as a NEW object rather than mutated with `delete
+        // loadedTabs[0]`. `loadedTabs` is a `property var`, and an in-place
+        // delete on one does not reliably write back through the property —
+        // the entries survived, loadTab() below took its early return, and
+        // switching branch silently left the OLD branch's tree and commits on
+        // screen with no refetch at all. onRidChanged has always reassigned
+        // the whole object (loadedTabs = ({})), which is why the repository
+        // switch worked while the branch switch did not.
+        var keep = ({});
+        for (var k in loadedTabs)
+            if (k !== "0" && k !== "1" && loadedTabs[k]) keep[k] = true;
+        loadedTabs = keep;
         source.reset();
         commits.reset();
-        maybeLoad();
+        // Reload on the next event-loop turn, NOT synchronously here.
+        //
+        // SourceTab.branch and CommitsTab.branch are bindings to this
+        // property. Inside this handler those bindings have not been
+        // re-evaluated yet, so calling maybeLoad() directly made the two tabs
+        // refetch using the branch they were ALREADY on — the request went out
+        // for the old branch, its reply repopulated the pane, and switching
+        // branch appeared to do nothing at all. Deferring by one turn lets the
+        // bindings settle so the refetch asks for the branch just picked.
+        branchReload.restart();
+    }
+
+    /// Drives onBranchChanged's reload one event-loop turn later, so the
+    /// branch bindings on SourceTab/CommitsTab have been re-evaluated before
+    /// either is asked to fetch. See onBranchChanged for what went wrong when
+    /// this was a direct call.
+    Timer {
+        id: branchReload
+        interval: 0
+        repeat: false
+        onTriggered: maybeLoad()
     }
 
     // The page can receive a rid before it becomes visible, and `active` can

@@ -332,14 +332,31 @@ Item {
         // actually completes. ListBranches is the same lightweight call
         // checkForUpdate() polls with — one request either way, no dedicated
         // "get branch head" endpoint needed.
+        // Clear the previous sync's captured head before asking for this
+        // one's. Without this, a sync whose ListBranches FAILS leaves
+        // pendingSyncHead holding the head an EARLIER sync captured, and
+        // finishSyncIfDone() below then records that stale value as this
+        // sync's lastSyncedCommit — claiming the repo is synced to a commit
+        // this sync never fetched. reset() cleared it, but reset() only runs
+        // on a repo/branch change, not between two syncs of the same repo.
+        pendingSyncHead = "";
+
+        // wantBranch is captured, not read live in the callback. The epoch
+        // alone is not enough: it only moves in reset()/cancelSync(), so a
+        // caller that changes `branch` without either — which is exactly what
+        // assigning the property directly does — would leave the loop below
+        // matching the NEW branch's name and storing ITS head as the head of
+        // a sync that downloaded the OLD branch's files.
         var epoch = syncEpoch;
+        var wantRid = rid, wantBranch = branch;
         app.call("ListBranches", [rid], function (data) {
             if (epoch !== syncEpoch) return;   // sync already abandoned
+            if (tab.rid !== wantRid || tab.branch !== wantBranch) return;
             var items = (data && data.items) ? data.items : [];
             for (var i = 0; i < items.length; i++) {
-                if (items[i].name === branch) { pendingSyncHead = items[i].head || ""; break; }
+                if (items[i].name === wantBranch) { pendingSyncHead = items[i].head || ""; break; }
             }
-        }, function () { /* head unknown; lastSyncedCommit stays as-is */ });
+        }, function () { /* head unknown; pendingSyncHead stays "" */ });
 
         syncDir("", syncEpoch);
     }
@@ -429,9 +446,14 @@ Item {
             // slower than every GetTree/GetBlob in the sync (a small repo)
             // or failed outright — lastSyncedCommit then simply stays at
             // whatever it was, and the next poll (or the next sync) gets
-            // another chance to record it. Leaving it stale for one cycle is
-            // harmless: it can only make updateAvailable fire a little late,
-            // never wrongly claim a repo is up to date.
+            // another chance to record it.
+            //
+            // That is only safe because syncAll() clears pendingSyncHead
+            // before each sync. It used to be cleared solely in reset(), so a
+            // failed lookup here would silently commit the PREVIOUS sync's
+            // head and claim the repo was current at a commit it had never
+            // fetched — which is the one thing this must never do. Staying
+            // stale for a cycle only makes updateAvailable fire late.
             if (pendingSyncHead !== "") lastSyncedCommit = pendingSyncHead;
         }
     }
