@@ -18,12 +18,18 @@ generated_code/
 .cursor/
 AGENTS.md
 
+# agent scratch space
+tmp/
+
 # test run output
 radicle-ui/tests/out.txt
 radicle-ui/tests/results.txt
 
-# UI test run outputs (ui-tests.yml)
+# release staging (ci.yml) — ui-tests.yml no longer stages here, it reads
+# .scaffold/basecamp/portable/ directly
 dist/
+
+# UI test run outputs (ui-tests.yml)
 basecamp/
 ui-results/
 
