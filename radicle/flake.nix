@@ -140,13 +140,30 @@
       # `packages.<system>.default` — so a Darwin build says which platform is
       # unsupported rather than leaking this attrset into a shell script.
 
-      # Linux only, and deliberately: the crate links a native libgit2/openssl
-      # through the *-sys crates, so a Darwin entry would mean cross-compiling
-      # Rust for Darwin from a Linux builder. Nothing needs that. A Darwin
-      # build now fails in `resolveExtInput` with the builder's own
-      # "does not provide packages.<system>.default" message, which names the
-      # unsupported platform instead of silently linking a Linux archive.
-      ffiSystems = [ "x86_64-linux" "aarch64-linux" ];
+      # Every system the module catalog builds, Darwin included.
+      #
+      # An earlier version of this list was Linux-only, on the reasoning that
+      # a Darwin entry "would mean cross-compiling Rust for Darwin from a Linux
+      # builder". That premise is wrong, and the catalog's own workflow is
+      # where to check it: `logos-modules-release-action`'s release.yml maps
+      # `darwin-arm64` to `runs-on: macos-latest` (Apple silicon), so each
+      # variant is built NATIVELY on its own runner. Nothing cross-compiles.
+      #
+      # The cost of getting that wrong was a silent capability regression.
+      # Excluding Darwin here does not fail loudly at eval on a Mac — it makes
+      # the catalog's darwin-arm64 job fail, which the release workflow then
+      # treats as an expected partial (`continue-on-error` per variant), so the
+      # release publishes anyway with "Missing variants: darwin-arm64" in a
+      # body nobody reads. radicle v0.1.1 shipped all three variants; v0.2.0
+      # shipped linux-amd64 alone, and the only signal was that line.
+      #
+      # The *-sys crates are the reason to keep an eye on this: libgit2-sys,
+      # libssh2-sys and openssl-sys link native libraries, and `buildInputs`
+      # above resolves them per-system through the same `import nixpkgs
+      # { inherit system; }` that produces the archive — so a Darwin build gets
+      # Darwin's openssl and zlib, not Linux's. There is no Linux-specific code
+      # in `rust-ffi/` itself (no `target_os` gates, no `cfg(unix)` branches).
+      ffiSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
 
       rustFfiInput = {
         input = {
@@ -197,22 +214,27 @@
         # zlib, for the libgit2 inside that archive. The plugin build gets it
         # transitively through Qt6::Network; this one has to ask.
         #
-        # STILL HARDCODED to x86_64-linux, and this is the one site the fix
-        # above does not reach: `extraBuildInputs` is resolved outside
-        # `forAllSystems` and is not an `externalLibInputs` entry, so nothing
-        # selects it per system. `checks.aarch64-linux.unit-tests` therefore
-        # still asks for an x86_64 zlib and will not realise on an arm64
-        # machine.
+        # `extraBuildInputs` is resolved OUTSIDE `forAllSystems` and is not an
+        # `externalLibInputs` entry, so nothing selects it per system the way
+        # the staticlib above is selected — one list is shared by all four
+        # `checks.<system>.unit-tests`. Naming a single system's zlib here
+        # therefore made every other system's check unrealisable.
         #
-        # Left as-is deliberately, because unlike the plugin build nothing
-        # depends on it: `checks` are not part of the release path — CI runs
-        # only `checks.x86_64-linux.unit-tests`, and the module catalog builds
-        # `packages.<system>.lgx`, which this does not touch. Fixing it
-        # properly means either an upstream per-system `tests` hook or calling
-        # mkLogosModule once per system, both of which are more change than the
-        # arm64 regression warrants. Revisit if the unit tests ever need to run
-        # on arm64.
-        extraBuildInputs = [ (import nixpkgs { system = "x86_64-linux"; }).zlib ];
+        # `lib.attrValues (lib.genAttrs ...)` is not available for this, since
+        # the value must be one flat list rather than a per-system attrset. So
+        # take the zlib of every supported system: on any given machine only
+        # the check for that machine's system is ever realised, and the other
+        # entries are inert store paths in a list Nix never has to build. That
+        # keeps the shared-list constraint without pinning one platform.
+        #
+        # Do not "simplify" this back to a single system. It was x86_64-only,
+        # which passed CI forever (CI runs only x86_64) while quietly making
+        # `checks.aarch64-linux.unit-tests` impossible to run — the same shape
+        # as the staticlib bug above, in the one place the fix for it does not
+        # reach.
+        extraBuildInputs = map
+          (system: (import nixpkgs { inherit system; }).zlib)
+          ffiSystems;
       };
     };
 }
