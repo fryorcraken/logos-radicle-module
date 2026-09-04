@@ -49,6 +49,15 @@ Item {
     /// Set when a post fails, cleared when the next one starts.
     property string error: ""
 
+    /// Set when the last post SUCCEEDED but the node had not announced it yet.
+    ///
+    /// This is not an error and must never be shown as one — the comment is
+    /// signed and in local storage, and the node announces on next start. But
+    /// it is not yet visible to anyone else, and saying nothing would let the
+    /// user believe it had propagated. So it gets its own state, in
+    /// `Theme.warn` rather than `Theme.bad`, cleared when the next post starts.
+    property string queuedNotice: ""
+
     /// The draft. Deliberately not cleared except on success.
     property alias body: field.text
 
@@ -66,6 +75,7 @@ Item {
     function reset() {
         field.text = "";
         error = "";
+        queuedNotice = "";
         posting = false;
     }
 
@@ -74,6 +84,7 @@ Item {
 
         posting = true;
         error = "";
+        queuedNotice = "";
 
         // Captured before the async call, matching the guard convention every
         // loader here uses. Without it, a reply arriving after the user backed
@@ -90,6 +101,19 @@ Item {
             // ordinary state — the node announces on next start — so it is not
             // reported as a failure. Saying "failed" here would make the user
             // post the same comment again.
+            //
+            // But it is not nothing either: the comment exists locally and
+            // nobody else can see it yet. Reporting only success would let the
+            // user believe it had propagated, so it gets its own notice.
+            // `announced` is checked with `=== false` rather than for
+            // falsiness: a reply from an older backend that omits the field
+            // must read as "no claim made", not as "not announced".
+            if (data && data.announced === false) {
+                composer.queuedNotice =
+                    "Saved locally, not yet announced — "
+                    + (data.announceError || "the local node did not confirm");
+            }
+
             composer.body = "";
             composer.posted();
         }, function () {
@@ -168,7 +192,28 @@ Item {
                 Layout.fillWidth: true
             }
 
-            Item { visible: composer.error === ""; Layout.fillWidth: true }
+            // A comment that is signed and stored but not yet announced.
+            // Theme.warn, not Theme.bad: nothing went wrong and there is
+            // nothing to retry — the node announces on next start. The point
+            // is only that the user should not assume it has propagated.
+            //
+            // Mutually exclusive with the error above by construction: submit()
+            // clears both on the way in, and exactly one of the two callbacks
+            // sets one of them.
+            Text {
+                objectName: "composerQueuedNotice"
+                visible: composer.queuedNotice !== ""
+                text: composer.queuedNotice
+                color: Theme.warn
+                font.pixelSize: Theme.fontSm
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+
+            Item {
+                visible: composer.error === "" && composer.queuedNotice === ""
+                Layout.fillWidth: true
+            }
 
             Rectangle {
                 Layout.preferredWidth: 96
