@@ -53,6 +53,12 @@ Item {
     /// True while any detail view is covering the tabs.
     readonly property bool showingDetail: openThreadId !== "" || openCommitSha !== ""
 
+    /// Whether the comment box is on screen. Re-exported for the UI specs,
+    /// which cannot reach into a StackLayout child by id — and this is the one
+    /// piece of state worth asserting from outside, because "the box appeared
+    /// when it should not have" is the failure that loses a user's text.
+    readonly property bool composerVisible: thread.commentable
+
     /// State the end-to-end UI specs assert on. Kept here, and re-exported by
     /// Main.qml, because a spec's `state:` expressions evaluate against the
     /// app's QML root and cannot reach into a StackLayout child by id.
@@ -458,10 +464,17 @@ Item {
             }
 
             ThreadView {
+                id: thread
                 app: page.app
                 rid: page.rid
                 kind: page.openThreadKind
                 itemId: page.openThreadId
+                // Read off `app` rather than threaded through RepoView as two
+                // more properties: nothing between here and Main.qml has an
+                // opinion about them, and a pass-through property that only
+                // ever forwards is a place for the two to drift apart.
+                canWrite: page.app ? page.app.canWrite : false
+                writeUnavailableReason: page.app ? page.app.writeUnavailableReason : ""
                 onBack: page.openThreadId = ""
             }
 
