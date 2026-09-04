@@ -148,6 +148,42 @@ both modules have been rebuilt and confirmed loading with no errors in a
 live `alice` Basecamp profile (checked the log for QML/import failures —
 none — and confirmed "Successfully loaded UI module: radicle_ui").
 
+### M1.1 — what the review pass found before merge
+
+Three review agents (correctness/architecture, test quality, QML traps) ran
+against the finished branch. The test-quality pass worked by mutation — revert
+the fix, see whether any test notices — which is what turned up the first item
+below and is worth repeating on future milestones.
+
+- **Branch switching never reloaded anything.** See "A binding does not update
+  inside the handler that changed its source" above. The headline feature of
+  this milestone was broken end to end and every gate was green.
+- **Two ways to record a wrong `lastSyncedCommit`**, both of which make the
+  sync button claim a repository is current at a commit it never fetched —
+  the one failure the staleness feature must never have. `pendingSyncHead` was
+  cleared only in `reset()`, so a sync whose `ListBranches` failed committed
+  the *previous* sync's head; and `syncAll()`'s head lookup read `branch` live
+  in its callback, so a branch switch mid-lookup stored the new branch's head
+  for a sync of the old branch's files.
+- **Two tests that could not fail**, both fixed to assert the thing that
+  actually broke: `CommitView`'s back-button test (a click test structurally
+  cannot see a covering overlay, so it now asserts the overlay's visibility)
+  and the branch-switch reset test (see above).
+- **`pollEpoch` is load-bearing, though two of the three reviews said to
+  delete it.** Its case is a `reset()` with rid and branch *unchanged* —
+  re-opening the same repository — where the other guard terms match and only
+  the epoch can drop a poll issued before the reset. The tests named for it
+  did not pin it; one that does was added. Worth noting as a case where the
+  reviews agreed with each other and were still wrong: the fix was to write
+  the test that would settle it, not to take the majority view.
+- **Dismissed:** a latent `states` property shadowing `Item.states` in
+  `IssuesTab`/`PatchesTab`/`FilterChips`. Real, but empirically harmless
+  today — `states` is not a default property, so child parenting is
+  unaffected, and nothing in the codebase uses QML state machinery. Renaming
+  three components' public property at release time is the riskier move.
+  Worth doing in M1.2, before anyone adds a state-based transition and it
+  starts failing silently.
+
 ### M1.1 — implemented on a branch, not yet merged to main
 
 All three items below are done, on branch `worktree-agent-a42af4ef65b0dcc3b`
@@ -314,6 +350,34 @@ to cover.
 This is not a request for exhaustive coverage. It is a request that the change
 which introduces behaviour is the change that pins it down.
 
+## A binding does not update inside the handler that changed its source
+
+`RepoView.onBranchChanged` reset Source and Commits and then called
+`maybeLoad()` in the same breath. `SourceTab.branch` and `CommitsTab.branch`
+are bindings to `RepoView.branch`, and inside that handler they have **not been
+re-evaluated yet** — so the refetch went out for the branch the tabs were
+already on, the reply repopulated the pane, and picking a branch did nothing
+at all. The whole feature was dead on arrival and every gate was green.
+
+If a handler changes a property and then calls something that reads a *binding*
+derived from it, defer the call by one event-loop turn (a zero-interval
+`Timer`) or pass the new value explicitly. Do not assume the binding has
+settled.
+
+This class is invisible to the end-to-end layer too: `branches.yaml` asserts
+`treeCount > 0`, which is just as true of the old branch's entries left on
+screen. It was caught only by a component test whose fake returns a **different
+number of entries per branch**, so the count itself says which branch was
+fetched.
+
+Which is the general lesson, and the reason it hid for a whole milestone: a
+fake that returns the same thing for every input cannot tell "reloaded" from
+"never reloaded". The original test asserted `treeCount === 0` against a fake
+returning an empty tree for every branch — true whether the reset ran, the
+refetch ran, both, or neither. **Make fakes return input-dependent data**, or
+the assertion is decoration. Deleting the entire `onBranchChanged` body left
+all 122 tests passing.
+
 ## Before anything else, make the failure visible
 
 Basecamp swallows QML errors. A view that fails to compile, a plugin skipped for
@@ -471,7 +535,11 @@ QML syntax, metadata lint, qmllint, the QML component tests and the LGX builds.
 It also validates that the sitometres specs parse.
 
 `.github/workflows/ui-tests.yml` runs the sitometres specs for real, on pushes
-to `main`, on pull requests, and on demand. It builds Basecamp from source —
+to `main`, on pull requests, and on demand. It is a **matrix, one job per
+spec** (`browse`, `branches`, `source`, `sync`) — `SPEC` used to be hardcoded
+to `browse.yaml`, so three specs sat in the tree running nowhere. If you add a
+spec, add it to that matrix, or it is decoration. `ci.yml`'s schema check
+already globs `tests/ui/*.yaml` and needs no change. It builds Basecamp from source —
 the inspector-enabled bundle is not in the public binary cache — but a warm Nix
 store cache brings that to about three minutes. A fork PR, or the first run
 after `BASECAMP_REV` changes, pays roughly nine minutes.
