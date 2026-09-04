@@ -1,5 +1,90 @@
 # Working on this repository
 
+## M2.2 — the first write, 2026-09-04
+
+Full design in [`docs/M2.2-write-actions-design.md`](docs/M2.2-write-actions-design.md).
+The parts worth having here, because they change what a future session should
+assume:
+
+### Signing needs no passphrase prompt in the ordinary case
+
+The M2.2 proposal recorded that Radicle Desktop prompts for the `rad`
+passphrase on startup, and concluded a passphrase-entry UI belonged in the
+first cut. **That is too strong.** `Profile::signer()` picks from three
+sources, so there are four states, not two:
+
+| Keystore | `RAD_PASSPHRASE` | agent holds the key | Signer? |
+|---|---|---|---|
+| plaintext | — | — | yes, no prompt |
+| encrypted | set | — | yes, no prompt |
+| encrypted | unset | yes | **yes, no prompt** |
+| encrypted | unset | no | no — a prompt is genuinely needed |
+
+The third row is the ordinary post-`rad auth` state: `rad auth` puts the key in
+ssh-agent and it stays there for the session. `cargo run --example probe_signer`
+reports which row a machine is in; on the machine this was built on, writes are
+signable with no prompt. Basecamp inherits `SSH_AUTH_SOCK` from the session, so
+the agent path works from inside the module.
+
+So the prompt is **deferred, not skipped**: `getCapabilities().canWriteLocal`
+is now a real probe rather than the hardcoded `false` it had been since M1, and
+`writeUnavailableReason` names the fix. Building the prompt later fills in the
+fourth row and changes no API.
+
+### A COB write is local; announcing is separate and non-fatal
+
+Confirmed by reading the crate, because it decides whether writes need the
+daemon: there is **no `announce` anywhere under `radicle-0.25.1/src/cob/`**.
+`store.create(...)` / `issue.comment(...)` append a signed operation to the DAG
+in local storage and return, so **writes work with the node stopped** — the
+same offline promise M2.1's reads make.
+
+Announcing is a separate control-socket round-trip
+(`Handle::announce_refs_for`, one call). Its failure is reported *alongside* a
+successful write, never instead of one:
+
+```json
+{"id":"…","announced":false,"announceError":"the local node is not running"}
+```
+
+A COB written but not announced is an ordinary state — the node announces on
+next start — so calling it a failed write would make the user post twice.
+`Node::announce` (the richer one) blocks on an event stream until seeds
+acknowledge; do not reach for it from a synchronous FFI call.
+
+No `sign_refs` step is needed either. The test fixture calls it after a raw
+`git push` into storage because that push bypasses the crate; the COB store
+signs as part of the operation.
+
+### What shipped, and the rule that came with it
+
+`localCommentOnIssue` only — Rust (`cobwrite.rs`), FFI, `LocalWriter`,
+`radicle_impl`, the `.rep`, and `CommentComposer.qml` in `ThreadView`.
+Deliberately one narrow slice end to end rather than a broad half-wired
+surface.
+
+**Gate every write affordance on `canWriteLocal`, never on `localAvailable`.**
+A profile can exist while its key stays locked. This is stated in
+`radicle_impl.h` as well, because offering a compose box that cannot be
+submitted loses whatever the user typed — the one failure this surface must not
+have. It is why `CommentComposer` also keeps its draft on failure, and why a
+successful post *reloads* the thread rather than appending locally (an append
+renders correctly whether or not the write landed — the branch-switch fake trap
+in different clothes).
+
+Deferred with reasons in the design doc: creating an issue (the obvious next
+slice), commenting on a patch (needs revision-thread *reads* first — `get_patch`
+does not serialize them, so a patch comment would have nowhere to appear),
+close/reopen, labels and assignees, patch review, and the passphrase UI.
+
+### `cobwrite.rs` is separate from `cobs.rs` on purpose
+
+`cobs.rs` opens every store with `ReadOnly`, a unit struct holding no signer,
+and that is what lets local browsing work offline with an encrypted key.
+Putting a write beside it would turn a guarantee you can check by reading one
+file into one you have to check per function. Same reason `LocalWriter` is not
+a few more methods on `LocalReader`.
+
 ## M2.1 — scope and FFI decision, 2026-09-03
 
 M2.1 = read-only local-node browsing: mirror every `remote*` method with a
