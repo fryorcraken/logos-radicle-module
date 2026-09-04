@@ -37,6 +37,13 @@ Item {
 
     /// When true, CommentOnIssue fails instead of succeeding.
     property bool failWrites: false
+    /// When true, the write SUCCEEDS but reports the node did not announce it.
+    /// A distinct axis from failWrites on purpose: the two must not be
+    /// confusable, and a test that could not tell them apart would be exactly
+    /// the bug this state exists to prevent.
+    property bool announceFails: false
+    /// When true, the reply omits `announced` entirely — an older backend.
+    property bool omitAnnounced: false
     /// When true, the reply is held until `deliver()` is called — the only way
     /// to observe the in-flight state, which a synchronous fake cannot.
     property bool deferReplies: false
@@ -51,7 +58,15 @@ Item {
             var body = args[2];
             var ok = function () {
                 root.posted.push(body);
-                onOk({ id: "entry" + root.posted.length, announced: true });
+                var reply = { id: "entry" + root.posted.length };
+                // An older backend omits the field entirely; that must read as
+                // "no claim made", not as "not announced".
+                if (!root.omitAnnounced) {
+                    reply.announced = !root.announceFails;
+                    if (root.announceFails)
+                        reply.announceError = "the local node is not running";
+                }
+                onOk(reply);
             };
             var fail = function () { if (onFail) onFail(); };
 
@@ -116,6 +131,8 @@ Item {
             root.calls = [];
             root.posted = [];
             root.failWrites = false;
+            root.announceFails = false;
+            root.omitAnnounced = false;
             root.deferReplies = false;
             root.canWrite = true;
             root.writeUnavailableReason = "";
@@ -242,6 +259,101 @@ Item {
                     "a stale error must not outlive the attempt that fixed it");
         }
 
+        // ---- announced vs merely saved -----------------------------------
+
+        function test_an_unannounced_post_still_counts_as_posted() {
+            // The comment is signed and in local storage; the node just has
+            // not told anyone yet. Treating this as a failure would make the
+            // user post the same comment twice, which cannot be undone.
+            root.announceFails = true;
+            composer.body = "saved but not announced";
+            composer.submit();
+
+            compare(composer.body, "", "it posted — the draft is spent");
+            compare(composer.error, "",
+                    "not announcing is NOT an error and must never show as one");
+            compare(root.posted.length, 1, "and it really was written");
+        }
+
+        function test_an_unannounced_post_says_so() {
+            // Saying nothing would let the user believe it had propagated.
+            root.announceFails = true;
+            composer.body = "saved but not announced";
+            composer.submit();
+
+            verify(composer.queuedNotice !== "",
+                   "an unannounced post must say so, not pass silently");
+            verify(composer.queuedNotice.indexOf("not yet announced") >= 0,
+                   "got: " + composer.queuedNotice);
+            // The backend's own reason is surfaced, not paraphrased away.
+            verify(composer.queuedNotice.indexOf("not running") >= 0,
+                   "the node's reason must reach the user: "
+                   + composer.queuedNotice);
+        }
+
+        function test_an_announced_post_says_nothing_extra() {
+            composer.body = "announced fine";
+            composer.submit();
+            compare(composer.queuedNotice, "",
+                    "a fully propagated post needs no notice");
+        }
+
+        function test_a_reply_without_the_field_makes_no_claim() {
+            // An older backend omits `announced`. That is "no claim made", not
+            // "not announced" — inventing a warning from a missing field would
+            // alarm the user about nothing.
+            root.omitAnnounced = true;
+            composer.body = "from an older backend";
+            composer.submit();
+
+            compare(composer.queuedNotice, "",
+                    "a missing field must not be read as a negative claim");
+            compare(composer.error, "");
+        }
+
+        function test_a_later_announced_post_clears_the_notice() {
+            root.announceFails = true;
+            composer.body = "first";
+            composer.submit();
+            verify(composer.queuedNotice !== "");
+
+            root.announceFails = false;
+            composer.body = "second";
+            composer.submit();
+            compare(composer.queuedNotice, "",
+                    "a stale notice must not outlive the post that fixed it");
+        }
+
+        function test_the_notice_and_the_error_are_never_both_set() {
+            // They are mutually exclusive by construction — submit() clears
+            // both and exactly one callback runs — and the UI puts them in the
+            // same slot, so a state with both would render one on top of the
+            // other.
+            root.announceFails = true;
+            composer.body = "queued";
+            composer.submit();
+            verify(composer.queuedNotice !== "");
+            compare(composer.error, "");
+
+            root.announceFails = false;
+            root.failWrites = true;
+            composer.body = "failed";
+            composer.submit();
+            verify(composer.error !== "");
+            compare(composer.queuedNotice, "",
+                    "a failure must clear the previous queued notice");
+        }
+
+        function test_reset_clears_the_queued_notice() {
+            root.announceFails = true;
+            composer.body = "queued";
+            composer.submit();
+            verify(composer.queuedNotice !== "");
+
+            composer.reset();
+            compare(composer.queuedNotice, "");
+        }
+
         // ---- in flight --------------------------------------------------
 
         function test_a_post_in_flight_blocks_a_second_one() {
@@ -319,6 +431,8 @@ Item {
             root.calls = [];
             root.posted = [];
             root.failWrites = false;
+            root.announceFails = false;
+            root.omitAnnounced = false;
             root.deferReplies = false;
             root.canWrite = true;
             root.writeUnavailableReason = "";
