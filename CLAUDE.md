@@ -124,14 +124,21 @@ straight into issues/patches using the same `Issues::open`/`Patches::open`
 + `NoCache` pattern — there's no architectural reason to stop, only a budget
 one.
 
-### M2.1 progress — the FFI crate exists, nothing calls it yet
+### M2.1 progress — wired end to end and proven against a real profile
 
-`radicle/rust-ffi/` is real and on a branch (PR #3, draft). What is true
-today, so nobody re-derives it:
+`radicle/rust-ffi/` is real and on a branch (PR #3). What is true today, so
+nobody re-derives it:
 
-- **`local::get_repo` and `local::list_repos` work**, matching
-  `remoteGetRepo`/`remoteListRepos`'s JSON shape as pinned by
-  `test_seed_client.cpp`. Compiles clean, 7 tests pass via `cargo test`.
+- **The whole `local*` surface works**, matching the `remote*` JSON shapes as
+  pinned by `test_seed_client.cpp`: repos, tree, blob, readme, commits +
+  diffs, and COBs (issues/patches) via `Issues::open`/`Patches::open` +
+  `NoCache`. 29 tests pass via `cargo test`.
+- **It is linked and called.** `radicle/CMakeLists.txt` links the staticlib
+  (`find_library` so a missing archive fails at configure time with a
+  sentence, not at link time with a wall of undefined symbols),
+  `flake.nix`'s `preConfigure` stages it, and `radicle_impl.cpp`'s `local*`
+  methods hand off to `LocalReader` instead of returning
+  `localUnavailable()`. The QML routes through `SourceState.methodFor()`.
 - **Reading needs no passphrase** — only `keys/radicle.pub` is read.
   `UserInfo.key` is used when *signing*, which this never does, so the
   private key stays encrypted and untouched. Confirmed empirically, not
@@ -140,21 +147,14 @@ today, so nobody re-derives it:
 - **`radicle 0.25.1` / `radicle-oid 0.2.2` need no pin.** The
   `radicle = "0.24"` / radicle-oid 0.2.0 gotcha in memory does not apply
   to this version line.
-- **Nothing calls it.** `radicle_impl.h`'s `local*` methods still all
-  return `localUnavailable()`. There is no behaviour change for a user,
-  and **CI does not build Rust at all** — no workflow runs `cargo`,
-  `radicle/CMakeLists.txt` has no Rust reference, and `metadata.json`'s
-  `extra_link_libraries`/`extra_include_dirs` are still empty. A green CI
-  run on that PR says nothing about this crate; the tests are advisory
-  until a `cargo test` job exists.
-- **Still to write**: tree/blob/commit reads, then issues/patches via
-  `Issues::open`/`Patches::open` + `NoCache`, then `scope` filtering in
-  `list_repos` (accepted for shape parity, currently ignored).
-- **Build wiring is the risky follow-up**, deliberately left out to keep
-  the PR reviewable: a `rustPlatform.buildRustPackage` derivation in
-  `radicle/flake.nix` adds a Rust toolchain to a Nix build that has none,
-  which affects build time and the binary cache. That deserves its own PR
-  and its own CI run.
+- **Two probe examples read this machine's real `~/.radicle`**, because a
+  fixture built by the same code that reads it can agree with itself while
+  both are wrong about what a real `rad`-created profile looks like:
+  `probe_real_profile` (every read, one repo, empty sha) and
+  `probe_ui_args` (every repo, with the `defaultBranch` the UI actually
+  passes as the sha — a different input down a different path). Neither is
+  a test: they depend on whatever is on this machine, so they can neither
+  pass nor fail meaningfully in CI.
 
 A note on testing this crate, learned the hard way: the rescued code came
 with `SMOKE_*`-env-gated tests that returned early when the var was unset,
@@ -164,6 +164,46 @@ replaced with fixtures built through the crate's *public* API. When adding
 coverage here, verify it fails when it should: breaking `local.rs` on
 purpose and watching the assertion go red takes a minute and is the only
 thing that distinguishes a real test from a skip.
+
+### `local.yaml` needs RAD_HOME — run it with `run-local-e2e.sh`
+
+sitometres gives every run a **throwaway `$HOME`** so a test cannot touch your
+real wallets and keys. `LocalStore` resolves the Radicle home from `RAD_HOME`,
+else `$HOME/.radicle` — so under that throwaway HOME there is no profile,
+`getCapabilities` reports `localAvailable=false`, the toggle hides its "Local"
+segment, and `local.yaml` fails at step 3 with
+
+```
+state "root.localAvailable === true" — evaluated to false
+```
+
+on **every** machine, including one with a perfectly good profile.
+
+That spec's header used to claim the failure meant "this machine has no
+Radicle profile". It did not, and the mistake was expensive: the one automated
+check covering local browsing was permanently red for a reason unrelated to
+the code under test, so it was never run, and the local path shipped with no
+working end-to-end coverage at all. **A check that cannot pass is worth no
+more than one that cannot fail** — the same lesson as the `SMOKE_*` skips and
+the Qt5 `qmltestrunner`, arriving from the opposite direction.
+
+`radicle-ui/tests/run-local-e2e.sh` passes `--env RAD_HOME=<your profile>`,
+which restores local browsing while keeping the throwaway HOME's isolation.
+Use it rather than invoking sitometres by hand. `--real-home` would also work
+and is deliberately not used: it hands the app every credential in `$HOME` to
+make one directory readable.
+
+It is **not** in CI — a CI runner has no Radicle profile, and seeding one is
+its own piece of work. It is the only spec that covers `local*`, so run it
+locally after touching that path.
+
+One caveat worth knowing before you chase a ghost: step 9 (`treeCount > 0`)
+can fail spuriously when **another Basecamp is running against the same
+`~/.radicle`** — two processes contending on the same git storage. Five
+consecutive clean runs with no other instance up; two failures while an
+interactive `lgs basecamp launch alice` was being driven by hand. Close the
+interactive instance before running the spec, and do not read a lone step-9
+failure as a code defect until you have.
 
 ## How to work in this repo, and what Bash costs
 
