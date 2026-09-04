@@ -233,6 +233,245 @@ fn a_write_with_no_profile_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// create_issue
+// ---------------------------------------------------------------------------
+
+/// The titles currently in a repo's issue list, read back through the same
+/// function the UI calls.
+fn issue_titles(home: &str, rid: &str) -> Vec<String> {
+    let v = parse(&radicle_local_ffi::cobs::list_issues(home, rid, "", 0, 100));
+    assert!(v.get("error").is_none(), "unexpected read error: {v}");
+    v["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .filter_map(|i| i["title"].as_str().map(|s| s.to_string()))
+        .collect()
+}
+
+#[test]
+fn a_created_issue_is_visible_to_a_fresh_read() {
+    let f = init_profile("create-issue");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    assert!(
+        issue_titles(&home, &rid).is_empty(),
+        "the fixture starts with no issues"
+    );
+
+    let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+        &home,
+        &rid,
+        "a brand new issue",
+        "with a description that becomes the root comment",
+    ));
+    assert!(v.get("error").is_none(), "unexpected write error: {v}");
+
+    let id = v["id"].as_str().expect("the write returns an issue id");
+    assert!(!id.is_empty(), "issue id must not be empty: {v}");
+
+    // Re-read from scratch, the load-bearing assertion.
+    let titles = issue_titles(&home, &rid);
+    assert_eq!(
+        titles,
+        vec!["a brand new issue".to_string()],
+        "got {titles:?}"
+    );
+
+    // The returned id is what a view hands straight to localGetIssue to open
+    // what was just created, so it has to actually resolve.
+    let detail = parse(&radicle_local_ffi::cobs::get_issue(&home, &rid, id));
+    assert!(
+        detail.get("error").is_none(),
+        "the id must resolve: {detail}"
+    );
+    assert_eq!(detail["title"], "a brand new issue");
+    assert_eq!(detail["state"]["status"], "open", "new issues are open");
+
+    // The description is the root comment — that is how the crate models it,
+    // and why there is no separate `description` field to assert on.
+    let bodies: Vec<&str> = detail["discussion"]
+        .as_array()
+        .expect("discussion")
+        .iter()
+        .filter_map(|c| c["body"].as_str())
+        .collect();
+    assert_eq!(
+        bodies,
+        vec!["with a description that becomes the root comment"],
+        "the description becomes the root comment: {bodies:?}"
+    );
+}
+
+#[test]
+fn a_created_issue_can_be_commented_on() {
+    // The two writes compose: an issue created through this path is a real COB
+    // that the comment path can then open. A create that produced something
+    // subtly malformed would show up here rather than in either test alone.
+    let f = init_profile("create-then-comment");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    let created = parse(&radicle_local_ffi::cobwrite::create_issue(
+        &home,
+        &rid,
+        "an issue",
+        "the description",
+    ));
+    let id = created["id"].as_str().expect("issue id");
+
+    let commented = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
+        &home, &rid, id, "a reply",
+    ));
+    assert!(
+        commented.get("error").is_none(),
+        "commenting on a freshly created issue must work: {commented}"
+    );
+
+    let bodies = thread_bodies(&home, &rid, id);
+    assert_eq!(bodies.len(), 2, "root plus the reply: {bodies:?}");
+}
+
+#[test]
+fn several_issues_can_be_created_and_are_all_listed() {
+    let f = init_profile("create-several");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    for n in 1..=3 {
+        let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+            &home,
+            &rid,
+            &format!("issue {n}"),
+            &format!("body {n}"),
+        ));
+        assert!(v.get("error").is_none(), "create {n} failed: {v}");
+    }
+
+    let titles = issue_titles(&home, &rid);
+    assert_eq!(titles.len(), 3, "got {titles:?}");
+    for n in 1..=3 {
+        assert!(
+            titles.contains(&format!("issue {n}")),
+            "issue {n} missing from {titles:?}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_title_is_refused_and_creates_nothing() {
+    let f = init_profile("create-empty-title");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    for title in ["", "   ", "\t"] {
+        let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+            &home,
+            &rid,
+            title,
+            "a description",
+        ));
+        assert!(
+            v["error"].as_str().is_some(),
+            "an empty title {title:?} must error: {v}"
+        );
+    }
+
+    assert!(
+        issue_titles(&home, &rid).is_empty(),
+        "a refused create must reach storage not at all"
+    );
+}
+
+/// `Title::new` rejects `\n`/`\r` outright rather than trimming them, and this
+/// is reachable by pasting a line of text into a single-line field. The crate's
+/// own message ("invalid characters in title") names neither the character nor
+/// the fix, so the translated one has to.
+#[test]
+fn a_multi_line_title_is_refused_with_an_actionable_message() {
+    let f = init_profile("create-multiline-title");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    for title in ["two\nlines", "carriage\rreturn", "trailing\n"] {
+        let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+            &home,
+            &rid,
+            title,
+            "a description",
+        ));
+        let message = v["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a multi-line title {title:?} must error: {v}"));
+        assert!(
+            message.contains("single line"),
+            "the message must say what is wrong and how to fix it, got: {message}"
+        );
+    }
+
+    assert!(issue_titles(&home, &rid).is_empty(), "nothing was created");
+}
+
+#[test]
+fn an_empty_description_is_refused_and_creates_nothing() {
+    let f = init_profile("create-empty-body");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    for body in ["", "   ", "\n\t "] {
+        let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+            &home, &rid, "a title", body,
+        ));
+        assert!(
+            v["error"].as_str().is_some(),
+            "an empty description {body:?} must error: {v}"
+        );
+    }
+
+    assert!(
+        issue_titles(&home, &rid).is_empty(),
+        "a refused create must reach storage not at all"
+    );
+}
+
+#[test]
+fn creating_in_a_bad_repository_errors() {
+    let f = init_profile("create-bad-rid");
+    let (rid, _) = init_repo(&f, "create-repo", "creates");
+    let home = f.home();
+
+    for bad in ["", "not-a-rid", "rad:", "rad:zzzzzzzzzzzzzzzzzzzzzzzzzzzz"] {
+        let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+            &home,
+            bad,
+            "a title",
+            "a description",
+        ));
+        assert!(
+            v["error"].as_str().is_some(),
+            "a bad rid {bad:?} must error: {v}"
+        );
+    }
+
+    assert!(
+        issue_titles(&home, &rid).is_empty(),
+        "no stray issue landed in the real repo"
+    );
+}
+
+#[test]
+fn creating_with_no_profile_errors() {
+    let v = parse(&radicle_local_ffi::cobwrite::create_issue(
+        "",
+        "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5",
+        "a title",
+        "a description",
+    ));
+    assert!(v["error"].as_str().is_some(), "no home is an error: {v}");
+}
+
+// ---------------------------------------------------------------------------
 // can_write
 // ---------------------------------------------------------------------------
 

@@ -124,6 +124,70 @@ LOGOS_TEST(odd_arguments_cross_the_boundary_intact)
 }
 
 // ---------------------------------------------------------------------------
+// createIssue.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(create_issue_reaches_the_rust_backend_and_returns_parseable_json)
+{
+    LocalWriter writer{scratchPath("create-no-profile")};
+
+    const auto j = parse(writer.createIssue(kRid, "a title", "a description"));
+    LOGOS_ASSERT_TRUE(j.is_object());
+    LOGOS_ASSERT_TRUE(j.contains("error"));
+    LOGOS_ASSERT_FALSE(j["error"].get<std::string>().empty());
+}
+
+/// The title and description rules live in the backend, not only in the UI —
+/// the QtRO surface is reachable by anything on the bus, so a rule enforced
+/// only in QML is not enforced.
+LOGOS_TEST(an_empty_title_or_description_is_refused_at_the_backend)
+{
+    LocalWriter writer{scratchPath("create-empty")};
+
+    for (const std::string& title : {std::string(""), std::string("  ")}) {
+        const auto j = parse(writer.createIssue(kRid, title, "a description"));
+        LOGOS_ASSERT_TRUE(j.contains("error"));
+        LOGOS_ASSERT_FALSE(j.contains("id"));
+    }
+
+    for (const std::string& body : {std::string(""), std::string("\n\t")}) {
+        const auto j = parse(writer.createIssue(kRid, "a title", body));
+        LOGOS_ASSERT_TRUE(j.contains("error"));
+        LOGOS_ASSERT_FALSE(j.contains("id"));
+    }
+}
+
+/// A newline in the title is rejected outright by the crate rather than
+/// trimmed, and it is reachable by pasting a line of text into a one-line
+/// field. The message has to name the fix, because the crate's own
+/// ("invalid characters in title") names neither the character nor what to do.
+LOGOS_TEST(a_multi_line_title_is_refused_with_a_message_naming_the_fix)
+{
+    LocalWriter writer{scratchPath("create-multiline")};
+
+    for (const std::string& title : {std::string("two\nlines"),
+                                     std::string("carriage\rreturn")}) {
+        const auto j = parse(writer.createIssue(kRid, title, "a description"));
+        LOGOS_ASSERT_TRUE(j.contains("error"));
+        const std::string message = j["error"].get<std::string>();
+        LOGOS_ASSERT_TRUE(message.find("single line") != std::string::npos);
+    }
+}
+
+LOGOS_TEST(create_issue_arguments_cross_the_boundary_intact)
+{
+    LocalWriter writer{scratchPath("create-odd-args")};
+
+    // Quotes, backslashes and multi-byte glyphs must survive JSON encoding in
+    // both the title and the description without truncation or corruption.
+    const auto j = parse(writer.createIssue(kRid,
+                                            "a \"quoted\" title 👾",
+                                            "a \\ description with ünïcödé"));
+    LOGOS_ASSERT_TRUE(j.is_object());
+    LOGOS_ASSERT_TRUE(j.contains("error"));
+}
+
+// ---------------------------------------------------------------------------
 // canWrite: a refusal is an answer, not a failure.
 // ---------------------------------------------------------------------------
 
@@ -195,5 +259,6 @@ LOGOS_TEST(repeated_write_calls_do_not_leak_or_double_free)
     for (int i = 0; i < 200; ++i) {
         LOGOS_ASSERT_FALSE(writer.canWrite().empty());
         LOGOS_ASSERT_FALSE(writer.commentOnIssue(kRid, kIssue, "hello").empty());
+        LOGOS_ASSERT_FALSE(writer.createIssue(kRid, "a title", "a body").empty());
     }
 }

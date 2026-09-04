@@ -48,6 +48,11 @@ public:
     std::string commentOnIssue(const std::string& rid, const std::string& id,
                                const std::string& body);
 
+    /// Open a new issue. `description` becomes its root comment.
+    /// -> {"id":"<issue id>","announced":bool[,"announceError":"…"]}
+    std::string createIssue(const std::string& rid, const std::string& title,
+                            const std::string& description);
+
 private:
     std::string m_home;
 };

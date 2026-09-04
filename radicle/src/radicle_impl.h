@@ -223,6 +223,25 @@ public:
     std::string localCommentOnIssue(const std::string& rid, const std::string& id,
                                     const std::string& body);
 
+    /**
+     * Open a new issue. `description` becomes the issue's root comment — that
+     * is how a Radicle issue is modelled, and why `localGetIssue` returns it
+     * as `discussion[0].body` rather than as a field of its own.
+     *
+     * `title` must be a single line; a `\n` or `\r` is rejected rather than
+     * trimmed, which is reachable by pasting into a one-line field.
+     *
+     * Labels and assignees are deliberately not parameters. Both exist in the
+     * COB model, but assignment is by DID and needs a peer picker this module
+     * does not have, and neither is rendered anywhere today.
+     *
+     * -> {"id":"<issue id>",     // pass straight to localGetIssue
+     *     "announced":bool,
+     *     "announceError":"..."} // present only when announced is false
+     */
+    std::string localCreateIssue(const std::string& rid, const std::string& title,
+                                 const std::string& description);
+
 logos_events:
     /// The active remote seed changed (or was re-validated).
     void remoteSeedChanged(const std::string& seedUrl);

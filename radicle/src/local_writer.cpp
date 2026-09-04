@@ -47,4 +47,11 @@ std::string LocalWriter::commentOnIssue(const std::string& rid, const std::strin
                                                id.c_str(), body.c_str()));
 }
 
+std::string LocalWriter::createIssue(const std::string& rid, const std::string& title,
+                                     const std::string& description)
+{
+    return take(radicle_local_create_issue(m_home.c_str(), rid.c_str(),
+                                           title.c_str(), description.c_str()));
+}
+
 } // namespace radicle
