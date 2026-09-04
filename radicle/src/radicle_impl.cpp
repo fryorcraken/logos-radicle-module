@@ -2,6 +2,7 @@
 
 #include "local_reader.h"
 #include "local_store.h"
+#include "local_writer.h"
 #include "seed_client.h"
 
 #include <nlohmann/json.hpp>
@@ -44,6 +45,14 @@ radicle::LocalReader& localReader()
     return reader;
 }
 
+radicle::LocalWriter& localWriter()
+{
+    // Same home as localReader(), for the same reason: RAD_HOME/HOME
+    // resolution lives in LocalStore and nowhere else.
+    static radicle::LocalWriter writer{local().home()};
+    return writer;
+}
+
 /// Uniform "there is no local profile here" error.
 ///
 /// Reached only when detection fails — no ~/.radicle, or one with no storage/
@@ -67,14 +76,38 @@ std::string RadicleImpl::getCapabilities()
 {
     const bool localAvailable = local().available();
 
+    // `canWriteLocal` is a real probe, not a build flag. A read needs only the
+    // public key; a write needs the private half, which comes from a plaintext
+    // keystore, RAD_PASSPHRASE, or ssh-agent — and when none of them yields
+    // one, no write can succeed no matter how the UI is wired.
+    //
+    // The reason is carried alongside because a view has to explain the
+    // absence: "you have a node but cannot sign" and "you have no node" prompt
+    // completely different actions from a user, and collapsing both into a
+    // missing button explains neither. Probing here, once, is also what lets a
+    // view refuse to *offer* a compose box rather than accepting text and
+    // failing on submit.
+    bool canWrite = false;
+    std::string writeReason = local().unavailableReason();
+    if (localAvailable) {
+        const auto probe = nlohmann::json::parse(localWriter().canWrite(), nullptr, false);
+        if (probe.is_discarded()) {
+            writeReason = "the local backend gave an unreadable answer about signing";
+        } else {
+            canWrite = probe.value("canWrite", false);
+            writeReason = canWrite ? std::string{} : probe.value("reason", "");
+        }
+    }
+
     nlohmann::json out{
-        {"localAvailable",   localAvailable},
-        {"localNodeRunning", localAvailable && local().nodeRunning()},
-        {"canWriteLocal",    false},          // writes arrive in a later milestone
-        {"remoteSeed",       seed().seedUrl()},
-        {"remoteReachable",  seed().reachable()},
-        {"remoteApiVersion", seed().apiVersion()},
-        {"nodeId",           localAvailable ? local().nodeId() : std::string{}},
+        {"localAvailable",         localAvailable},
+        {"localNodeRunning",       localAvailable && local().nodeRunning()},
+        {"canWriteLocal",          canWrite},
+        {"writeUnavailableReason", writeReason},
+        {"remoteSeed",             seed().seedUrl()},
+        {"remoteReachable",        seed().reachable()},
+        {"remoteApiVersion",       seed().apiVersion()},
+        {"nodeId",                 localAvailable ? local().nodeId() : std::string{}},
     };
     return dump(out);
 }
@@ -287,4 +320,21 @@ std::string RadicleImpl::localGetPatch(const std::string& rid, const std::string
 {
     if (!local().available()) return localUnavailable();
     return localReader().getPatch(rid, id);
+}
+
+// ===========================================================================
+// LOCAL WRITES — the only methods here that change state.
+//
+// The same two-step as the reads above: refuse early when there is no profile,
+// otherwise hand off to the backend, which reports its own more specific
+// failure. The extra failure a write has and a read does not is "no usable
+// signing key", and that one is reported by the Rust side, not here, because
+// only it can tell an encrypted keystore from an absent agent.
+// ===========================================================================
+
+std::string RadicleImpl::localCommentOnIssue(const std::string& rid, const std::string& id,
+                                             const std::string& body)
+{
+    if (!local().available()) return localUnavailable();
+    return localWriter().commentOnIssue(rid, id, body);
 }

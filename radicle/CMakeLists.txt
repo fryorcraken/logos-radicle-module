@@ -59,6 +59,8 @@ logos_module(
         src/local_store.cpp
         src/local_reader.h
         src/local_reader.cpp
+        src/local_writer.h
+        src/local_writer.cpp
         src/radicle_ffi.h
     FIND_PACKAGES
         Qt6Network
