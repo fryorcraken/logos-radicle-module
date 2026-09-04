@@ -58,7 +58,7 @@ release.** Install this and nothing else:
 
 ```bash
 cargo install --git https://github.com/logos-co/scaffold.git \
-  --rev 7ba5f9819e0619084d646c7bac34d2c2540229da logos-scaffold --locked
+  --rev 8f41e37e766037674b4ebf608d45bdf0ada15be0 logos-scaffold --locked
 ```
 
 That is the same commit both CI workflows pin in `LGS_REV`, and it is a
