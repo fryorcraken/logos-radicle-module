@@ -48,6 +48,12 @@ class RadicleUi
     SLOT(QString localListPatches(QString rid, QString status, int page, int perPage))
     SLOT(QString localGetPatch(QString rid, QString id))
 
+    // --- local writes: the only slots here that change state ---------------
+    // Local-only by necessity, not symmetry: the seed API rejects writes with
+    // HTTP 405, so a remote* counterpart could only ever fail. Gate any UI
+    // affordance for these on capabilities.canWriteLocal — see radicle_impl.h.
+    SLOT(QString localCommentOnIssue(QString rid, QString id, QString body))
+
     // Auto-synced summary of what the module can currently do, so the view can
     // show/hide the local source without an explicit round-trip on startup.
     PROP(QString capabilities="" READONLY)
