@@ -3,7 +3,7 @@
 ## Where to look for what
 
 This file is the always-relevant part: how to build and run things, the test
-layers, and the traps that have bitten changes here. Two areas have their own
+layers, and the traps that have bitten changes here. Three areas have their own
 file, because they only matter when you are doing that specific thing. **Read
 them when the trigger applies, not otherwise:**
 
@@ -16,6 +16,52 @@ them when the trigger applies, not otherwise:**
 `docs/` also holds the design and planning documents those link to:
 `M2.2-write-actions-design.md` (shipped), `M2.2-write-features-proposal.md`
 and `M3-embedded-node-plan.md` (not started).
+
+### Keeping this file true
+
+This file was once 1594 lines, about a third of it a session-by-session
+changelog. It was deleted, not because the writing was bad but because it had
+quietly become **false**: it claimed a milestone was unmerged that had shipped
+two releases earlier, quoted a test count off by more than half, and named a
+"next step" long since done. Every one of those was true on the day it was
+written. That is the failure mode to design against — not carelessness, but
+accuracy with a short half-life.
+
+**Do not write down anything a command can answer.** Version numbers, test
+counts, step counts, timings, what is released, what is merged, how many files
+a suite has. Name the command instead; it is never stale:
+
+| Instead of writing | Say to run |
+|---|---|
+| the current version | `radicle/metadata.json` (both must match) |
+| what is released | `git tag`, or `gh release list` |
+| whether something is merged | `git log`, `gh pr view <n>` |
+| how many tests pass | the suite, or the latest CI run |
+| what a spec asserts | read the `.yaml` |
+
+**Write down only what a command cannot tell you**: why a decision went the way
+it did, what was tried and failed, which of two plausible fixes is the trap,
+what a green gate is structurally unable to see. That is the whole value of
+this file, and it does not rot — the reasoning behind `guarded()` or the
+one-line `radicle.url` is as true next year as today.
+
+**When you do record present state, make it self-invalidating.** "The catalog
+is pinned to `@v1.3` because only that tag supports a `module_path` inside a
+submodule" survives contact with reality: if the pin changes, the sentence is
+visibly about a pin someone can check. "Current version is 0.2.1" cannot fail
+loudly — it just gets quietly wrong.
+
+**Prune as you go.** If you are editing a section and its surrounding claims no
+longer hold, fix them in the same change; that is far cheaper than the audit
+that eventually finds them all at once. When a milestone ships, its planning
+prose should shrink to the durable lessons and a pointer, not accumulate a new
+"what landed" entry beneath the last one.
+
+A status file — gitignored or otherwise — is not the answer, and was considered
+here. Gitignored, it is invisible to review, missing from every fresh clone and
+worktree, and free to drift exactly like the prose it replaced. Tracked, it is
+the same changelog in a new location. The fix is not a better place to record
+derivable facts; it is to stop recording them.
 
 ## What this is, and where it stands
 
@@ -45,8 +91,8 @@ key stays locked, so **gate every write affordance on `canWriteLocal`, never on
 commenting on a patch are deliberately deferred; see
 [`docs/writes.md`](docs/writes.md).
 
-**Current version is 0.2.1** — the writes are merged but not yet released.
-Both modules' versions must match, and `ci.yml` asserts it.
+**Both modules carry the same version, and `ci.yml` asserts it** — a bump
+touching one `metadata.json` and not the other fails the metadata lint.
 
 Two facts about releasing that are not recoverable from git history, both
 consequences of this repo being a monorepo (two modules under one git repo)
@@ -640,7 +686,8 @@ explanation. The sequence, the reason for each flag, how to write specs
 `ui-tests.yml` matrix), and the `RAD_HOME` requirement for `local.yaml` are all
 in [`docs/e2e.md`](docs/e2e.md). Read it before running or editing one.
 
-`browse.yaml` currently runs green: 18 steps, ~21s against a real Basecamp.
+Every spec in the matrix runs on every PR, so their current state is whatever
+the latest `ui-tests.yml` run says — read that rather than a claim here.
 
 ## CI
 
