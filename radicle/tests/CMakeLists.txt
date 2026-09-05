@@ -22,8 +22,10 @@ logos_test(
         ../src/local_store.cpp
         ../src/local_reader.cpp
         ../src/local_writer.cpp
-        # Linked even though the tests inject their own transport: SeedClient
-        # still references httpGet as its default.
+        # Not just an incidental link target: test_http_client.cpp exercises
+        # this file's pure isGenuineTimeout()/applyHttpOutcome() directly.
+        # It also stays linked for SeedClient, which references httpGet as
+        # its default even in tests that inject their own transport.
         ../src/http_client.cpp
     TEST_SOURCES
         main.cpp

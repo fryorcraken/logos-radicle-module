@@ -57,7 +57,7 @@ HttpResponse httpGet(const std::string& url, int timeoutMs)
         // out and its body discarded.
         if (!isGenuineTimeout(reply->isFinished())) return;
         timedOut = true;
-        reply->abort();          // triggers finished(), which quits the loop
+        reply->abort();          // genuine timeout only: abort the still-pending reply
     });
 
     timer.start(timeoutMs);
