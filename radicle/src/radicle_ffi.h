@@ -57,6 +57,44 @@ char* radicle_local_list_patches(const char* home, const char* rid,
 
 char* radicle_local_get_patch(const char* home, const char* rid, const char* id);
 
+// ---------------------------------------------------------------------------
+// Writes.
+//
+// Everything above reads. These two change state, and they are the only
+// functions here that need a signing key. See `LocalWriter` and
+// `docs/M2.2-write-actions-design.md`.
+// ---------------------------------------------------------------------------
+
+/// Whether a write could succeed right now, and why not when it could not.
+///
+/// Unlike every other function here, a negative answer is NOT an error object:
+/// it returns `{"canWrite":false,"reason":"…"}`, because "you cannot write" is
+/// an answer to the question asked rather than a failure to answer it. A
+/// caller that treats it as an error will show a failure where it should show
+/// an explanation.
+///
+/// -> {"canWrite":true,"nodeId":"did:key:z6Mk…"}
+/// -> {"canWrite":false,"reason":"…"}
+char* radicle_local_can_write(const char* home);
+
+/// Posts a comment on an issue's discussion thread.
+///
+/// -> {"id":"<entry id>","announced":bool[,"announceError":"…"]}
+///
+/// `announced` false with an `id` present is a SUCCESSFUL write that the local
+/// node has not yet told the network about — an ordinary state, not a failure.
+char* radicle_local_comment_on_issue(const char* home, const char* rid,
+                                     const char* id, const char* body);
+
+/// Opens a new issue. `description` becomes its root comment.
+///
+/// -> {"id":"<issue id>","announced":bool[,"announceError":"…"]}
+///
+/// The `id` is the ISSUE's id, not an entry id — a caller passes it straight
+/// to `radicle_local_get_issue` to open what was just created.
+char* radicle_local_create_issue(const char* home, const char* rid,
+                                 const char* title, const char* description);
+
 /// Releases a string returned by any of the above. Passing anything else, or
 /// freeing twice, is undefined behaviour — the same contract as `free()`.
 void radicle_free_string(char* s);

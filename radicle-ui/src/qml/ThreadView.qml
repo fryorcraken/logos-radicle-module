@@ -27,9 +27,39 @@ Item {
     property bool loading: false
     property bool loadedOnce: false
 
+    /// Whether this machine can sign a write right now, and why not. Both come
+    /// straight from `getCapabilities()` — see `radicle_impl.h`, which states
+    /// the rule that write affordances gate on `canWriteLocal` rather than on
+    /// `localAvailable`.
+    property bool canWrite: false
+    property string writeUnavailableReason: ""
+
+    /// Commenting is offered only for issues, and only while browsing the
+    /// local source.
+    ///
+    /// The source check is not defensive duplication of the backend's own
+    /// refusal: a repository open from a seed may not exist in local storage
+    /// at all, so the write could not be aimed at anything. Showing a box that
+    /// would fail for a reason the user cannot act on is worse than showing
+    /// none.
+    ///
+    /// Patches are excluded because a patch comment belongs to a *revision*,
+    /// and `getPatch` does not serialize revision threads today — so a patch
+    /// comment would have nowhere to appear after it was posted. Read support
+    /// comes first; see docs/M2.2-write-actions-design.md.
+    readonly property bool commentable: kind === "Issues"
+                                        && app !== null
+                                        && app.source === "local"
+
     signal back()
 
-    onItemIdChanged: load()
+    onItemIdChanged: {
+        // A draft belongs to the issue it was written against. Clearing it
+        // here means backing out and opening a different issue cannot post one
+        // issue's text onto another.
+        composer.reset();
+        load();
+    }
 
     function load() {
         item = null;
@@ -234,6 +264,44 @@ Item {
                         }
                     }
                 }
+            }
+        }
+
+        // ---- compose ----
+        // Below the thread, where a reply goes, and outside the ListView so it
+        // does not scroll away from the user mid-sentence.
+        Rectangle {
+            objectName: "commentComposerPanel"
+            Layout.fillWidth: true
+            Layout.preferredHeight: composer.implicitHeight
+            // Deliberately NOT gated on `loadedOnce` or `item`. `load()` clears
+            // both on the way in, so a reload after a successful post would
+            // hide this panel and take the composer's state with it — exactly
+            // during the reload the post itself triggered. Keying on the
+            // itemId alone keeps the control present across its own refresh.
+            visible: view.commentable && view.itemId !== ""
+            color: Theme.surface
+
+            Rectangle {
+                anchors.top: parent.top
+                width: parent.width; height: 1
+                color: Theme.border
+            }
+
+            CommentComposer {
+                id: composer
+                objectName: "commentComposer"
+                anchors.fill: parent
+                app: view.app
+                rid: view.rid
+                itemId: view.itemId
+                canWrite: view.canWrite
+                unavailableReason: view.writeUnavailableReason
+
+                // Reload rather than append. Appending would render the right
+                // thing whether or not the write actually landed, which is the
+                // same failure as a fake that answers the same for every input.
+                onPosted: view.load()
             }
         }
     }

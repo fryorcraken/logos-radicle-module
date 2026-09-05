@@ -69,10 +69,18 @@ public:
      * -> {"localAvailable":bool,   // a local profile/storage was found
      *     "localNodeRunning":bool, // the node daemon answers its control socket
      *     "canWriteLocal":bool,    // local writes possible (implies a signer)
+     *     "writeUnavailableReason":"...", // why not, "" when canWriteLocal
      *     "remoteSeed":"<url>",    // seed currently proxied to
      *     "remoteReachable":bool,  // last remote call succeeded
      *     "remoteApiVersion":"6.2.0",
      *     "nodeId":"z6Mk..."}      // local NID, empty when unavailable
+     *
+     * `canWriteLocal` is a real probe for a usable signing key, not a build
+     * flag. It is false — with a reason naming the fix — when the node's key
+     * is encrypted and neither RAD_PASSPHRASE nor ssh-agent can supply it.
+     * A view MUST gate every write affordance on it rather than on
+     * `localAvailable`: offering a compose box that cannot be submitted loses
+     * whatever the user typed into it.
      */
     std::string getCapabilities();
 
@@ -186,6 +194,53 @@ public:
                                  int64_t page, int64_t perPage);
 
     std::string localGetPatch(const std::string& rid, const std::string& id);
+
+    // ======================================================================
+    // LOCAL WRITES — the only methods in this module that change state.
+    //
+    // Local-only by necessity, not by choice: the seed API rejects writes with
+    // HTTP 405, so a `remote*` counterpart could only ever fail. The asymmetry
+    // with the read surface above is the honest representation of that, and is
+    // why this API names its source rather than hiding it.
+    //
+    // Each needs a signing key, so each can fail for a reason no read has —
+    // see `getCapabilities().canWriteLocal`, which a view should check before
+    // offering the action at all.
+    // ======================================================================
+
+    /**
+     * Post a comment on an issue's discussion thread. The comment lands on the
+     * thread root; there is no reply-to, because nothing renders nesting.
+     *
+     * -> {"id":"<entry id>",      // the new comment's entry
+     *     "announced":bool,       // did the local node tell the network yet
+     *     "announceError":"..."}  // present only when announced is false
+     *
+     * `announced:false` alongside an `id` is a SUCCESSFUL write that has not
+     * been announced — an ordinary state, since the node announces on next
+     * start. Do not present it as a failure, or the user will post twice.
+     */
+    std::string localCommentOnIssue(const std::string& rid, const std::string& id,
+                                    const std::string& body);
+
+    /**
+     * Open a new issue. `description` becomes the issue's root comment — that
+     * is how a Radicle issue is modelled, and why `localGetIssue` returns it
+     * as `discussion[0].body` rather than as a field of its own.
+     *
+     * `title` must be a single line; a `\n` or `\r` is rejected rather than
+     * trimmed, which is reachable by pasting into a one-line field.
+     *
+     * Labels and assignees are deliberately not parameters. Both exist in the
+     * COB model, but assignment is by DID and needs a peer picker this module
+     * does not have, and neither is rendered anywhere today.
+     *
+     * -> {"id":"<issue id>",     // pass straight to localGetIssue
+     *     "announced":bool,
+     *     "announceError":"..."} // present only when announced is false
+     */
+    std::string localCreateIssue(const std::string& rid, const std::string& title,
+                                 const std::string& description);
 
 logos_events:
     /// The active remote seed changed (or was re-validated).

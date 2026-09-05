@@ -9,6 +9,7 @@
 //! means the logic is testable without touching raw pointers at all.
 
 pub mod cobs;
+pub mod cobwrite;
 pub mod gitread;
 pub mod local;
 
@@ -230,6 +231,65 @@ pub unsafe extern "C" fn radicle_local_get_patch(
 ) -> *mut c_char {
     let (home, rid, id) = (read_str(home), read_str(rid), read_str(id));
     guarded(move || cobs::get_patch(&home, &rid, &id))
+}
+
+// ---------------------------------------------------------------------------
+// Writes.
+//
+// Everything above reads. These two change state, and they go through the same
+// `guarded` boundary for the same reason — a panic crossing `extern "C"` is
+// undefined behaviour regardless of which direction the data was flowing.
+// ---------------------------------------------------------------------------
+
+/// Whether a write could succeed right now, and why not when it could not.
+///
+/// Answers with `{"canWrite":bool,...}` rather than an error object when the
+/// answer is no: "you cannot write" is an answer to the question asked. See
+/// `cobwrite::can_write`.
+///
+/// # Safety
+/// `home` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_can_write(home: *const c_char) -> *mut c_char {
+    let home = read_str(home);
+    guarded(move || cobwrite::can_write(&home))
+}
+
+/// Post a comment on an issue's discussion thread.
+///
+/// # Safety
+/// `home`, `rid`, `id`, `body` must each be NULL or a valid NUL-terminated
+/// UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_comment_on_issue(
+    home: *const c_char,
+    rid: *const c_char,
+    id: *const c_char,
+    body: *const c_char,
+) -> *mut c_char {
+    let (home, rid, id, body) = (read_str(home), read_str(rid), read_str(id), read_str(body));
+    guarded(move || cobwrite::comment_on_issue(&home, &rid, &id, &body))
+}
+
+/// Open a new issue. `description` becomes its root comment.
+///
+/// # Safety
+/// `home`, `rid`, `title`, `description` must each be NULL or a valid
+/// NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_create_issue(
+    home: *const c_char,
+    rid: *const c_char,
+    title: *const c_char,
+    description: *const c_char,
+) -> *mut c_char {
+    let (home, rid, title, description) = (
+        read_str(home),
+        read_str(rid),
+        read_str(title),
+        read_str(description),
+    );
+    guarded(move || cobwrite::create_issue(&home, &rid, &title, &description))
 }
 
 /// Frees a string previously returned by one of the `radicle_local_*`

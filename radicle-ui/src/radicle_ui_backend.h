@@ -59,6 +59,10 @@ public:
     QString localListPatches(QString rid, QString status, int page, int perPage) override;
     QString localGetPatch(QString rid, QString id) override;
 
+    // Local writes — the only slots here that change state.
+    QString localCommentOnIssue(QString rid, QString id, QString body) override;
+    QString localCreateIssue(QString rid, QString title, QString description) override;
+
 protected:
     /// Publish the module's capabilities once the core module is reachable.
     void onContextReady() override;

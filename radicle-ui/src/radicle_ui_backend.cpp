@@ -154,6 +154,23 @@ QString RadicleUiBackend::localGetPatch(QString rid, QString id)
     return modules().radicle.localGetPatch(rid, id);
 }
 
+// --- local writes ----------------------------------------------------------
+
+QString RadicleUiBackend::localCommentOnIssue(QString rid, QString id, QString body)
+{
+    // A plain forward, like every read. Deliberately does NOT refresh
+    // capabilities afterwards, unlike setRemoteSeed: posting a comment does
+    // not change whether this node can sign, and re-probing ssh-agent on every
+    // comment would put a socket round-trip on the path of an action the user
+    // is waiting on, to answer a question whose answer did not change.
+    return modules().radicle.localCommentOnIssue(rid, id, body);
+}
+
+QString RadicleUiBackend::localCreateIssue(QString rid, QString title, QString description)
+{
+    return modules().radicle.localCreateIssue(rid, title, description);
+}
+
 // --- lifecycle -------------------------------------------------------------
 
 void RadicleUiBackend::onContextReady()

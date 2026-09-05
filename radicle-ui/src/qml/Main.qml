@@ -65,6 +65,19 @@ Item {
     readonly property string source: sourceState.current
     readonly property bool localAvailable: sourceState.localAvailable
 
+    /// Whether a write could actually succeed, and why not when it could not.
+    ///
+    /// Separate from `localAvailable` on purpose, and the core module's header
+    /// states the rule: a profile can exist while its key stays locked, so
+    /// gating a compose box on `localAvailable` would offer one that cannot be
+    /// submitted. `canWriteLocal` is a real probe for a usable signing key.
+    ///
+    /// The reason is carried because the absence has to be explained — "no
+    /// node" and "node, but locked" prompt different actions, and a missing
+    /// button explains neither.
+    readonly property bool canWrite: caps.canWriteLocal === true
+    readonly property string writeUnavailableReason: caps.writeUnavailableReason || ""
+
     function setSource(next) {
         sourceState.select(next);
     }
@@ -229,6 +242,17 @@ Item {
     // Detail views. "" when the tabs are showing.
     readonly property string openThread: repoPage.openThread
     readonly property string openCommit: repoPage.openCommit
+
+    /// Whether the comment box is offered. The failure worth asserting on from
+    /// outside is the box appearing where it should not — on a seed-hosted
+    /// repo, or with no signing key — because that is the one that loses text.
+    readonly property bool composerVisible: repoPage.composerVisible
+
+    /// The "New issue" affordance and its form. Same reasoning: the failure
+    /// worth catching from outside is the button appearing where its form
+    /// could not be submitted.
+    readonly property bool canCreateIssue: repoPage.canCreateIssue
+    readonly property bool newIssueOpen:   repoPage.newIssueOpen
 
     /// Open a repository object directly (deep links and testing).
     function openRepoExternal(repo) {
