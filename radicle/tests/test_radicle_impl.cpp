@@ -193,6 +193,26 @@ LOGOS_TEST(a_deeper_backend_failure_is_not_reported_as_localUnavailable)
     // says instead (e.g. no key found, repo not found), it is a different
     // sentence prompting a different fix than "run rad auth".
     LOGOS_ASSERT_TRUE(message.find("rad auth") == std::string::npos);
+
+    // Asserting only what the message is NOT is input-independent: a wrong
+    // home (RadicleImpl's LocalReader pointed somewhere other than
+    // LocalStore's own home()) also fails deeper than the "no profile" guard
+    // and also omits "rad auth" — so that assertion alone cannot tell "read
+    // the scratch home this test built" from "read some other, wrong
+    // directory entirely". Pin what the message IS instead: with only
+    // storage/ present and no keys/, the Rust backend's open_storage() (see
+    // radicle/rust-ffi/src/local.rs) fails at the key lookup and names the
+    // exact keys/ directory it looked in. That directory is derived from
+    // *this test's* ScopedRadHome, so the message can only contain it if
+    // RadicleImpl actually built its LocalReader from m_local.home() as
+    // radicle_impl.cpp:43-44 claims — not from a different, hardcoded path.
+    // A mutation that severs that wiring (e.g. hardcoding LocalReader's home
+    // to some other directory) makes this fail: the message would instead
+    // name that other directory, or report a different failure altogether
+    // (a missing storage/ there would trip a different Storage::open error,
+    // not a missing-key one), never home.dir + "/keys".
+    LOGOS_ASSERT_CONTAINS(message, home.dir + "/keys");
+    LOGOS_ASSERT_CONTAINS(message, "no Radicle key found");
 }
 
 // ---------------------------------------------------------------------------
