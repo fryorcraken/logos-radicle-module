@@ -85,7 +85,8 @@ ComboBox {
                         branchModel.append({
                             label: "other peers",
                             name: "",
-                            isSeparator: true
+                            isSeparator: true,
+                            isLocal: false
                         });
                         control.hasSeparator = true;
                     }
@@ -93,7 +94,13 @@ ComboBox {
                 branchModel.append({
                     label: it.label ? it.label : it.name,
                     name: it.name,
-                    isSeparator: false
+                    isSeparator: false,
+                    // Carried into the model rather than re-derived from the
+                    // name. A test (or a future delegate) that wants to know
+                    // whose branch a row is must read the flag the backend
+                    // sent, not guess from whether the name has a slash in it
+                    // — a local branch may legitimately be `feature/login`.
+                    isLocal: it.isLocal === true
                 });
             }
             if (branchModel.count === 0)

@@ -24,7 +24,12 @@ Item {
     readonly property var localReply: ({
         items: [
             { name: "main",   label: "main",   head: "a1", remote: "z6MkSelf", isLocal: true },
-            { name: "zzz",    label: "zzz",    head: "a2", remote: "z6MkSelf", isLocal: true },
+            // A LOCAL branch with a slash in it. Ordinary in real repos, and
+            // the reason nothing here may infer "peer" from the presence of a
+            // slash — the backend sends `isLocal` for exactly this reason.
+            { name: "feature/login", label: "feature/login", head: "a2",
+              remote: "z6MkSelf", isLocal: true },
+            { name: "zzz",    label: "zzz",    head: "a3", remote: "z6MkSelf", isLocal: true },
             { name: "z6MkPeerOne/aaa",  label: "z6MkPeer…/aaa",  head: "b1",
               remote: "z6MkPeerOne", isLocal: false },
             { name: "z6MkPeerTwo/main", label: "z6MkPeer…/main", head: "b2",
@@ -73,7 +78,9 @@ Item {
         var out = [];
         for (var i = 0; i < p.count; i++) {
             var r = p.model.get(i);
-            out.push({ label: r.label, name: r.name, isSeparator: r.isSeparator === true });
+            out.push({ label: r.label, name: r.name,
+                       isSeparator: r.isSeparator === true,
+                       isLocal: r.isLocal === true });
         }
         return out;
     }
@@ -82,6 +89,12 @@ Item {
         name: "BranchGrouping"
         when: windowShown
 
+        // Asserts on `isLocal`, NOT on whether the name contains a slash.
+        // Those are different questions: `feature/login` is a perfectly
+        // ordinary LOCAL branch, and the fixture includes one precisely so a
+        // slash-based check cannot creep back in. A slash test would also fail
+        // to catch the regression it names — a peer row sorted above a local
+        // one would still satisfy it as long as the naming convention held.
         function test_local_branches_come_before_the_divider_and_peers_after() {
             var r = rows(picker);
             var sep = -1;
@@ -91,11 +104,24 @@ Item {
             verify(sep >= 0, "expected a divider row: " + JSON.stringify(r));
 
             for (var j = 0; j < sep; j++)
-                verify(r[j].name.indexOf("/") === -1,
-                       "row above the divider should be a local branch: " + r[j].name);
+                verify(r[j].isLocal,
+                       "row above the divider must be local: " + JSON.stringify(r[j]));
             for (var k = sep + 1; k < r.length; k++)
-                verify(r[k].name.indexOf("/") > 0,
-                       "row below the divider should be peer-qualified: " + r[k].name);
+                verify(!r[k].isLocal,
+                       "row below the divider must be a peer's: " + JSON.stringify(r[k]));
+        }
+
+        // The slash is not the signal — the flag is. A local branch whose name
+        // contains a slash must still sit above the divider.
+        function test_a_slashed_local_branch_is_still_local() {
+            var r = rows(picker);
+            var slashed = null;
+            for (var i = 0; i < r.length; i++)
+                if (r[i].name === "feature/login") { slashed = r[i]; break; }
+
+            verify(slashed !== null, "fixture should contain a slashed local branch");
+            verify(slashed.isLocal, "a slashed local branch is still local: "
+                                    + JSON.stringify(slashed));
         }
 
         function test_exactly_one_divider_is_inserted() {
@@ -111,8 +137,9 @@ Item {
             var names = [];
             for (var i = 0; i < r.length; i++)
                 if (!r[i].isSeparator) names.push(r[i].name);
-            compare(names.length, 4);
+            compare(names.length, 5);
             verify(names.indexOf("main") >= 0, "local main: " + names);
+            verify(names.indexOf("feature/login") >= 0, "local slashed: " + names);
             verify(names.indexOf("zzz") >= 0, "local zzz: " + names);
             verify(names.indexOf("z6MkPeerOne/aaa") >= 0, "peer aaa: " + names);
             verify(names.indexOf("z6MkPeerTwo/main") >= 0, "peer main: " + names);
@@ -178,8 +205,8 @@ Item {
         // e2e specs assert on "how many branches", so they need the number of
         // things a user can actually pick — off by one is the whole bug here.
         function test_branchCount_excludes_the_divider() {
-            compare(picker.count, 5, "4 branches + 1 divider in the model");
-            compare(picker.branchCount, 4, "but only 4 are selectable");
+            compare(picker.count, 6, "5 branches + 1 divider in the model");
+            compare(picker.branchCount, 5, "but only 5 are selectable");
             compare(picker.hasSeparator, true);
         }
 

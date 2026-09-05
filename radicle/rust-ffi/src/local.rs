@@ -67,6 +67,20 @@ pub(crate) fn parse_rid(rid: &str) -> Result<RepoId, String> {
     RepoId::from_urn(rid).map_err(|e| format!("invalid repository id '{rid}': {e}"))
 }
 
+/// The local node's own id — the namespace this machine's branches live under.
+///
+/// Reads only `keys/radicle.pub`, the same public half `open_storage` already
+/// reads, so no passphrase and no signer. `None` when the keystore is absent
+/// or unreadable; every caller degrades rather than failing, because a missing
+/// key is not a reason to refuse to render a repository.
+pub(crate) fn local_node_id(home: &str) -> Option<radicle::node::NodeId> {
+    if home.is_empty() {
+        return None;
+    }
+    let keys_dir = std::path::Path::new(home).join("keys");
+    Keystore::new(&keys_dir).public_key().ok().flatten()
+}
+
 pub(crate) fn error(msg: impl Into<String>) -> String {
     json!({ "error": msg.into() }).to_string()
 }
@@ -249,10 +263,10 @@ fn list_branches_inner(home: &str, rid: &str) -> Result<Value, String> {
         .unwrap_or_default();
 
     // The local node's own key — the namespace "your" branches live under.
-    // Same public-half read `open_storage` already does, so still no
-    // passphrase.
-    let keys_dir = std::path::Path::new(home).join("keys");
-    let local_key = Keystore::new(&keys_dir).public_key().ok().flatten();
+    // Shared with `resolve_commit`, which needs the same id to look those
+    // branches up again, so there is one definition rather than two that could
+    // disagree about which namespace is "mine".
+    let local_key = local_node_id(home);
 
     let mut local_items: Vec<Value> = Vec::new();
     let mut peer_items: Vec<Value> = Vec::new();
@@ -265,6 +279,14 @@ fn list_branches_inner(home: &str, rid: &str) -> Result<Value, String> {
         .map_err(|e| format!("could not list remotes for {rid}: {e}"))?;
 
     for (nid, remote) in remotes {
+        // `unwrap_or(false)` degrades to "everything is a peer's", which would
+        // put the user's own branches below a divider that then has nothing
+        // above it. Tolerable *because it cannot normally happen*:
+        // `open_storage` above reads the very same key and has already
+        // returned an error if it could not, so reaching here with `None`
+        // means the keystore vanished between two reads a few microseconds
+        // apart. Listing branches unlabelled beats refusing to render the
+        // repository over it.
         let is_local = local_key.map(|k| k == nid).unwrap_or(false);
         let nid_str = nid.to_string();
 
@@ -314,9 +336,16 @@ fn list_branches_inner(home: &str, rid: &str) -> Result<Value, String> {
         }
     }
 
-    // Within each group, order by label so the list is stable across runs —
-    // `remotes()` yields a map, and an unstable picker order is its own bug.
-    let sort_key = |v: &Value| v["label"].as_str().unwrap_or("").to_string();
+    // Within each group, order by `name` so the list is stable across runs.
+    // `remotes()` yields a `RandomMap` whose iteration order genuinely differs
+    // per process, so without a sort the picker reshuffles between launches.
+    //
+    // Sorted on `name`, not `label`: labels carry an abbreviated node id, so
+    // two peers sharing a `z6MkPeer…` prefix produce identical labels for the
+    // same branch name. `sort_by_key` is stable, which would then preserve the
+    // randomized map order between them — a total order on the unabbreviated
+    // `name` avoids that entirely.
+    let sort_key = |v: &Value| v["name"].as_str().unwrap_or("").to_string();
     local_items.sort_by_key(sort_key);
     peer_items.sort_by_key(sort_key);
 
