@@ -54,10 +54,32 @@ Item {
         // which is why onBackendReady and setSeed both call reload() alongside
         // it. Omitting the reload here shipped once: the toggle flipped, the
         // screen cleared, and no request was ever issued.
+        // The reload is deferred by one event-loop turn, and that is
+        // load-bearing rather than defensive. `changed()` is emitted from
+        // inside `select()`, immediately after it assigns `current` — so at
+        // this point `root.source` (a binding to `sourceState.current`) has
+        // NOT been re-evaluated, and neither has anything derived from it.
+        // `repoList.reload()` routes through `call()` -> `methodFor()`, so a
+        // synchronous reload issues `remoteListRepos` for a switch TO local:
+        // the user clicked Local, saw Explore's repositories, and had to
+        // toggle away and back before the second reload picked up the source
+        // the binding had by then settled on.
+        //
+        // Same class as the branch-switch bug CLAUDE.md documents ("A binding
+        // does not update inside the handler that changed its source"), and
+        // the same remedy.
         onChanged: {
             nav.reset();
-            repoList.reload();
+            sourceReload.restart();
         }
+    }
+
+    /// Runs `repoList.reload()` one turn after a source switch — see the
+    /// comment on `onChanged` above for why it cannot be called directly.
+    readonly property Timer sourceReload: Timer {
+        interval: 0
+        repeat: false
+        onTriggered: repoList.reload()
     }
 
     /// Convenience aliases. Views read these rather than reaching through
