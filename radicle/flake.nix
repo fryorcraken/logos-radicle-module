@@ -67,6 +67,12 @@
         in
         rustPlatform.buildRustPackage {
           pname = "radicle-local-ffi";
+          # Hand-mirrors `rust-ffi/Cargo.toml`'s `version`, and nothing checks
+          # that they agree — buildRustPackage does not read it back. Leaving
+          # the crate at 0.1.0 across a *module* version bump is correct, not
+          # an oversight: it is `publish = false` and located by path, so its
+          # number names nothing anyone resolves. Only bump it if the crate's
+          # own API changes in a way worth naming.
           version = "0.1.0";
           src = ./rust-ffi;
           cargoDeps = fetchPkgs.rustPlatform.fetchCargoVendor {
@@ -84,41 +90,151 @@
           doCheck = false;
         };
 
-      # `preConfigure` is a single string shared by every system the builder
-      # supports, so it cannot name a per-system store path directly. Emitting
-      # one `case` arm per system would make all four staticlibs dependencies
-      # of every build — including cross-building Rust for Darwin from Linux,
-      # which is not something this module needs. Instead the shell resolves
-      # its own platform at build time and copies the one path that exists;
-      # `lib.optionalString` keeps the arms for other systems out of the
-      # string entirely.
+      # ── Getting the RIGHT staticlib into a per-system build ───────────────
       #
-      # Concretely: only the arms for systems whose staticlib Nix can actually
-      # realise are emitted, and the plugin build runs on exactly one of them.
-      stageRustFfi = system: ''
-        mkdir -p lib
-        cp ${rustFfiFor system}/lib/libradicle_local_ffi.a lib/
-        chmod u+w lib/libradicle_local_ffi.a
-      '';
+      # This is the part that was broken until 0.2.1, and the fix is not the
+      # one the comment here used to describe. Both are worth writing down,
+      # because the wrong one looks obviously right.
+      #
+      # The constraint: `mkLogosModule` fans out over four systems
+      # (aarch64-darwin, x86_64-darwin, aarch64-linux, x86_64-linux) but takes
+      # `preConfigure` as ONE value shared by all of them. It is spliced into
+      # each per-system derivation unchanged, and its function form receives
+      # only `{ externalLibs }` — never the system. So a caller cannot simply
+      # hand it a per-system store path, and `stageRustFfi "x86_64-linux"`
+      # baked the amd64 archive into all four. arm64 then failed in the module
+      # catalog's release workflow in ~65s: not a slow cross-compile, but Nix
+      # declining to realise an x86_64 derivation with no x86_64 builder.
+      #
+      # THE OBVIOUS FIX THAT DOES NOT WORK, so nobody re-tries it: emit a
+      # `case "$system" in` over the supported systems and let the shell pick
+      # its own arm at build time. `$system` really is in the builder env
+      # (verified: `aarch64-linux` in the aarch64 derivation), so it looks
+      # sound. It is not. Every arm's store path sits in the string, so EVERY
+      # arm is an inputDrv of EVERY system's derivation, whether or not it
+      # runs. Nix therefore tries to build the aarch64 staticlib before running
+      # an x86_64 build, and `nix build .#packages.x86_64-linux.lgx` fails on
+      # this machine with "Required system: 'aarch64-linux'". That trades an
+      # arm64 failure for an amd64 one — strictly worse than the bug.
+      #
+      # WHAT ACTUALLY WORKS: `externalLibInputs`, the builder's own per-system
+      # escape hatch. `resolveExtInput` resolves each entry as
+      # `value.packages.${system}.default` INSIDE the per-system `let`
+      # (mkLogosModule.nix:219), and `mkExternalLib.buildExternalLibs` passes a
+      # value that is already a derivation straight through
+      # (mkExternalLib.nix:115-117). The resolved result reaches `preConfigure`
+      # as `{ externalLibs }`. So one staticlib is selected per system, and
+      # only that one is an inputDrv — which is the property the `case` cannot
+      # have.
+      #
+      # The entry is shaped like a flake (`{ packages.<system>.default = …; }`)
+      # rather than being one; `resolveExtInput` only checks for that attr path,
+      # so this stays a plain attrset in this file with no self-reference.
+      #
+      # The STRUCTURED form (`{ input = …; }`) is used rather than the bare one
+      # for the sake of the error message on an unsupported system. Given a
+      # bare value, `resolveExtInput`'s last line falls through to `else value`
+      # and hands the raw attrset on, which surfaces much later and much less
+      # helpfully as "cannot coerce a set to a string". The structured form
+      # takes the `throw` branch instead and names the missing
+      # `packages.<system>.default` — so a Darwin build says which platform is
+      # unsupported rather than leaking this attrset into a shell script.
+
+      # Every system the module catalog builds, Darwin included.
+      #
+      # An earlier version of this list was Linux-only, on the reasoning that
+      # a Darwin entry "would mean cross-compiling Rust for Darwin from a Linux
+      # builder". That premise is wrong, and the catalog's own workflow is
+      # where to check it: `logos-modules-release-action`'s release.yml maps
+      # `darwin-arm64` to `runs-on: macos-latest` (Apple silicon), so each
+      # variant is built NATIVELY on its own runner. Nothing cross-compiles.
+      #
+      # The cost of getting that wrong was a silent capability regression.
+      # Excluding Darwin here does not fail loudly at eval on a Mac — it makes
+      # the catalog's darwin-arm64 job fail, which the release workflow then
+      # treats as an expected partial (`continue-on-error` per variant), so the
+      # release publishes anyway with "Missing variants: darwin-arm64" in a
+      # body nobody reads. radicle v0.1.1 shipped all three variants; v0.2.0
+      # shipped linux-amd64 alone, and the only signal was that line.
+      #
+      # The *-sys crates are the reason to keep an eye on this: libgit2-sys,
+      # libssh2-sys and openssl-sys link native libraries, and `buildInputs`
+      # above resolves them per-system through the same `import nixpkgs
+      # { inherit system; }` that produces the archive — so a Darwin build gets
+      # Darwin's openssl and zlib, not Linux's. There is no Linux-specific code
+      # in `rust-ffi/` itself (no `target_os` gates, no `cfg(unix)` branches).
+      ffiSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
+
+      rustFfiInput = {
+        input = {
+          packages = lib.genAttrs ffiSystems (system: {
+            default = rustFfiFor system;
+          });
+        };
+      };
+
+      # Nothing stages the archive by hand any more, and that is the point:
+      # declaring it as an external lib makes BOTH builds stage it themselves,
+      # per-system, before any hook of ours runs.
+      #
+      #   - the plugin build: logos-plugin-qt's own "Copy external libraries"
+      #     block emits `mkdir -p lib` + a `cp` of every resolved entry
+      #   - the unit-test build: `mkLogosModuleTests` composes its preConfigure
+      #     with `copyExternals = true`, which emits the same thing
+      #
+      # Both land it in exactly the `lib/` that the two CMakeLists.txt files
+      # already search with `find_library`, so no `preConfigure` is needed on
+      # either side and no store path is chosen at eval time.
+      #
+      # Do NOT add a `cp` of your own back on top. The builder's copy arrives
+      # mode-444 from the store, so a second one fails the build outright with
+      # "cp: cannot create regular file 'lib/libradicle_local_ffi.a':
+      # Permission denied" — which is how this was found.
+      #
+      # This also means `tests.extraCmakeFlags` no longer carries an absolute
+      # store path. It used to, and that was the same per-system bug in a
+      # second place: mkLogosModule resolves `tests` OUTSIDE its
+      # `forAllSystems`, so all four `checks.<system>.unit-tests` shared one
+      # list, and unlike a shell string there is nothing in a cmake flag to
+      # resolve at build time.
     in
     logos-module-builder.lib.mkLogosModule {
       src = ./.;
       configFile = ./metadata.json;
       flakeInputs = inputs;
-      preConfigure = stageRustFfi "x86_64-linux";
+      # Keyed by the `name` of the `nix.external_libraries` entry in
+      # metadata.json — that entry is what makes the builder resolve this at
+      # all, so the two must keep the same spelling.
+      externalLibInputs.radicle_local_ffi = rustFfiInput;
       tests = {
         dir = ./tests;
-        # The C++ unit tests link the same staticlib, so the FFI boundary is
-        # exercised at the C++ layer and not only through Rust. The test
-        # derivation is a separate build that gets none of the plugin build's
-        # preConfigure staging, so the archive's path is handed over directly
-        # rather than found in `lib/`.
-        extraCmakeFlags = [
-          "-DRADICLE_RUST_FFI_LIB=${rustFfiFor "x86_64-linux"}/lib/libradicle_local_ffi.a"
-        ];
+        # The C++ unit tests link the same staticlib the plugin does, so the
+        # FFI boundary is exercised at the C++ layer and not only through Rust.
+        # They need no staging of their own — see the note above.
         # zlib, for the libgit2 inside that archive. The plugin build gets it
         # transitively through Qt6::Network; this one has to ask.
-        extraBuildInputs = [ (import nixpkgs { system = "x86_64-linux"; }).zlib ];
+        #
+        # `extraBuildInputs` is resolved OUTSIDE `forAllSystems` and is not an
+        # `externalLibInputs` entry, so nothing selects it per system the way
+        # the staticlib above is selected — one list is shared by all four
+        # `checks.<system>.unit-tests`. Naming a single system's zlib here
+        # therefore made every other system's check unrealisable.
+        #
+        # `lib.attrValues (lib.genAttrs ...)` is not available for this, since
+        # the value must be one flat list rather than a per-system attrset. So
+        # take the zlib of every supported system: on any given machine only
+        # the check for that machine's system is ever realised, and the other
+        # entries are inert store paths in a list Nix never has to build. That
+        # keeps the shared-list constraint without pinning one platform.
+        #
+        # Do not "simplify" this back to a single system. It was x86_64-only,
+        # which passed CI forever (CI runs only x86_64) while quietly making
+        # `checks.aarch64-linux.unit-tests` impossible to run — the same shape
+        # as the staticlib bug above, in the one place the fix for it does not
+        # reach.
+        extraBuildInputs = map
+          (system: (import nixpkgs { inherit system; }).zlib)
+          ffiSystems;
       };
     };
 }
