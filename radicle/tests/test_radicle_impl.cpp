@@ -113,6 +113,49 @@ SeedClient fakeSeedClient(FakeSeed& fake, const std::string& url = "https://exam
 
 } // namespace
 
+/// The sole caller of RadicleImpl::setDependenciesForTest() (see
+/// radicle_impl.h, `friend struct RadicleImplTestFactory`). RadicleImpl does
+/// not grant a public, parameterized constructor for this because this
+/// module has `"interface": "universal"` and no `.rep` file — its dispatch
+/// table is derived by scanning radicle_impl.h's `public:` section, and a
+/// public constructor that TAKES PARAMETERS (even all-defaulted ones, so it
+/// is still callable with zero arguments) is a public identifier matching
+/// the class name that the generator does not exclude from that scan (it
+/// emitted `lidlImpl().RadicleImpl()` in generated_code/radicle_module_impl.cpp,
+/// which does not compile). A genuinely parameterless public `RadicleImpl()`
+/// is fine and is exactly what production keeps — see radicle_impl.h's
+/// constructor and setDependenciesForTest() doc comments for the full
+/// explanation, including why a second, private constructor overload does
+/// not work either (production's own `generated_code/radicle_module_impl.cpp`
+/// needs a genuinely public, genuinely zero-arg `RadicleImpl()`).
+///
+/// Deliberately NOT inside the anonymous namespace above: the `friend struct
+/// RadicleImplTestFactory;` in radicle_impl.h is unqualified, so it names
+/// `::RadicleImplTestFactory` — a type in an anonymous namespace here would
+/// be a different, unrelated type of the same spelling, and the call below
+/// would fail to compile as "private within this context" (found
+/// empirically: that is exactly what happened before this was moved out).
+struct RadicleImplTestFactory {
+    static RadicleImpl make(radicle::SeedClient seed = radicle::SeedClient{},
+                            radicle::LocalStore local = radicle::LocalStore{})
+    {
+        RadicleImpl impl;
+        impl.setDependenciesForTest(std::move(seed), std::move(local));
+        return impl;
+    }
+};
+
+namespace {
+
+/// Short alias used at every construction site below.
+RadicleImpl makeRadicleImpl(radicle::SeedClient seed = radicle::SeedClient{},
+                            radicle::LocalStore local = radicle::LocalStore{})
+{
+    return RadicleImplTestFactory::make(std::move(seed), std::move(local));
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // localUnavailable() — the "no local node at all" error, and that it is
 // distinguishable from a deeper, Rust-side failure once a profile exists.
@@ -126,7 +169,7 @@ LOGOS_TEST(local_unavailable_names_the_missing_profile_and_has_no_items_key)
     ScopedRadHome home("unavailable");
     // No makeStorage(): this is the "no profile at all" case.
 
-    RadicleImpl impl{SeedClient{}, LocalStore{}};
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     const auto out = parse(impl.localGetRepo("rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5"));
 
     LOGOS_ASSERT_TRUE(out.contains("error"));
@@ -145,7 +188,7 @@ LOGOS_TEST(every_local_method_reports_the_same_unavailable_error_when_no_profile
 {
     ScopedRadHome home("unavailable-all");
 
-    RadicleImpl impl{SeedClient{}, LocalStore{}};
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     const std::string rid = "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5";
 
     const std::vector<std::string> bodies = {
@@ -184,7 +227,7 @@ LOGOS_TEST(a_deeper_backend_failure_is_not_reported_as_localUnavailable)
     ScopedRadHome home("has-profile-no-key");
     home.makeStorage();   // a profile exists...
 
-    RadicleImpl impl{SeedClient{}, LocalStore{}};
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     const auto out = parse(impl.localGetRepo("rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5"));
 
     LOGOS_ASSERT_TRUE(out.contains("error"));
@@ -235,7 +278,7 @@ LOGOS_TEST(local_list_branches_derives_branches_from_the_repo_document_via_branc
     ScopedRadHome home("branches-empty-profile");
     home.makeStorage();
 
-    RadicleImpl impl{SeedClient{}, LocalStore{}};
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     // A repo that does not exist in this empty scratch profile: getRepo()
     // returns an {"error":...} object from the Rust backend, which
     // localListBranches must pass straight through via branchesFrom() rather
@@ -256,7 +299,7 @@ LOGOS_TEST(get_capabilities_reports_local_unavailable_and_remote_seed_info_with_
     ScopedRadHome home("caps-no-profile");
 
     FakeSeed fake;
-    RadicleImpl impl{fakeSeedClient(fake, "https://seed.example.test"), LocalStore{}};
+    auto impl = makeRadicleImpl(fakeSeedClient(fake, "https://seed.example.test"), LocalStore{});
     const auto caps = parse(impl.getCapabilities());
 
     LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
@@ -289,7 +332,7 @@ LOGOS_TEST(get_capabilities_reports_localNodeRunning_false_when_no_profile_regar
     ScopedRadHome home("caps-node-running-guard");
     // No makeStorage(): available() is false.
     FakeSeed fake;
-    RadicleImpl impl{fakeSeedClient(fake), LocalStore{}};
+    auto impl = makeRadicleImpl(fakeSeedClient(fake), LocalStore{});
     const auto caps = parse(impl.getCapabilities());
 
     LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
@@ -307,7 +350,7 @@ LOGOS_TEST(get_capabilities_reflects_the_seed_clients_reachability_and_version)
     // real values to report.
     seed.probe();
 
-    RadicleImpl impl{std::move(seed), LocalStore{}};
+    auto impl = makeRadicleImpl(std::move(seed), LocalStore{});
     const auto caps = parse(impl.getCapabilities());
 
     LOGOS_ASSERT_TRUE(caps["remoteReachable"].get<bool>());
@@ -322,7 +365,7 @@ LOGOS_TEST(set_remote_seed_adopts_the_new_seed_on_a_successful_probe)
 {
     FakeSeed fake;
     fake.replies["/api/v1"] = R"({"apiVersion":"6.2.0","nid":"z6MkNew"})";
-    RadicleImpl impl{fakeSeedClient(fake, "https://old.example.test"), LocalStore{}};
+    auto impl = makeRadicleImpl(fakeSeedClient(fake, "https://old.example.test"), LocalStore{});
 
     const auto out = parse(impl.setRemoteSeed("https://example.test"));
     LOGOS_ASSERT_FALSE(out.contains("error"));
@@ -341,7 +384,7 @@ LOGOS_TEST(set_remote_seed_rolls_back_to_the_previous_seed_on_a_failed_probe)
 {
     FakeSeed fake;
     fake.failEverything = true;
-    RadicleImpl impl{fakeSeedClient(fake, "https://good.example.test"), LocalStore{}};
+    auto impl = makeRadicleImpl(fakeSeedClient(fake, "https://good.example.test"), LocalStore{});
 
     const auto out = parse(impl.setRemoteSeed("https://bad.example.test"));
     LOGOS_ASSERT_TRUE(out.contains("error"));
@@ -355,7 +398,7 @@ LOGOS_TEST(set_remote_seed_rolls_back_to_the_previous_seed_on_a_failed_probe)
 LOGOS_TEST(set_remote_seed_refuses_an_empty_url_without_touching_the_current_seed)
 {
     FakeSeed fake;
-    RadicleImpl impl{fakeSeedClient(fake, "https://good.example.test"), LocalStore{}};
+    auto impl = makeRadicleImpl(fakeSeedClient(fake, "https://good.example.test"), LocalStore{});
 
     const auto out = parse(impl.setRemoteSeed(""));
     LOGOS_ASSERT_TRUE(out.contains("error"));
@@ -385,7 +428,7 @@ LOGOS_TEST(list_known_seeds_returns_only_builtins_even_with_a_local_profile_conf
     LocalStore store;
     LOGOS_ASSERT_FALSE(store.preferredSeedUrls().empty());
 
-    RadicleImpl impl{SeedClient{}, LocalStore{}};
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     const auto out = parse(impl.listKnownSeeds());
 
     LOGOS_ASSERT_TRUE(out.contains("items"));
@@ -404,7 +447,7 @@ LOGOS_TEST(list_known_seeds_is_the_same_regardless_of_local_profile_availability
     // is source-neutral and must not depend on local availability either.
     ScopedRadHome home("known-seeds-no-profile");
 
-    RadicleImpl impl{SeedClient{}, LocalStore{}};
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     const auto out = parse(impl.listKnownSeeds());
     LOGOS_ASSERT_EQ(out["items"].size(), size_t(3));
 }

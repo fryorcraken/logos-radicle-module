@@ -65,28 +65,27 @@ public:
     /**
      * Default-constructs the production dependencies: a `SeedClient` pointed
      * at the built-in default seed, and a `LocalStore`/`LocalReader`/
-     * `LocalWriter` trio resolved from RAD_HOME/HOME exactly as before this
-     * constructor existed. The module registration machinery default-
-     * constructs a `RadicleImpl` with no arguments, so that path is
-     * unchanged.
+     * `LocalWriter` trio resolved from RAD_HOME/HOME. The module
+     * registration machinery default-constructs a `RadicleImpl` with no
+     * arguments, and `generated_code/radicle_module_impl.cpp`'s `lidlImpl()`
+     * does too (`static RadicleImpl impl;`), so this constructor must stay
+     * both public and genuinely callable with zero arguments.
      *
-     * The two extra parameters exist for tests only: everything above this
-     * class used to be a function-local `static` (see the history of this
-     * file), which meant it was built once per process on first use and never
-     * rebuilt — so a test's `ScopedRadHome` only ever affected whichever test
-     * happened to touch the singleton first. Passing dependencies in here
-     * makes each `RadicleImpl` instance its own, independent unit — a test
-     * can construct one after pointing RAD_HOME at a scratch directory, or
-     * hand it a `SeedClient` with a fake transport, without affecting any
-     * other test.
-     *
-     * `local`'s home is captured once, at construction, to build the reader
-     * and writer — mirroring exactly what the old lazily-initialized statics
-     * did (see `radicle_impl.cpp`'s history), just scoped to the instance
-     * instead of the process.
+     * Deliberately NOT parameterized for dependency injection — see
+     * `setDependenciesForTest()` in the `private:` section below for why:
+     * this module has `"interface": "universal"` and no `.rep` file, so its
+     * dispatch table is derived by scanning this header's `public:` section,
+     * and a public constructor that TAKES PARAMETERS (even all-defaulted
+     * ones, so it is still callable with zero arguments) reads to that scan
+     * as a zero-arg RPC method named `RadicleImpl`, which the generator does
+     * not compile correctly. A genuinely parameterless `RadicleImpl()`, like
+     * this one, is NOT scanned as a candidate method — verified empirically
+     * by building `nix build '.#lgx'` with exactly this shape. Keeping this
+     * constructor to exactly the zero-parameter production shape, with no
+     * second, parameterized overload, is what keeps it out of that trap
+     * while still satisfying `lidlImpl()`'s own default construction.
      */
-    explicit RadicleImpl(radicle::SeedClient seed = radicle::SeedClient{},
-                         radicle::LocalStore local = radicle::LocalStore{});
+    RadicleImpl();
 
     // ======================================================================
     // Capability & configuration  (source-neutral)
@@ -280,6 +279,77 @@ logos_events:
     void localAvailabilityChanged(const std::string& capabilitiesJson);
 
 private:
+    // A `friend class` needs no prior forward declaration of RadicleImpl or
+    // of any function signature elsewhere in this file — unlike a `friend`
+    // function, the name is simply injected here. That matters empirically,
+    // not just stylistically: an earlier attempt at this fix forward-declared
+    // a free test factory function returning `RadicleImpl` above the class,
+    // and that second, separate textual `class RadicleImpl`-shaped mention
+    // made the generator scan the wrong (empty) span and report "no public
+    // methods found in class RadicleImpl" for the real class below. Keep
+    // exactly one textual `class RadicleImpl` in this file — the definition
+    // below — and give test-only code access via a `friend struct`/`friend
+    // class` naming a type defined entirely in the test file, never via a
+    // forward-declared free function.
+    //
+    // RadicleImplTestFactory (tests/test_radicle_impl.cpp) is the only
+    // caller of setDependenciesForTest() below; every test goes through it
+    // instead of touching a RadicleImpl's dependencies directly.
+    friend struct RadicleImplTestFactory;
+
+    /**
+     * Rewires this already-constructed instance's dependencies: a `SeedClient`
+     * and a `LocalStore`/`LocalReader`/`LocalWriter` trio built from
+     * `local`'s resolved home. Test-only — see below for why this is not a
+     * constructor.
+     *
+     * Before this method existed, PR #23 threaded these through an
+     * `explicit RadicleImpl(SeedClient, LocalStore)` constructor (both
+     * parameters defaulted, so the module-registration machinery's ordinary
+     * `RadicleImpl()` still default-constructed the production instance
+     * unchanged). That compiled and all 73 unit tests passed, because the
+     * unit-test build compiles `radicle_impl.cpp` directly and never touches
+     * `generated_code/`. It broke the real build: this module has
+     * `"interface": "universal"` and no `.rep` file, so
+     * `logos-cpp-generator`/`logos-qt-generator` derives the module's
+     * dispatch table by scanning this header's `public:` section, and a
+     * public, all-defaulted (so callable with zero arguments) `RadicleImpl(
+     * ...)` reads to that scan like a zero-arg RPC method named
+     * `RadicleImpl` — the generator does not exclude constructors from it.
+     * It emitted `lidlImpl().RadicleImpl()` as a dispatch case in
+     * `generated_code/radicle_module_impl.cpp`, which does not compile
+     * (there is no such member function).
+     *
+     * Only `nix build '.#lgx'` exercises `generated_code/`, which is why the
+     * unit tests missed this — see CLAUDE.md's note on cheap gates that
+     * cannot see this class of bug.
+     *
+     * Making the constructor private instead (tried and reverted — verified
+     * empirically, not assumed) does not work either: it breaks the
+     * *production* path, not just the scan. `generated_code/
+     * radicle_module_impl.cpp`'s `lidlImpl()` holds `static RadicleImpl
+     * impl;` — a real, ordinary default construction the generated code
+     * itself performs, in a free function outside this class, which a
+     * private constructor makes inaccessible ("'RadicleImpl::RadicleImpl(...)'
+     * is private within this context"). So the constructor must stay
+     * genuinely public and genuinely zero-argument for `lidlImpl()` to keep
+     * building it, and the injected-dependencies overload cannot exist as a
+     * second, differently-shaped `RadicleImpl(...)` — the generator's
+     * "public identifier named RadicleImpl" trigger does not care how many
+     * parameters it takes or whether they are defaulted, only that it is a
+     * public constructor.
+     *
+     * The fix keeps a public, genuinely zero-parameter `RadicleImpl()` (no
+     * defaulted parameters at all — see below the private section for why
+     * even that is empirically fine) to do the same construction work the
+     * deleted two-parameter constructor did, and moves dependency injection
+     * to this ordinary, differently-named private method instead. A private
+     * method is not scanned into the dispatch table at all (it is not in
+     * `public:`), so it carries no risk of colliding with the generator's
+     * constructor heuristic.
+     */
+    void setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local);
+
     // Instance-scoped dependencies. These used to be function-local `static`s
     // in radicle_impl.cpp — built once per process on first use and never
     // rebuilt, which is what made this class untestable (see the constructor

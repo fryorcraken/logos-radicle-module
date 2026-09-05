@@ -30,19 +30,35 @@ std::string dump(const nlohmann::json& j)
 // at a scratch directory) only affected whichever test happened to touch a
 // given singleton first, since every later construction of a RadicleImpl in
 // the same process would see the same, already-built LocalStore/LocalReader/
-// LocalWriter. Making them instance members and threading them through the
-// constructor is the minimum change that fixes that: production code (the
-// module registration, which default-constructs a RadicleImpl) is unaffected,
-// and a test can now build one after arranging its own environment.
-RadicleImpl::RadicleImpl(radicle::SeedClient seed, radicle::LocalStore local)
-    : m_seed(std::move(seed))
-    , m_local(std::move(local))
+// LocalWriter. Making them instance members fixed that; see radicle_impl.h
+// for why dependency injection is a separate, private, non-constructor method
+// (setDependenciesForTest()) rather than a second constructor overload — a
+// second public `RadicleImpl(...)` broke the real build, not just the unit
+// tests, because this module's dispatch table is derived by scanning this
+// class's `public:` section and treats ANY public constructor named
+// `RadicleImpl` as a bogus zero-arg RPC method.
+RadicleImpl::RadicleImpl()
+    : m_seed()
+    , m_local()
     // Built from LocalStore's resolved home so RAD_HOME/HOME resolution lives
     // in exactly one place. Captured here, at construction, exactly as the
     // old statics captured it on first use.
     , m_localReader(m_local.home())
     , m_localWriter(m_local.home())
 {
+}
+
+void RadicleImpl::setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local)
+{
+    m_seed = std::move(seed);
+    m_local = std::move(local);
+    // Rebuilt from the new LocalStore's home, exactly as the constructor
+    // above builds them the first time — a test that changes `local`
+    // (typically after pointing RAD_HOME at a scratch directory) must see
+    // its reader/writer follow, not keep reading whatever home the
+    // zero-arg constructor resolved first.
+    m_localReader = radicle::LocalReader(m_local.home());
+    m_localWriter = radicle::LocalWriter(m_local.home());
 }
 
 namespace {

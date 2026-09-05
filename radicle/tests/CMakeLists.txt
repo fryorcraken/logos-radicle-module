@@ -3,6 +3,64 @@ project(RadicleModuleTests LANGUAGES CXX)
 
 include(LogosTest)
 
+# Guard against the exact regression that shipped once already: this module
+# has "interface": "universal" and no `.rep` file, so
+# logos-cpp-generator/logos-qt-generator derives the module's RPC dispatch
+# table by scanning src/radicle_impl.h's `public:` section for callable
+# members. A public constructor that TAKES PARAMETERS (even all-defaulted
+# ones, so it is callable with zero arguments) is textually
+# `RadicleImpl(<something>)`, and the generator does not exclude constructors
+# from that scan — it reads that as a zero-arg RPC method named RadicleImpl
+# and emits a bogus `lidlImpl().RadicleImpl()` dispatch case that fails to
+# compile. A genuinely PARAMETERLESS public `RadicleImpl()` is fine — it is
+# what generated_code's own `static RadicleImpl impl;` needs, and is not
+# scanned as a candidate method (verified empirically: a plain nix build
+# with only that constructor present compiles and links). So the check below
+# flags only a public `RadicleImpl(` with something other than a bare `()`
+# — the parameterized shape — not the parameterless one.
+#
+# This suite (logos_test(), above) compiles radicle_impl.cpp directly via
+# MODULE_SOURCES and never invokes the generator or touches generated_code/,
+# so it structurally cannot see that bug — only `nix build '.#lgx'`
+# (the real logos_module() plugin build, in ../CMakeLists.txt) does, because
+# only that path runs the generator. This check closes that gap cheaply, at
+# configure time, without needing a full plugin build: a plain text search
+# over the header. It is necessarily a narrower net than actually running the
+# generator — it cannot see every way a header could confuse a
+# text-scanning codegen, only this specific, already-shipped-once shape —
+# but it is a one-line-of-CMake price for catching a regression that
+# otherwise waits for a full `lgx` build (or a release) to surface.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../src/radicle_impl.h"
+     RADICLE_IMPL_H_LINES)
+set(RADICLE_IMPL_IN_PUBLIC_SECTION FALSE)
+foreach(LINE IN LISTS RADICLE_IMPL_H_LINES)
+    if(LINE MATCHES "^[ \t]*class[ \t]+RadicleImpl[ \t]*:")
+        set(RADICLE_IMPL_IN_PUBLIC_SECTION FALSE)
+    elseif(LINE MATCHES "^[ \t]*public:[ \t]*$")
+        set(RADICLE_IMPL_IN_PUBLIC_SECTION TRUE)
+    elseif(LINE MATCHES "^[ \t]*(private|protected|logos_events):[ \t]*$")
+        set(RADICLE_IMPL_IN_PUBLIC_SECTION FALSE)
+    elseif(RADICLE_IMPL_IN_PUBLIC_SECTION AND LINE MATCHES "^[ \t]*(explicit[ \t]+)?RadicleImpl[ \t]*\\([ \t]*[^) \t]")
+        message(FATAL_ERROR
+            "src/radicle_impl.h declares a public RadicleImpl(...) constructor "
+            "that TAKES PARAMETERS, in its `public:` section: '${LINE}'. This "
+            "module has \"interface\": \"universal\" and no .rep file, so its "
+            "RPC dispatch table is derived by scanning that section, and a "
+            "public, parameterized constructor (even all-defaulted, so "
+            "callable with zero arguments) is misread as a zero-arg method "
+            "named RadicleImpl — it compiled here (this suite never runs the "
+            "generator) but WILL break `nix build '.#lgx'` with 'invalid use "
+            "of RadicleImpl::RadicleImpl' in "
+            "generated_code/radicle_module_impl.cpp. Keep the public "
+            "constructor genuinely parameterless — `RadicleImpl();` — which "
+            "generated_code's own `static RadicleImpl impl;` needs and which "
+            "is NOT scanned as a candidate method, and add any test-only "
+            "dependency injection through a differently-named, non-constructor "
+            "method instead — see setDependenciesForTest() and its doc "
+            "comment in radicle_impl.h.")
+    endif()
+endforeach()
+
 # AUTOMOC needs metadata.json alongside the sources it moc's.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../metadata.json
                ${CMAKE_CURRENT_BINARY_DIR}/metadata.json COPYONLY)
