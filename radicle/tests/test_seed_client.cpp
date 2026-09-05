@@ -238,6 +238,112 @@ LOGOS_TEST(branches_from_passes_an_error_document_through_untouched)
 }
 
 // ---------------------------------------------------------------------------
+// branchesFromRawJson — what RadicleImpl::localListBranches actually calls:
+// parse the local backend's raw reply, then derive branches from it.
+//
+// The real Rust FFI backend always returns valid JSON (built with
+// serde_json), so it can never trigger the malformed-JSON branch below by
+// itself. This function exists specifically so that branch is directly
+// testable with a hand-crafted string, rather than being dead code nothing
+// exercises — see CLAUDE.md's note that this branch was previously
+// unreachable in any test.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(branches_from_raw_json_reports_a_named_error_for_unparseable_input)
+{
+    const auto out = branchesFromRawJson("{ this is not json");
+    LOGOS_ASSERT_TRUE(isError(out));
+    LOGOS_ASSERT_EQ(out["error"].get<std::string>(),
+                    std::string("malformed reply from local storage"));
+    // Not an empty branch list: "malformed reply" and "no branches" are
+    // different answers.
+    LOGOS_ASSERT_FALSE(out.contains("items"));
+}
+
+LOGOS_TEST(branches_from_raw_json_reports_the_same_error_for_a_completely_empty_string)
+{
+    const auto out = branchesFromRawJson("");
+    LOGOS_ASSERT_TRUE(isError(out));
+    LOGOS_ASSERT_EQ(out["error"].get<std::string>(),
+                    std::string("malformed reply from local storage"));
+}
+
+LOGOS_TEST(branches_from_raw_json_derives_branches_from_valid_json_exactly_like_branchesFrom)
+{
+    const auto direct = branchesFrom(nlohmann::json::parse(kRepoJson));
+    const auto viaRaw = branchesFromRawJson(kRepoJson);
+    LOGOS_ASSERT_EQ(direct.dump(), viaRaw.dump());
+}
+
+LOGOS_TEST(branches_from_raw_json_passes_a_backend_error_object_through_untouched)
+{
+    // A well-formed JSON error object (what the real backend sends for "repo
+    // not found") must reach branchesFrom() unchanged — parsing succeeds, so
+    // this exercises the *other* branch, distinguishing it from the
+    // malformed-JSON case above.
+    const std::string raw = makeError("repository not found locally").dump();
+    const auto out = branchesFromRawJson(raw);
+    LOGOS_ASSERT_TRUE(isError(out));
+    LOGOS_ASSERT_EQ(out["error"].get<std::string>(),
+                    std::string("repository not found locally"));
+}
+
+// ---------------------------------------------------------------------------
+// writeCapabilityFrom — what RadicleImpl::getCapabilities() actually calls to
+// collapse LocalWriter::canWrite()'s raw reply into canWrite/
+// writeUnavailableReason. LocalWriter has no fake transport (unlike
+// SeedClient), and a real "canWrite:true" reply needs an actual signing key
+// no test here can arrange — so this function exists to make BOTH branches of
+// the collapse testable with a hand-crafted probe string.
+// ---------------------------------------------------------------------------
+
+/// The collapse this function exists for: a granted write must report an
+/// EMPTY reason. A view checks this field to decide whether to show an
+/// explanation, and a stale non-empty reason next to canWriteLocal:true would
+/// be a contradiction on screen — an explanation for a write that is, in
+/// fact, available.
+LOGOS_TEST(write_capability_from_collapses_the_reason_to_empty_when_writable)
+{
+    // Deliberately includes a stray "reason" alongside canWrite:true (a
+    // shape the real backend should never send, but the collapse must not
+    // depend on the backend's good behaviour): if the ternary collapsing the
+    // reason to "" on a writable answer were ever removed, this "reason"
+    // value would leak through and this assertion would catch it. A probe
+    // object with no "reason" key at all would pass either way, since
+    // `.value("reason", "")` defaults to "" regardless — that shape was
+    // tried first and could not tell a working collapse from a broken one.
+    const auto out = writeCapabilityFrom(
+        R"({"canWrite":true,"nodeId":"did:key:z6MkTest","reason":"stale reason that must not leak"})");
+    LOGOS_ASSERT_TRUE(out["canWrite"].get<bool>());
+    LOGOS_ASSERT_TRUE(out["writeUnavailableReason"].get<std::string>().empty());
+}
+
+/// A refusal must carry the backend's own reason through unchanged — the
+/// whole point of probing at all is to tell a user WHY they cannot write.
+LOGOS_TEST(write_capability_from_carries_the_backend_reason_through_when_not_writable)
+{
+    const auto out = writeCapabilityFrom(R"({"canWrite":false,"reason":"key is encrypted"})");
+    LOGOS_ASSERT_FALSE(out["canWrite"].get<bool>());
+    LOGOS_ASSERT_EQ(out["writeUnavailableReason"].get<std::string>(),
+                    std::string("key is encrypted"));
+}
+
+LOGOS_TEST(write_capability_from_reports_a_named_reason_for_unparseable_input)
+{
+    const auto out = writeCapabilityFrom("{ not json");
+    LOGOS_ASSERT_FALSE(out["canWrite"].get<bool>());
+    LOGOS_ASSERT_FALSE(out["writeUnavailableReason"].get<std::string>().empty());
+}
+
+LOGOS_TEST(write_capability_from_defaults_to_not_writable_when_canWrite_is_missing)
+{
+    // A backend reply missing the field entirely must not be misread as
+    // writable — the safe default on a malformed/incomplete answer is "no".
+    const auto out = writeCapabilityFrom(R"({"reason":"something odd"})");
+    LOGOS_ASSERT_FALSE(out["canWrite"].get<bool>());
+}
+
+// ---------------------------------------------------------------------------
 // URL shapes. Both of these were found by probing the live API and are easy to
 // regress silently — a wrong one yields a bare 404 or 400 with no clue.
 // ---------------------------------------------------------------------------

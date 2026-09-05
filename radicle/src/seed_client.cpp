@@ -184,6 +184,30 @@ nlohmann::json branchesFrom(const nlohmann::json& repo)
     return nlohmann::json{{"items", items}, {"default", defaultBranch}};
 }
 
+nlohmann::json branchesFromRawJson(const std::string& raw)
+{
+    const auto repo = nlohmann::json::parse(raw, nullptr, false);
+    if (repo.is_discarded()) return makeError("malformed reply from local storage");
+    return branchesFrom(repo);
+}
+
+nlohmann::json writeCapabilityFrom(const std::string& rawProbe)
+{
+    const auto probe = nlohmann::json::parse(rawProbe, nullptr, false);
+    if (probe.is_discarded()) {
+        return nlohmann::json{
+            {"canWrite", false},
+            {"writeUnavailableReason", "the local backend gave an unreadable answer about signing"},
+        };
+    }
+
+    const bool canWrite = probe.value("canWrite", false);
+    return nlohmann::json{
+        {"canWrite", canWrite},
+        {"writeUnavailableReason", canWrite ? std::string{} : probe.value("reason", "")},
+    };
+}
+
 nlohmann::json SeedClient::listBranches(const std::string& rid)
 {
     return branchesFrom(getRepo(rid));
