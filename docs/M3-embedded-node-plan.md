@@ -1,10 +1,16 @@
 # M3 — An embedded Radicle node, set up from inside Basecamp
 
-Status: **plan, not scoped for implementation.** No code written. Every
-technical claim below was checked against the `radicle 0.25.1` source
+Status: **plan. Phase 0 (the spike) has run; Phases 1-3 are not started.**
+Every technical claim below was checked against the `radicle 0.25.1` source
 vendored in `~/.cargo/registry`, the crates.io API, and the local docs
 checkout at `~/src/rad/radicle.xyz` — the places each claim came from are
 named inline so the next session can re-verify rather than re-derive.
+
+**Read [`docs/M3-phase0-findings.md`](M3-phase0-findings.md) alongside this
+file.** Phase 0 settled the plan's one genuine unknown in favour of an
+in-process node, and turned up two constraints this document did not
+anticipate (the git `PATH` being process-global, and the control socket's
+108-byte path cap). Where the two disagree, the findings doc measured it.
 
 ## The problem M3 solves
 
@@ -94,11 +100,20 @@ Shape:
 
 Because the transport spawns git via `process::Command::new("git")` — a
 bare name, resolved through `PATH` — honouring a configured absolute path
-means **setting `PATH` (or `GIT_EXEC_PATH`) for the child environment**
-before any operation that can reach the transport. The crate offers no hook
-to inject the binary directly. Worth confirming in Phase 0 alongside the
-runtime spike, since it decides whether this is a one-line env tweak or
-needs a wrapper on the spawn path.
+means **controlling `PATH`**. The crate offers no hook to inject the binary
+directly.
+
+**Phase 0 confirmed this and sharpened it in three ways**
+([findings](M3-phase0-findings.md) §5):
+
+- There are **five** bare-name spawn sites across `radicle` and
+  `radicle-node`, not one — so there is no single "spawn path" to wrap.
+- **`GIT_EXEC_PATH` is not an option.** It names git's *helper* directory
+  rather than the binary, and the node's own sites `env_clear()` and
+  re-admit only `PATH` (`worker/upload_pack.rs:63-66`), stripping it anyway.
+- It is therefore a one-line `PATH` write, but a **process-global** one that
+  must happen at module init before any thread starts — which is an ordering
+  constraint on Phase 1, and means a settings change may need restart-to-apply.
 
 ### 2. Can the node actually be embedded?
 
@@ -141,13 +156,20 @@ dies. The in-process route trades that for a larger link and the need to
 never panic across the FFI boundary — a discipline `guarded()` already
 establishes in this crate.
 
-**This needs a spike before it is committed to** (see Phase 0). `has_lib:
-true` proves a library target exists; it does not prove the library exposes
-a clean "run until cancelled" entry point rather than a `main()`-shaped one
-that assumes it owns signal handling and the process. `radicle-signals` is
-a non-optional dependency, which is a hint that it might. Phase 0 exists to
-answer exactly this, and the fallback (spawn the bundled binary) is real
-and not much worse.
+**This needed a spike before being committed to, and the spike has run —
+the recommendation stands.** `has_lib: true` proved only that a library
+target exists, not that it exposes a clean "run until cancelled" entry
+point rather than a `main()`-shaped one owning signal handling and the
+process. `radicle-signals` being non-optional looked like a hint that it
+might.
+
+It does not. `Runtime::init` / `Runtime::run` / `Handle::shutdown` is a
+real lifecycle; the caller supplies the signal channel as an
+`mpsc::Receiver<Signal>`, and the library's only use of `radicle-signals`
+is that enum as a type — `install()` is called from `main.rs` alone. See
+[`docs/M3-phase0-findings.md`](M3-phase0-findings.md) §3 for the citations
+and a measured 97 ms in-process start-to-stop. The spawned-binary fallback
+is not needed.
 
 ### 3. Will it conflict with an installed node?
 
@@ -297,13 +319,19 @@ Backed by `node/config.rs`'s real fields — nothing invented:
 
 ## Phasing
 
-**Phase 0 — spike (do this first, it gates everything).** Link
-`radicle-node` 0.21.1 into `rust-ffi` with `default-features = false`;
-determine whether it exposes a start/stop-able runtime or a `main()`-shaped
-one. Confirm `radicle 0.25.1` stays single in the graph. Measure the link
-size. **Decide in-process vs. spawned binary on evidence.** If the library
-turns out to assume process ownership, fall back to spawning the bundled
-binary and the rest of this plan is unchanged apart from packaging.
+**Phase 0 — spike. ✅ DONE — see
+[`docs/M3-phase0-findings.md`](M3-phase0-findings.md).** Linked
+`radicle-node` 0.21.1 into `rust-ffi` with `default-features = false` and
+answered all five questions on evidence. **Outcome: in-process, as
+proposed.** The library exposes a genuine start/stop lifecycle,
+`radicle 0.25.1` stays single, systemd is excluded, and the link costs
++7.05 MB. The fallback to a spawned binary is not needed.
+
+Two findings change Phase 1's shape rather than the plan's: the git path is
+a process-global `PATH` write ordered before any thread starts (not a
+per-spawn wrapper), and the control socket's 108-byte `sun_path` cap
+constrains where `RAD_HOME` may live. Both are in the "still needs
+verifying" list below, marked resolved.
 
 **Phase 1 — isolation, detection and settings, no daemon yet.** The
 settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing, mode selection,
@@ -343,21 +371,51 @@ answering it twice would be waste.
 
 ## What still needs verifying (honest list)
 
-- **Whether `radicle-node`'s library target is drivable in-process.**
-  Phase 0. This is the one genuine unknown; everything else above is
-  confirmed source or a design choice.
-- **`git` availability inside a shipped Basecamp bundle.** Testable now,
-  and worth testing early since it constrains all write features.
-- **How a configured git path reaches the transport.** The crate spawns the
-  bare name `git`, so an absolute path has to be honoured by controlling
-  the child's `PATH`. Confirm in Phase 0 whether that is a one-line env
-  tweak or needs a wrapper around the spawn path.
+**Phase 0 ran and resolved the first three.** Details, commands and source
+citations are in [`docs/M3-phase0-findings.md`](M3-phase0-findings.md); the
+one-line answers are here so this list stays readable.
+
+- ~~**Whether `radicle-node`'s library target is drivable in-process.**~~
+  **RESOLVED: yes.** `Runtime::init` + `Runtime::run` + `Handle::shutdown`
+  is a real start/stop lifecycle, and every process-global act — signal
+  installation, logger, panic hook, `exit()` — lives in `radicle-node`'s
+  `main.rs`, not in the library. The `radicle-signals` hint was a false
+  alarm: the library uses only the `Signal` enum as a type. Proven by
+  running a node start-to-stop in 97 ms in-process.
+- ~~**Confirm `radicle 0.25.1` stays single in the graph**, and that
+  `default-features = false` excludes systemd.~~ **RESOLVED: both hold.**
+  One `radicle`, one `git2`, one `libgit2-sys`; `radicle-systemd` is not in
+  the graph at all. Link cost measured at **+7.05 MB**.
+- ~~**How a configured git path reaches the transport.**~~ **RESOLVED, and
+  it changes the answer above.** It is the process's own `PATH` — *not*
+  `GIT_EXEC_PATH`, which is both the wrong variable and stripped by the
+  node's own env filter. There are **five** bare-name spawn sites, not one,
+  so a wrapper "on the spawn path" is not available. It is a one-line
+  `set_var`, but a **process-global** one that must run at module init
+  before any thread starts. See the findings doc before designing the
+  settings panel's git field.
+- **NEW — socket path length constrains where `RAD_HOME` can live.** The
+  node's control socket is a Unix domain socket capped at 108 bytes
+  (`sun_path`), and `Home::socket_default()` adds 17 of them. A home under
+  this repo's own worktree already overshoots at 114 bytes and
+  `Runtime::init` fails with an error naming neither the path nor the limit.
+  This is the same cap that once made every Basecamp module segfault and is
+  why `runtime_dir` is pinned in `scaffold.toml`. Phase 1's `RAD_HOME`
+  plumbing must measure the resolved socket path, and `RAD_SOCKET` is the
+  deliberate escape hatch when the home must be deep.
+- **`git` availability inside a shipped Basecamp bundle.** Still open.
+  Testable now, and worth testing early since it constrains all write
+  features — now with five spawn sites behind it rather than one.
 - Whether the node needs the passphrase at *start* or only at *sign* time —
-  determines whether the wizard can start a node without prompting.
+  determines whether the wizard can start a node without prompting. Phase 0
+  only exercised an *unencrypted* key, which starts with no prompt.
+  `main.rs:291-325` reads the secret key up front and fails if it cannot,
+  which suggests "at start" — but that is inference from the binary's flow,
+  not a measurement, so this stays open.
 - Windows/macOS: `radicle-node` has `uds_windows` and `radicle-windows`
   deps, so it is not Linux-only, but this repo has only ever built and
   tested Linux. Out of scope to support; worth not accidentally
-  hard-coding against.
+  hard-coding against. Phase 0 measured Linux x86_64 only.
 
 ## Testing, per this repo's own rules
 
