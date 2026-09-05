@@ -2,7 +2,11 @@
 
 #include <cstdint>
 #include <string>
+#include "local_reader.h"
+#include "local_store.h"
+#include "local_writer.h"
 #include "logos_module_context.h"
+#include "seed_client.h"
 
 /**
  * @brief Radicle core module — all Radicle business logic lives here.
@@ -58,6 +62,32 @@
 class RadicleImpl : public LogosModuleContext
 {
 public:
+    /**
+     * Default-constructs the production dependencies: a `SeedClient` pointed
+     * at the built-in default seed, and a `LocalStore`/`LocalReader`/
+     * `LocalWriter` trio resolved from RAD_HOME/HOME exactly as before this
+     * constructor existed. The module registration machinery default-
+     * constructs a `RadicleImpl` with no arguments, so that path is
+     * unchanged.
+     *
+     * The two extra parameters exist for tests only: everything above this
+     * class used to be a function-local `static` (see the history of this
+     * file), which meant it was built once per process on first use and never
+     * rebuilt — so a test's `ScopedRadHome` only ever affected whichever test
+     * happened to touch the singleton first. Passing dependencies in here
+     * makes each `RadicleImpl` instance its own, independent unit — a test
+     * can construct one after pointing RAD_HOME at a scratch directory, or
+     * hand it a `SeedClient` with a fake transport, without affecting any
+     * other test.
+     *
+     * `local`'s home is captured once, at construction, to build the reader
+     * and writer — mirroring exactly what the old lazily-initialized statics
+     * did (see `radicle_impl.cpp`'s history), just scoped to the instance
+     * instead of the process.
+     */
+    explicit RadicleImpl(radicle::SeedClient seed = radicle::SeedClient{},
+                         radicle::LocalStore local = radicle::LocalStore{});
+
     // ======================================================================
     // Capability & configuration  (source-neutral)
     // ======================================================================
@@ -248,4 +278,14 @@ logos_events:
 
     /// Local node availability flipped. Views should re-read getCapabilities().
     void localAvailabilityChanged(const std::string& capabilitiesJson);
+
+private:
+    // Instance-scoped dependencies. These used to be function-local `static`s
+    // in radicle_impl.cpp — built once per process on first use and never
+    // rebuilt, which is what made this class untestable (see the constructor
+    // doc comment above). Now every RadicleImpl owns its own.
+    radicle::SeedClient m_seed;
+    radicle::LocalStore m_local;
+    radicle::LocalReader m_localReader;
+    radicle::LocalWriter m_localWriter;
 };

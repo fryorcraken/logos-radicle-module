@@ -1,16 +1,10 @@
 #include "radicle_impl.h"
 
-#include "local_reader.h"
-#include "local_store.h"
-#include "local_writer.h"
-#include "seed_client.h"
-
 #include <nlohmann/json.hpp>
 
-namespace {
+#include <utility>
 
-/// Default public seed. Overridable at runtime via setRemoteSeed().
-constexpr const char* kDefaultSeed = "https://seed.radicle.xyz";
+namespace {
 
 /// Public seeds offered in a picker when the user has no local config.
 const char* const kBuiltinSeeds[][2] = {
@@ -19,39 +13,39 @@ const char* const kBuiltinSeeds[][2] = {
     {"https://rosa.radicle.network", "rosa.radicle.network"},
 };
 
-radicle::SeedClient& seed()
-{
-    static radicle::SeedClient client{kDefaultSeed};
-    return client;
-}
-
-radicle::LocalStore& local()
-{
-    static radicle::LocalStore store;
-    return store;
-}
-
 std::string dump(const nlohmann::json& j)
 {
     return j.dump();
 }
 
-radicle::LocalReader& localReader()
-{
+} // namespace
+
+// ===========================================================================
+// Construction
+// ===========================================================================
+//
+// m_seed, m_local, m_localReader and m_localWriter used to be function-local
+// `static`s here: built once per process on first use, never rebuilt. That
+// made the class untestable — a test's ScopedRadHome (which points RAD_HOME
+// at a scratch directory) only affected whichever test happened to touch a
+// given singleton first, since every later construction of a RadicleImpl in
+// the same process would see the same, already-built LocalStore/LocalReader/
+// LocalWriter. Making them instance members and threading them through the
+// constructor is the minimum change that fixes that: production code (the
+// module registration, which default-constructs a RadicleImpl) is unaffected,
+// and a test can now build one after arranging its own environment.
+RadicleImpl::RadicleImpl(radicle::SeedClient seed, radicle::LocalStore local)
+    : m_seed(std::move(seed))
+    , m_local(std::move(local))
     // Built from LocalStore's resolved home so RAD_HOME/HOME resolution lives
-    // in exactly one place. Constructed on first use, after LocalStore has
-    // read the environment.
-    static radicle::LocalReader reader{local().home()};
-    return reader;
+    // in exactly one place. Captured here, at construction, exactly as the
+    // old statics captured it on first use.
+    , m_localReader(m_local.home())
+    , m_localWriter(m_local.home())
+{
 }
 
-radicle::LocalWriter& localWriter()
-{
-    // Same home as localReader(), for the same reason: RAD_HOME/HOME
-    // resolution lives in LocalStore and nowhere else.
-    static radicle::LocalWriter writer{local().home()};
-    return writer;
-}
+namespace {
 
 /// Uniform "there is no local profile here" error.
 ///
@@ -61,9 +55,9 @@ radicle::LocalWriter& localWriter()
 /// "this repository has no README") rather than this blanket one. Keeping the
 /// two apart matters: "you have no node" and "that repo isn't here" prompt
 /// different actions from a user.
-std::string localUnavailable()
+std::string localUnavailable(const radicle::LocalStore& local)
 {
-    return dump(radicle::makeError(local().unavailableReason()));
+    return dump(radicle::makeError(local.unavailableReason()));
 }
 
 } // namespace
@@ -74,7 +68,7 @@ std::string localUnavailable()
 
 std::string RadicleImpl::getCapabilities()
 {
-    const bool localAvailable = local().available();
+    const bool localAvailable = m_local.available();
 
     // `canWriteLocal` is a real probe, not a build flag. A read needs only the
     // public key; a write needs the private half, which comes from a plaintext
@@ -88,26 +82,28 @@ std::string RadicleImpl::getCapabilities()
     // view refuse to *offer* a compose box rather than accepting text and
     // failing on submit.
     bool canWrite = false;
-    std::string writeReason = local().unavailableReason();
+    std::string writeReason = m_local.unavailableReason();
     if (localAvailable) {
-        const auto probe = nlohmann::json::parse(localWriter().canWrite(), nullptr, false);
-        if (probe.is_discarded()) {
-            writeReason = "the local backend gave an unreadable answer about signing";
-        } else {
-            canWrite = probe.value("canWrite", false);
-            writeReason = canWrite ? std::string{} : probe.value("reason", "");
-        }
+        // writeCapabilityFrom() is what does the parse-then-collapse: see its
+        // doc comment in seed_client.h for why this is a free function
+        // rather than inlined here (in short: so both branches — a granted
+        // write and a refused one — are directly testable, since LocalWriter
+        // has no fake seam and a real granted write needs a signing key no
+        // test here can arrange).
+        const auto cap = radicle::writeCapabilityFrom(m_localWriter.canWrite());
+        canWrite = cap["canWrite"].get<bool>();
+        writeReason = cap["writeUnavailableReason"].get<std::string>();
     }
 
     nlohmann::json out{
         {"localAvailable",         localAvailable},
-        {"localNodeRunning",       localAvailable && local().nodeRunning()},
+        {"localNodeRunning",       localAvailable && m_local.nodeRunning()},
         {"canWriteLocal",          canWrite},
         {"writeUnavailableReason", writeReason},
-        {"remoteSeed",             seed().seedUrl()},
-        {"remoteReachable",        seed().reachable()},
-        {"remoteApiVersion",       seed().apiVersion()},
-        {"nodeId",                 localAvailable ? local().nodeId() : std::string{}},
+        {"remoteSeed",             m_seed.seedUrl()},
+        {"remoteReachable",        m_seed.reachable()},
+        {"remoteApiVersion",       m_seed.apiVersion()},
+        {"nodeId",                 localAvailable ? m_local.nodeId() : std::string{}},
     };
     return dump(out);
 }
@@ -117,20 +113,20 @@ std::string RadicleImpl::setRemoteSeed(const std::string& seedUrl)
     if (seedUrl.empty())
         return dump(radicle::makeError("seed URL is required"));
 
-    const std::string previous = seed().seedUrl();
-    seed().setSeedUrl(seedUrl);
+    const std::string previous = m_seed.seedUrl();
+    m_seed.setSeedUrl(seedUrl);
 
-    const nlohmann::json index = seed().probe();
+    const nlohmann::json index = m_seed.probe();
     if (radicle::isError(index)) {
-        seed().setSeedUrl(previous);   // keep the last known-good seed
+        m_seed.setSeedUrl(previous);   // keep the last known-good seed
         return dump(index);
     }
 
-    remoteSeedChanged(seed().seedUrl());
+    remoteSeedChanged(m_seed.seedUrl());
 
     return dump(nlohmann::json{
-        {"seed",       seed().seedUrl()},
-        {"apiVersion", seed().apiVersion()},
+        {"seed",       m_seed.seedUrl()},
+        {"apiVersion", m_seed.apiVersion()},
         {"nid",        index.value("nid", "")},
     });
 }
@@ -159,67 +155,67 @@ std::string RadicleImpl::listKnownSeeds()
 
 std::string RadicleImpl::remoteListRepos(const std::string& query, int64_t page, int64_t perPage)
 {
-    return dump(radicle::paginate(seed().listRepos(query, page, perPage), page, perPage));
+    return dump(radicle::paginate(m_seed.listRepos(query, page, perPage), page, perPage));
 }
 
 std::string RadicleImpl::remoteGetRepo(const std::string& rid)
 {
-    return dump(seed().getRepo(rid));
+    return dump(m_seed.getRepo(rid));
 }
 
 std::string RadicleImpl::remoteListBranches(const std::string& rid)
 {
-    return dump(seed().listBranches(rid));
+    return dump(m_seed.listBranches(rid));
 }
 
 std::string RadicleImpl::remoteGetTree(const std::string& rid, const std::string& sha,
                                        const std::string& path)
 {
-    return dump(seed().getTree(rid, sha, path));
+    return dump(m_seed.getTree(rid, sha, path));
 }
 
 std::string RadicleImpl::remoteGetBlob(const std::string& rid, const std::string& sha,
                                        const std::string& path)
 {
-    return dump(seed().getBlob(rid, sha, path));
+    return dump(m_seed.getBlob(rid, sha, path));
 }
 
 std::string RadicleImpl::remoteGetReadme(const std::string& rid, const std::string& sha)
 {
-    return dump(seed().getReadme(rid, sha));
+    return dump(m_seed.getReadme(rid, sha));
 }
 
 std::string RadicleImpl::remoteListCommits(const std::string& rid, const std::string& sha,
                                            int64_t page, int64_t perPage)
 {
-    return dump(radicle::paginate(seed().listCommits(rid, sha, page, perPage), page, perPage));
+    return dump(radicle::paginate(m_seed.listCommits(rid, sha, page, perPage), page, perPage));
 }
 
 std::string RadicleImpl::remoteGetCommit(const std::string& rid, const std::string& sha)
 {
-    return dump(seed().getCommit(rid, sha));
+    return dump(m_seed.getCommit(rid, sha));
 }
 
 std::string RadicleImpl::remoteListIssues(const std::string& rid, const std::string& status,
                                           int64_t page, int64_t perPage)
 {
-    return dump(radicle::paginate(seed().listIssues(rid, status, page, perPage), page, perPage));
+    return dump(radicle::paginate(m_seed.listIssues(rid, status, page, perPage), page, perPage));
 }
 
 std::string RadicleImpl::remoteGetIssue(const std::string& rid, const std::string& id)
 {
-    return dump(seed().getIssue(rid, id));
+    return dump(m_seed.getIssue(rid, id));
 }
 
 std::string RadicleImpl::remoteListPatches(const std::string& rid, const std::string& status,
                                            int64_t page, int64_t perPage)
 {
-    return dump(radicle::paginate(seed().listPatches(rid, status, page, perPage), page, perPage));
+    return dump(radicle::paginate(m_seed.listPatches(rid, status, page, perPage), page, perPage));
 }
 
 std::string RadicleImpl::remoteGetPatch(const std::string& rid, const std::string& id)
 {
-    return dump(seed().getPatch(rid, id));
+    return dump(m_seed.getPatch(rid, id));
 }
 
 // ===========================================================================
@@ -237,89 +233,90 @@ std::string RadicleImpl::remoteGetPatch(const std::string& rid, const std::strin
 
 std::string RadicleImpl::localListRepos(const std::string& scope, int64_t page, int64_t perPage)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().listRepos(scope, page, perPage);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.listRepos(scope, page, perPage);
 }
 
 std::string RadicleImpl::localGetRepo(const std::string& rid)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getRepo(rid);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getRepo(rid);
 }
 
 std::string RadicleImpl::localListBranches(const std::string& rid)
 {
-    if (!local().available()) return localUnavailable();
+    if (!m_local.available()) return localUnavailable(m_local);
 
     // Derived from the repo document rather than added to the FFI surface,
     // exactly as `SeedClient::listBranches` derives it from `getRepo`. The
     // local backend already returns `refs.refs` in the same shape, so a
     // dedicated Rust entry point would be a second implementation of one
     // filter — and a second place for the two sources to drift apart.
-    const auto repo = nlohmann::json::parse(localReader().getRepo(rid), nullptr, false);
-    if (repo.is_discarded()) return dump(radicle::makeError("malformed reply from local storage"));
-    if (radicle::isError(repo)) return dump(repo);
-
-    return dump(radicle::branchesFrom(repo));
+    //
+    // branchesFromRawJson() is what does the parse-then-derive: see its doc
+    // comment in seed_client.h for why this is a free function rather than
+    // inlined here (in short: so the malformed-JSON branch is directly
+    // testable, since the real Rust backend can never produce it).
+    return dump(radicle::branchesFromRawJson(m_localReader.getRepo(rid)));
 }
 
 std::string RadicleImpl::localGetTree(const std::string& rid, const std::string& sha,
                                       const std::string& path)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getTree(rid, sha, path);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getTree(rid, sha, path);
 }
 
 std::string RadicleImpl::localGetBlob(const std::string& rid, const std::string& sha,
                                       const std::string& path)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getBlob(rid, sha, path);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getBlob(rid, sha, path);
 }
 
 std::string RadicleImpl::localGetReadme(const std::string& rid, const std::string& sha)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getReadme(rid, sha);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getReadme(rid, sha);
 }
 
 std::string RadicleImpl::localListCommits(const std::string& rid, const std::string& sha,
                                           int64_t page, int64_t perPage)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().listCommits(rid, sha, page, perPage);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.listCommits(rid, sha, page, perPage);
 }
 
 std::string RadicleImpl::localGetCommit(const std::string& rid, const std::string& sha)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getCommit(rid, sha);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getCommit(rid, sha);
 }
 
 std::string RadicleImpl::localListIssues(const std::string& rid, const std::string& status,
                                          int64_t page, int64_t perPage)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().listIssues(rid, status, page, perPage);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.listIssues(rid, status, page, perPage);
 }
 
 std::string RadicleImpl::localGetIssue(const std::string& rid, const std::string& id)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getIssue(rid, id);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getIssue(rid, id);
 }
 
 std::string RadicleImpl::localListPatches(const std::string& rid, const std::string& status,
                                           int64_t page, int64_t perPage)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().listPatches(rid, status, page, perPage);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.listPatches(rid, status, page, perPage);
 }
 
 std::string RadicleImpl::localGetPatch(const std::string& rid, const std::string& id)
 {
-    if (!local().available()) return localUnavailable();
-    return localReader().getPatch(rid, id);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localReader.getPatch(rid, id);
 }
 
 // ===========================================================================
@@ -335,13 +332,13 @@ std::string RadicleImpl::localGetPatch(const std::string& rid, const std::string
 std::string RadicleImpl::localCommentOnIssue(const std::string& rid, const std::string& id,
                                              const std::string& body)
 {
-    if (!local().available()) return localUnavailable();
-    return localWriter().commentOnIssue(rid, id, body);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localWriter.commentOnIssue(rid, id, body);
 }
 
 std::string RadicleImpl::localCreateIssue(const std::string& rid, const std::string& title,
                                           const std::string& description)
 {
-    if (!local().available()) return localUnavailable();
-    return localWriter().createIssue(rid, title, description);
+    if (!m_local.available()) return localUnavailable(m_local);
+    return m_localWriter.createIssue(rid, title, description);
 }

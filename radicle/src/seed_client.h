@@ -125,4 +125,44 @@ nlohmann::json paginate(const nlohmann::json& arr, int64_t page, int64_t perPage
  */
 nlohmann::json branchesFrom(const nlohmann::json& repo);
 
+/**
+ * Parse a raw JSON reply (as returned by `LocalReader::getRepo`) and derive
+ * branches from it via `branchesFrom()`.
+ *
+ * Factored out of `RadicleImpl::localListBranches` so the "backend returned
+ * something that isn't even JSON" branch — reported as `{"error":"malformed
+ * reply from local storage"}` — is directly unit-testable with a hand-crafted
+ * malformed string. The real Rust backend always returns valid JSON (it is
+ * built with `serde_json`), so this path cannot be reached by driving the real
+ * FFI in a test; it exists as a defensive check against a future backend
+ * change or a corrupted read, and a free function is the only way to exercise
+ * it without one.
+ */
+nlohmann::json branchesFromRawJson(const std::string& raw);
+
+/**
+ * Collapse a raw `LocalWriter::canWrite()` reply (`{"canWrite":bool,
+ * "reason":"..."}` or `{"canWrite":true,"nodeId":"..."}`) into the two fields
+ * `getCapabilities()` reports: whether a write is possible, and the reason a
+ * view should show when it is not.
+ *
+ * -> {"canWrite":bool,"writeUnavailableReason":"..."}
+ *
+ * `writeUnavailableReason` MUST be "" exactly when canWrite is true — a view
+ * that saw a non-empty reason next to `canWriteLocal:true` would show a
+ * contradiction on screen (an explanation for a write that is, in fact,
+ * available). A malformed/unparseable raw reply is reported as
+ * `{"canWrite":false,"writeUnavailableReason":"<a stated reason>"}` rather
+ * than propagated as an `{"error":...}` — `getCapabilities()` itself never
+ * fails; "the backend could not explain itself" is one more reason a write
+ * isn't currently possible, not a failure to answer the capabilities query.
+ *
+ * Factored out of `RadicleImpl::getCapabilities()` so this collapse — which
+ * needs a controllable `canWrite()` reply to test both branches, and
+ * `LocalWriter` has no fake seam of its own — is directly unit-testable with
+ * a hand-crafted probe string instead of only being reachable through a real
+ * signing key.
+ */
+nlohmann::json writeCapabilityFrom(const std::string& rawProbe);
+
 } // namespace radicle

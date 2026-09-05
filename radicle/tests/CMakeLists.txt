@@ -15,9 +15,27 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../metadata.json
 # scratch Radicle home and read it back through the same Rust archive the
 # module links, which is the only way to prove the FFI boundary and the JSON
 # shapes at this layer rather than trusting the Rust-side tests alone.
+#
+# radicle_impl.cpp (RadicleImpl, the module's actual public API surface) is
+# tested here too, in test_radicle_impl.cpp. It used to be missing from this
+# list entirely, and its dependencies (SeedClient/LocalStore/LocalReader/
+# LocalWriter) were function-local `static`s constructed once per process —
+# together that made the 28-method API untestable: no test file exercised it,
+# and even a test that tried to would have been at the mercy of whichever
+# other test happened to build the singletons first. RadicleImpl now takes its
+# dependencies through its constructor (defaulted for production callers), so
+# each test builds its own independent instance.
+#
+# radicle_impl_events_test.cpp supplies test-only bodies for RadicleImpl's
+# `logos_events:` methods (remoteSeedChanged/localAvailabilityChanged) — see
+# logos_test_events.h. A universal-module unit test constructs the impl
+# directly with no Qt provider, so the codegen-emitted `_events.cpp` that
+# normally implements those methods is never linked in; without a forwarder
+# body here, linking radicle_module_tests fails with an undefined reference.
 logos_test(
     NAME radicle_module_tests
     MODULE_SOURCES
+        ../src/radicle_impl.cpp
         ../src/seed_client.cpp
         ../src/local_store.cpp
         ../src/local_reader.cpp
@@ -27,6 +45,8 @@ logos_test(
         ../src/http_client.cpp
     TEST_SOURCES
         main.cpp
+        radicle_impl_events_test.cpp
+        test_radicle_impl.cpp
         test_seed_client.cpp
         test_local_store.cpp
         test_local_reader.cpp
