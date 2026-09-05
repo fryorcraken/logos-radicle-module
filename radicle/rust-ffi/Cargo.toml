@@ -10,6 +10,16 @@ name = "radicle_local_ffi"
 # exercise the Rust-side logic directly without going through the C ABI.
 crate-type = ["staticlib", "rlib"]
 
+# --- M3 Phase 0 spike, off by default ---------------------------------------
+# `node-spike` links the `radicle-node` daemon crate so the spike can answer,
+# on evidence, whether it is drivable in-process. It is NOT part of the shipped
+# module: nothing in the default build, the staticlib, CMake or Nix references
+# it, and `cargo build` / `cargo test` without the feature resolve exactly the
+# dependency graph they did before. See `docs/M3-phase0-findings.md`.
+[features]
+default = []
+node-spike = ["dep:radicle-node", "dep:radicle-signals"]
+
 [dependencies]
 radicle = "0.25"
 serde_json = "1"
@@ -23,6 +33,30 @@ git2 = "0.21"
 # Only for `serde::Serialize` as a trait bound when re-serializing the crate's
 # own state enums; no derives of our own.
 serde = "1"
+
+# Spike-only, behind `node-spike`. `default-features = false` is deliberate and
+# load-bearing: `systemd` is a *default* feature of radicle-node, and an
+# embedded node is not supervised by a service manager.
+[dependencies.radicle-node]
+version = "0.21.1"
+optional = true
+default-features = false
+
+# Spike-only. `Runtime::init` takes an `mpsc::Receiver<radicle_signals::Signal>`
+# but radicle-node does not re-export the type, so a caller constructing that
+# channel needs the crate by name. Note this is only the *enum*: the process-
+# global `radicle_signals::install()` is never called here, and is what an
+# embedded node must keep avoiding.
+[dependencies.radicle-signals]
+version = "0.12.1"
+optional = true
+
+# Spike-only probe. `required-features` keeps it out of `cargo build
+# --all-targets` and `cargo clippy --all-targets` in the default build, so CI's
+# `-D warnings` gate never has to compile radicle-node.
+[[example]]
+name = "probe_node_runtime"
+required-features = ["node-spike"]
 
 [dev-dependencies]
 tempfile = "3"
