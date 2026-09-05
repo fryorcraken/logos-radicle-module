@@ -106,6 +106,29 @@ steps:
     expect:
       state: "root.navError === ''"
 
+  # ---- branches -----------------------------------------------------------
+  #
+  # localListBranches reads every peer's namespace under
+  # refs/namespaces/<nid>/refs/heads/, not the canonical refs/heads/* — which
+  # in Radicle storage holds a single delegate-consensus ref. Deriving the list
+  # from that canonical set (as the seed path legitimately does) reported
+  # exactly ONE branch for every repository on the machine, which is the bug
+  # this step exists to catch.
+  #
+  # Asserting `>= 1` rather than a number: how many branches a given repo has
+  # is a property of whoever's node this runs on. What is machine-independent
+  # is that the picker was populated at all and nothing errored — and the
+  # regression this guards is caught by the component tests, which can pin
+  # exact counts against a fixed reply.
+  - name: branches load from local storage
+    wait_for:
+      state: "root.branchCount >= 1"
+    timeout: 60s
+
+  - name: no error surfaced while listing branches
+    expect:
+      state: "root.navError === ''"
+
   # ---- commits ------------------------------------------------------------
   #
   # Tab 1. localListCommits walks the repository's own history with git2 and

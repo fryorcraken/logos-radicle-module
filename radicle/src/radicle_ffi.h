@@ -32,6 +32,11 @@ char* radicle_local_list_repos(const char* home, const char* scope,
 
 char* radicle_local_get_repo(const char* home, const char* rid);
 
+/* Branches across every peer, the local node's own first. This has no
+ * `remote*` counterpart returning the same thing: a seed reports one canonical
+ * ref set, while local storage holds one namespace per peer. */
+char* radicle_local_list_branches(const char* home, const char* rid);
+
 char* radicle_local_get_tree(const char* home, const char* rid,
                              const char* sha, const char* path);
 

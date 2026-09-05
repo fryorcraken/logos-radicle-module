@@ -126,7 +126,12 @@ Item {
     readonly property int    fileBodyLength:  source.viewerBodyLength
 
     // ---- branch ----
-    readonly property int    branchCount:  branchPicker.count
+    /// Selectable branches. Deliberately the picker's `branchCount`, not its
+    /// `count`: in local mode the model also holds a local/peer divider row,
+    /// which is not a branch anyone can pick.
+    readonly property int    branchCount:  branchPicker.branchCount
+    /// Whether the list is split into "this node's" and "other peers'".
+    readonly property bool   branchesGrouped: branchPicker.hasSeparator
     readonly property string branchLabel:  branchPicker.displayText
     /// The picker itself, so an end-to-end spec can emit its `activated`
     /// signal — which is exactly what a click on a popup delegate emits.

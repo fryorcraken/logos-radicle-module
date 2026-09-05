@@ -162,7 +162,13 @@ public:
     // ======================================================================
     // LOCAL — the local node's storage. Offline-capable, sees private repos.
     // Every method errors with {"error":...} when no local profile exists.
-    // Mirrors the remote surface above and returns the SAME JSON shapes.
+    // Mirrors the remote surface above and returns the SAME JSON shapes, so a
+    // view renders either source without branching.
+    //
+    // `localListBranches` is the one method that returns a strict SUPERSET
+    // rather than an identical object — see its own comment. The shared keys
+    // are unchanged, so the rule above still holds for any consumer that does
+    // not opt into the extra ones.
     // ======================================================================
 
     /// Repos in local storage. `scope`: "all"|"delegate"|"private"|"seeded".
@@ -170,6 +176,25 @@ public:
 
     std::string localGetRepo(const std::string& rid);
 
+    /**
+     * Branches across every peer whose refs this node holds, the local node's
+     * own first, then all others.
+     *
+     * The only `local*` method whose reply is a superset of its `remote*`
+     * twin's rather than identical to it, because the two sources genuinely
+     * differ: a seed reports one canonical `refs/heads/*` set, while local
+     * storage keeps every peer's branches — this node's included — under
+     * `refs/namespaces/<nid>/`. Deriving this from `getRepo`'s `refs.refs`
+     * the way the remote path does reported exactly one branch per repo.
+     *
+     * -> {"items":[{"name","label","head","remote","isLocal"}],"default":"main"}
+     *
+     * `name` is what every other read is keyed on: bare (`main`) for a local
+     * branch, so it resolves exactly as before, and `<nid>/<branch>` for a
+     * peer's, so two peers' identically-named branches cannot collide.
+     * `label` is the display form, with the node id abbreviated. `isLocal`
+     * is what the picker groups on.
+     */
     std::string localListBranches(const std::string& rid);
 
     std::string localGetTree(const std::string& rid, const std::string& sha,

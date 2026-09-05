@@ -233,6 +233,10 @@ Item {
     readonly property string repoBranch:        repoPage.branch
     readonly property string repoDefaultBranch: repoPage.defaultBranch
     readonly property int    branchCount:       repoPage.branchCount
+    /// True when the picker split the list into this node's branches and other
+    /// peers' — only ever the case on the local source, and only for a repo
+    /// that has some of each.
+    readonly property bool   branchesGrouped:   repoPage.branchesGrouped
     readonly property string branchLabel:       repoPage.branchLabel
     /// See RepoView.branchPickerItem: a ComboBox's popup delegates live in a
     /// separate window and cannot be clicked by objectName, so the branch spec

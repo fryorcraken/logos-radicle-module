@@ -181,6 +181,153 @@ fn get_repo_inner(home: &str, rid: &str) -> Result<Value, String> {
     }))
 }
 
+/// Every branch in local storage, the local node's own first.
+///
+/// **Why this is a dedicated entry point and not derived from `get_repo`.**
+/// `localListBranches` used to filter `get_repo`'s `refs.refs` map, exactly as
+/// `SeedClient::listBranches` filters the seed's — one filter, one shape, no
+/// drift. That worked only because both sides were reporting the same thing:
+/// the *canonical* `refs/heads/*`. They are not the same thing. In local
+/// storage every peer's branches — including your own — live under
+/// `refs/namespaces/<nid>/refs/heads/*`, and the unnamespaced `refs/heads/*`
+/// holds a single delegate-consensus ref. Globbing it returned exactly one
+/// branch for every repository on the machine, which is what the picker showed.
+///
+/// Namespaced refs cannot simply be poured into `refs.refs` instead:
+/// `resolveSha` (both here and in `seed_client.cpp`) reads that same map to
+/// turn a ref name into a commit, so widening it would change what an
+/// unqualified branch name resolves to. The map keeps its canonical meaning;
+/// branches get their own reply shape.
+///
+/// The reply is `{"items":[{name,label,head,remote,isLocal}],"default":"..."}`:
+///
+/// - the local node's branches come first, `isLocal: true`, and their `name`
+///   is the bare branch (`main`) so it resolves exactly as it did before;
+/// - every other peer's branches follow, `name` fully qualified
+///   (`<nid>/<branch>`) so it cannot collide with a local branch of the same
+///   name, and `label` abbreviated for display.
+///
+/// Order is load-bearing: the picker draws a separator at the first entry
+/// whose `isLocal` is false, so "yours" and "theirs" stay visually distinct.
+pub fn list_branches(home: &str, rid: &str) -> String {
+    match list_branches_inner(home, rid) {
+        Ok(v) => v.to_string(),
+        Err(e) => error(e),
+    }
+}
+
+/// Shorten a node ID for display: `z6Mkire…`. The full id stays in `name`,
+/// which is what every subsequent read is keyed on — only the label shrinks.
+fn abbreviate_nid(nid: &str) -> String {
+    // 8 chars is enough to tell this machine's handful of peers apart while
+    // still fitting the picker's 140px. Collisions are a display concern
+    // only; `name` is never abbreviated.
+    match nid.char_indices().nth(8) {
+        Some((idx, _)) => format!("{}…", &nid[..idx]),
+        None => nid.to_string(),
+    }
+}
+
+fn list_branches_inner(home: &str, rid: &str) -> Result<Value, String> {
+    let storage = open_storage(home)?;
+    let id = parse_rid(rid)?;
+    let repo = storage
+        .repository(id)
+        .map_err(|e| format!("repository {rid} not found locally: {e}"))?;
+
+    let doc = repo
+        .identity_doc()
+        .map_err(|e| format!("could not read identity document for {rid}: {e}"))?;
+    let doc = radicle::identity::doc::Doc::from(doc);
+    let default_branch = doc
+        .payload()
+        .get(&radicle::identity::doc::PayloadId::project().clone())
+        .and_then(|p| {
+            serde_json::from_value::<radicle::identity::Project>(p.clone().into_inner()).ok()
+        })
+        .map(|p| p.default_branch().to_string())
+        .unwrap_or_default();
+
+    // The local node's own key — the namespace "your" branches live under.
+    // Same public-half read `open_storage` already does, so still no
+    // passphrase.
+    let keys_dir = std::path::Path::new(home).join("keys");
+    let local_key = Keystore::new(&keys_dir).public_key().ok().flatten();
+
+    let mut local_items: Vec<Value> = Vec::new();
+    let mut peer_items: Vec<Value> = Vec::new();
+
+    // `remotes()` enumerates the peers whose refs this node holds, each with
+    // its signed ref set already replayed — no raw namespace globbing, and no
+    // risk of picking up `rad/sigrefs`, `cobs/*` or other plumbing that a
+    // `refs/namespaces/*` glob would also match.
+    let remotes = radicle::storage::RemoteRepository::remotes(&repo)
+        .map_err(|e| format!("could not list remotes for {rid}: {e}"))?;
+
+    for (nid, remote) in remotes {
+        let is_local = local_key.map(|k| k == nid).unwrap_or(false);
+        let nid_str = nid.to_string();
+
+        for (refname, oid) in remote.refs.iter() {
+            let Some(branch) = refname
+                .to_string()
+                .strip_prefix("refs/heads/")
+                .map(String::from)
+            else {
+                continue; // tags, rad/*, cobs/* — not branches
+            };
+
+            // `refs/heads/patches/<patch-id>` is where a patch's head is
+            // published — a code review, not a branch someone works on. On a
+            // real profile these dominate: heartwood's five peers contribute
+            // 658 refs under `refs/heads/`, of which all but ~20 are patch
+            // refs. Listing them would bury the actual branches and make the
+            // picker useless, which is the same argument `branchesFrom`
+            // already makes for keeping tags out. Patches have their own tab.
+            if branch.starts_with("patches/") {
+                continue;
+            }
+
+            let entry = if is_local {
+                json!({
+                    "name": branch,
+                    "label": branch,
+                    "head": oid.to_string(),
+                    "remote": nid_str,
+                    "isLocal": true,
+                })
+            } else {
+                json!({
+                    "name": format!("{nid_str}/{branch}"),
+                    "label": format!("{}/{branch}", abbreviate_nid(&nid_str)),
+                    "head": oid.to_string(),
+                    "remote": nid_str,
+                    "isLocal": false,
+                })
+            };
+
+            if is_local {
+                local_items.push(entry);
+            } else {
+                peer_items.push(entry);
+            }
+        }
+    }
+
+    // Within each group, order by label so the list is stable across runs —
+    // `remotes()` yields a map, and an unstable picker order is its own bug.
+    let sort_key = |v: &Value| v["label"].as_str().unwrap_or("").to_string();
+    local_items.sort_by_key(sort_key);
+    peer_items.sort_by_key(sort_key);
+
+    local_items.extend(peer_items);
+
+    Ok(json!({
+        "items": local_items,
+        "default": default_branch,
+    }))
+}
+
 /// Repos in local storage, narrowed by `scope`:
 ///
 /// - `"delegate"` — repos this node is a delegate of, i.e. ones you can sign

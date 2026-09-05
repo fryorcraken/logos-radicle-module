@@ -40,10 +40,26 @@ fn resolve_commit<'a>(repo: &'a Repository, reference: &str) -> Result<git2::Com
     let backend = repo.raw();
 
     if !reference.is_empty() {
-        // Try the canonical branch first, then a raw revparse (short SHA,
-        // full SHA, tag). `refs/heads/<name>` is checked explicitly because
+        // A branch belonging to another peer arrives as `<nid>/<branch>` —
+        // the form `local::list_branches` hands the picker, qualified so two
+        // peers' identically-named branches stay distinct. It has to be tried
+        // FIRST: `z6Mk…/main` would otherwise fall through to the plain
+        // revparse below, fail, and silently resolve to the repo head, so
+        // picking a peer's branch would quietly show the canonical branch's
+        // files. Splitting on the first `/` is safe because a node id never
+        // contains one, while a branch name may (`cloudhead/code-review`).
+        let namespaced = reference
+            .split_once('/')
+            .map(|(nid, branch)| format!("refs/namespaces/{nid}/refs/heads/{branch}"));
+
+        // Then the canonical branch, then a raw revparse (short SHA, full
+        // SHA, tag). `refs/heads/<name>` is checked explicitly because
         // revparse on a bare name can pick up a remote-tracking ref instead.
-        for candidate in [format!("refs/heads/{reference}"), reference.to_string()] {
+        let candidates = namespaced
+            .into_iter()
+            .chain([format!("refs/heads/{reference}"), reference.to_string()]);
+
+        for candidate in candidates {
             if let Ok(object) = backend.revparse_single(&candidate) {
                 if let Ok(commit) = object.peel_to_commit() {
                     return Ok(commit);
