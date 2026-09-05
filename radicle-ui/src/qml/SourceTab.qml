@@ -185,17 +185,30 @@ Item {
         }
         tab.treeLoading = true;
         var wantRid = rid;
+        // Unlike loadReadme()/openEntry() below (and every branch-scoped
+        // loader elsewhere: CommitsTab, etc.), this used to capture only
+        // wantRid, not wantBranch. RepoView.onBranchChanged's reset() clears
+        // treeCache before the new branch's request goes out, which stops a
+        // stale reply from being served FROM the cache — but it does nothing
+        // about a stale reply already in flight when the branch changes: the
+        // rid is unchanged, so the old guard let it through and repainted the
+        // just-loaded new branch's tree with the old branch's entries.
+        // Confirmed reachable with a deferred-reply fake before adding
+        // wantBranch here (see tst_branch_switch.qml's
+        // SourceTabLoadTreeBranchGuard suite).
+        var wantBranch = branch;
         app.call("GetTree", [rid, branch, p], function (data) {
             var list = data.entries || [];
             treeCache[tkey] = list;
-            // Drop a reply that arrived after the user moved to another repo.
-            if (tab.rid !== wantRid) return;
+            // Drop a reply that arrived after the user moved to another repo
+            // or branch.
+            if (tab.rid !== wantRid || tab.branch !== wantBranch) return;
             tab.treeLoading = false;
             tab.treeLoaded = true;
             tab.path = p;
             applyEntries(list);
         }, function () {
-            if (tab.rid !== wantRid) return;
+            if (tab.rid !== wantRid || tab.branch !== wantBranch) return;
             tab.treeLoading = false;
             tab.treeLoaded = true;
         });
