@@ -33,14 +33,35 @@ logos_test(
         ../src
 )
 
-# `RADICLE_RUST_FFI_LIB` is an absolute store path passed by flake.nix's
-# `tests.extraCmakeFlags`. The test derivation is a separate build that gets no
-# preConfigure staging of its own, so unlike the plugin build there is no
-# `lib/` to search — the path is handed over directly.
+# The Rust local-node backend, found rather than handed over as an absolute
+# path. It used to arrive as `-DRADICLE_RUST_FFI_LIB=<store path>` from
+# flake.nix's `tests.extraCmakeFlags`, but that list is ONE value shared by
+# every `checks.<system>.unit-tests` the builder generates, so the store path
+# it named was whichever system evaluated — the same per-system bug that made
+# the aarch64 plugin link an amd64 archive.
+#
+# The archive is now declared as a `nix.external_libraries` entry, which the
+# test builder resolves per-system and stages into the source root's `lib/`
+# before this file is read. cmake is invoked from `build/` with this directory
+# as its source, so that staged copy sits one level up.
+#
+# Searched for, like the plugin build's own CMakeLists.txt does, so a missing
+# archive is a sentence at configure time rather than a wall of undefined
+# `radicle_local_*` symbols at link time.
+find_library(RADICLE_RUST_FFI_LIB
+    NAMES libradicle_local_ffi.a radicle_local_ffi
+    PATHS "${CMAKE_CURRENT_SOURCE_DIR}/../lib"
+    NO_DEFAULT_PATH
+)
 if(NOT RADICLE_RUST_FFI_LIB)
     message(FATAL_ERROR
-        "RADICLE_RUST_FFI_LIB was not set. The local-reader tests link the Rust "
-        "backend; flake.nix passes its path via tests.extraCmakeFlags.")
+        "The Rust local-node backend (libradicle_local_ffi.a) was not found in "
+        "${CMAKE_CURRENT_SOURCE_DIR}/../lib. The local-reader tests link it; "
+        "the nix build stages it there from metadata.json's "
+        "nix.external_libraries entry. Building these tests directly, outside "
+        "`nix build`, needs "
+        "`cargo build --release --manifest-path rust-ffi/Cargo.toml` and the "
+        "resulting archive copied into lib/ first.")
 endif()
 # zlib is named explicitly here but not in the plugin build, which picks it up
 # transitively through Qt6::Network. The archive's libgit2 needs it

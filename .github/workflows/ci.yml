@@ -54,15 +54,23 @@ jobs:
           PY
           done
 
-      - name: UI declares the core module as a dependency
+      - name: UI declares the core module as a dependency, at the same version
         run: |
           python3 - <<'PY'
           import json
-          core = json.load(open("radicle/metadata.json"))["name"]
+          core = json.load(open("radicle/metadata.json"))
           ui   = json.load(open("radicle-ui/metadata.json"))
-          assert core in ui["dependencies"], \
-              f"radicle-ui must declare '{core}' in dependencies"
-          print(f"ok: radicle-ui depends on {core}")
+          assert core["name"] in ui["dependencies"], \
+              f"radicle-ui must declare '{core['name']}' in dependencies"
+          # The two ship as a pair from one tag, and the catalog references
+          # them by version, so a bump that touches only one file publishes a
+          # mismatched pair. The step above loads both files already; two
+          # release commit messages have claimed this check existed when it
+          # did not.
+          assert core["version"] == ui["version"], \
+              (f"module versions disagree: radicle {core['version']} vs "
+               f"radicle_ui {ui['version']} — bump both")
+          print(f"ok: radicle-ui depends on {core['name']}, both at {core['version']}")
           PY
 
       - name: no QML component shadows a Qt built-in
