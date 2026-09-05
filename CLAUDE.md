@@ -954,17 +954,11 @@ narrower than "check whether the API already exposes this" implied):
   the actual `syncEpoch` race, `CommitView.qml`, `PatchesTab` click coverage)
   are still open. Roll that follow-up pass into M1.1 rather than letting it
   drift further.
-- **Favour data structure over code logic when closing those gaps.** Where a
-  coverage gap traces back to branchy, ad hoc guard logic repeated slightly
-  differently across `CommitsTab`/`IssuesTab`/`PatchesTab`/`ThreadView`
-  (the `wantRid`/`wantEpoch`-style staleness checks), prefer reshaping the
-  shared state so the invariant is structural — impossible to get wrong by
-  construction — over adding more test cases to pin down more branches. The
-  architecture review's flagged `IssuesTab`/`PatchesTab` duplication is the
-  concrete case in point: a well-chosen shared data shape for "list tab with
-  staleness guard" would make the guard correct everywhere at once, instead
-  of needing a dedicated regression test per component (as `CommitsTab`
-  needed this session).
+- **Favour data structure over code logic when closing those gaps** — the
+  `wantRid`/`wantEpoch` guards repeated across `CommitsTab`/`IssuesTab`/
+  `PatchesTab`/`ThreadView` are the case in point. This has since been
+  generalised; see "Put the complexity in the data structure, not the logic"
+  under "How to shape a change" below, which is the canonical statement.
 - **Repo header actions, mirroring Radicle Desktop's own repo view.** Two
   screenshots from `app.radicle.xyz` supplied by the user show a small
   action cluster next to the repo header: a link/share dropdown ("Open on
@@ -1172,6 +1166,91 @@ this paragraph describes history, not the current state. The distinction those
 stubs preserved still holds in the working implementation: "no local node" and
 "no repositories" return different answers, because the UI renders them
 differently.
+
+## How to shape a change
+
+Three habits, in the order you need them: make room for the change before
+making it, put the complexity in the data rather than the control flow, and
+give every function one job. They are not independent — the second and third
+are usually *how* you do the first.
+
+### Make the change easy, then make the easy change
+
+If a change is awkward to make, that awkwardness is information about the
+code, not about the change. The move is two commits, not one: first a
+refactor that changes no behaviour and makes room, then the feature or fix,
+which is now small. Keep them separate — a diff that reshapes and alters
+behaviour at once cannot be reviewed for either, and cannot be reverted
+without losing the half you wanted.
+
+The refactor commit must leave every gate green on its own. If it cannot,
+it is not a refactor.
+
+This repo has the worked example. `Main.qml`'s `nav.busy`/`nav.error` logic
+had no test because it was tangled into a 300-line file; the fix was not a
+cleverer test but pulling it out into `NavState.qml` — after which the test
+was obvious and `tst_nav.qml` fell out in minutes. Same story with
+`SourceState.qml`, extracted from the Seed/Local routing so the method
+selection could be tested without a view. **When a test is hard to write,
+suspect the shape of the code before blaming the test layer.**
+
+The counter-pressure, which is equally real: do not refactor speculatively.
+`IssuesTab.qml` and `PatchesTab.qml` have been near-identical for three
+milestones and are still not merged, because nothing has yet needed them to
+diverge or a third consumer to appear. Make room for *the change in front of
+you*, not for one you imagine.
+
+### Put the complexity in the data structure, not the logic
+
+Prefer reshaping state so an invariant holds by construction over adding a
+branch that checks it. A branch has to be got right at every call site and
+tested at each one; a data shape is right everywhere at once, and a new call
+site inherits it for free.
+
+The `wantRid`/`wantBranch`/`syncEpoch` staleness guards are this repo's
+standing example — and its standing counter-example. The same guard is
+hand-written slightly differently in `CommitsTab`, `IssuesTab`, `PatchesTab`
+and `ThreadView`. Every time one of them was written from memory, something
+was dropped: `ThreadView` captured `wantId` but not `wantRid`;
+`CommitsTab.fetch()` captured neither. Each omission then needed its own
+regression test to pin down. A shared "request whose reply is dropped unless
+the state it was issued against still holds" — one shape, one test — would
+have made all four correct at once and made the fifth correct before it was
+written.
+
+So when you find yourself writing the fourth slightly-different copy of a
+guard, that is the signal to reshape rather than to add a fourth test.
+
+### One function, one job
+
+Single Responsibility is the SOLID letter that pays for itself here; the
+others follow from it more often than they need to be invoked by name.
+
+A function that does one thing is one you can name precisely, test without
+scaffolding, and read without holding a second concern in your head. The
+tell that a function has two jobs is usually in its name: an `And`, a vague
+verb like `handle`/`process`/`update`, or a comment mid-body introducing the
+next phase. `finishSyncIfDone()` earns its length because everything in it
+serves one decision; a `syncAndRecordHead()` would not.
+
+Two consequences worth stating, because both have bitten this repo:
+
+- **Do not let a function quietly acquire a second caller with different
+  needs.** That is how `syncAll()`'s head lookup came to read `branch` live
+  in its callback and record the wrong branch's head. Pass what the
+  function needs; do not have it reach out for ambient state.
+- **A guard is a job.** `guarded()` in `rust-ffi` exists solely to stop a
+  panic unwinding through an `extern "C"` frame. It is not error handling,
+  it is not mixed into the read functions, and every entry point goes
+  through it. Keeping it separate is what made "is it called everywhere?"
+  a question with an answer — and `tests/panic_guard.rs` the test that
+  answers it.
+
+Interfaces stay small for the same reason. The core module's contract is
+`std::string in, std::string out` JSON per method precisely so the radicle
+crate's churn stays behind that wall — see `radicle_impl.h`. Widening an
+interface is a decision to make deliberately, not a side effect of needing
+one more field.
 
 ## Tests are part of the change, not a follow-up
 
