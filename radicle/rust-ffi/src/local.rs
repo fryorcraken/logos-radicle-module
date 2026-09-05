@@ -230,13 +230,19 @@ pub fn list_branches(home: &str, rid: &str) -> String {
     }
 }
 
-/// Shorten a node ID for display: `z6Mkire…`. The full id stays in `name`,
+/// Shorten a node ID for display: `ireRat…`. The full id stays in `name`,
 /// which is what every subsequent read is keyed on — only the label shrinks.
+///
+/// The leading `z6Mk` is dropped first. Every Ed25519 DID starts with it, so
+/// in a list of peers it is four characters of pure noise repeated on every
+/// row — and it was crowding out the branch name, which is the part that
+/// actually differs. `z6MkgFq6…/cli/cob-migrate` becomes `gFq6z5…/cli/cob-migrate`.
 fn abbreviate_nid(nid: &str) -> String {
-    // 8 chars is enough to tell this machine's handful of peers apart while
-    // still fitting the picker's 140px. Collisions are a display concern
-    // only; `name` is never abbreviated.
-    match nid.char_indices().nth(8) {
+    let nid = nid.strip_prefix("z6Mk").unwrap_or(nid);
+    // 6 chars past the shared prefix still distinguishes this machine's
+    // handful of peers. Collisions are a display concern only; `name` is
+    // never abbreviated, so nothing downstream can confuse two peers.
+    match nid.char_indices().nth(6) {
         Some((idx, _)) => format!("{}…", &nid[..idx]),
         None => nid.to_string(),
     }

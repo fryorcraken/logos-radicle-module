@@ -126,13 +126,16 @@ Item {
     readonly property int    fileBodyLength:  source.viewerBodyLength
 
     // ---- branch ----
-    /// Selectable branches. Deliberately the picker's `branchCount`, not its
-    /// `count`: in local mode the model also holds a local/peer divider row,
-    /// which is not a branch anyone can pick.
+    /// Selectable branches, including the pinned repository default.
     readonly property int    branchCount:  branchPicker.branchCount
-    /// Whether the list is split into "this node's" and "other peers'".
+    /// Whether the list is grouped by peer — false for the seed source, which
+    /// sends no peer information.
     readonly property bool   branchesGrouped: branchPicker.hasSeparator
-    readonly property string branchLabel:  branchPicker.displayText
+    /// What the closed picker displays: the BARE branch name. `branch` carries
+    /// the peer-qualified value every read is keyed on, so these two differ
+    /// for a peer's branch by design — the node id lives in a section header,
+    /// not on the chip.
+    readonly property string branchLabel:  branchPicker.displayLabel
     /// The picker itself, so an end-to-end spec can emit its `activated`
     /// signal — which is exactly what a click on a popup delegate emits.
     ///

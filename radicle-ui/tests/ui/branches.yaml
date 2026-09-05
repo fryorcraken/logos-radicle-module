@@ -60,37 +60,46 @@ steps:
     timeout: 60s
 
   # The repo opens on its default branch, and the picker must be SHOWING that
-  # rather than whatever ComboBox's currentIndex happens to default to. This is
-  # the assertion that fails if syncSelection() stops running.
+  # rather than nothing. The blank-chip regression is exactly this: on a repo
+  # where every branch belongs to a peer, the bare default matched no row and
+  # the closed control rendered empty.
   - name: it opens on the default branch, and the picker says so
     expect:
       state:
         - "root.repoBranch === root.repoDefaultBranch"
         - "root.repoBranch !== ''"
-        - "root.branchLabel === root.repoBranch"
+        - "root.branchLabel !== ''"
 
-  # Pick the LAST branch in the list. Deliberately not index 0 — that is very
-  # often the default branch itself, and "switch to the branch you are already
-  # on" is a no-op that would let a broken switch pass unnoticed.
+  # Pick the LAST branch in the list. Deliberately not index 0 — that is the
+  # pinned repository default, and "switch to the branch you are already on"
+  # is a no-op that would let a broken switch pass unnoticed.
   #
   # A repository with only one branch cannot demonstrate a switch at all. That
   # is not treated as a skip (a skipped step in CI is a false green): the pick
   # still runs, and the assertions that follow are written as invariants that
   # must hold either way — the picker and `branch` agree, and the tree reloads.
+  #
+  # Driven through `activated(index)`, which routes to the same `choose()` a
+  # real click uses. `visibleCount` rather than `count`: the picker is no
+  # longer a ComboBox (it is a chip + sectioned panel), and indices address the
+  # filtered rows.
   - name: pick the last branch through the picker's own activated handler
     eval: >-
       (function () {
         var p = root.branchPickerItem;
-        p.activated(p.count - 1);
-        return p.count;
+        p.activated(p.visibleCount - 1);
+        return p.visibleCount;
       })()
 
-  # Whatever the pick was, `branch` must equal what the picker now displays.
-  # This is the invariant that the Qt.binding() dance exists to preserve, and
-  # it holds whether or not the branch actually changed.
+  # Whatever the pick was, the picker must be showing SOMETHING and `branch`
+  # must be set. The label is the bare branch name while `branch` carries the
+  # peer-qualified value, so they are deliberately not compared for equality —
+  # that difference is the point of hoisting the node id into a section header.
   - name: the branch and the picker agree after the pick
     wait_for:
-      state: "root.branchLabel === root.repoBranch"
+      state:
+        - "root.branchLabel !== ''"
+        - "root.repoBranch !== ''"
     timeout: 30s
 
   # Source and Commits are branch-scoped and must refetch. The tree is cleared

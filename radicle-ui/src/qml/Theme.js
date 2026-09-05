@@ -68,3 +68,39 @@ var animMed = 180;
 // place them differently, which read as a jitter rather than a table.
 var statColumn = 72;
 var statGap = 8;
+
+// Branch picker.
+//
+// `pickerWidth` is FIXED, deliberately, and that is the outcome of getting it
+// wrong three times. An earlier version measured the widest label and sized
+// the popup to it; because every row carried a `<nid>…/` prefix, the measured
+// width ballooned to ~480px against a 140px control and read as a floating
+// panel rather than that control's menu. Hoisting the node id into a section
+// header — one occurrence per peer instead of one per row — removed the
+// content that demanded the width. A stable, predictable panel is worth more
+// than a snugly-fitted one; long names elide and the filter field is the
+// escape hatch.
+var pickerWidth = 300;
+var pickerMaxHeight = 380;
+var pickerTrigger = 180;   // the closed chip
+// Denser than rowHeightSm (28), which is loose for a list that can hold 84
+// branches across 5 peers.
+var rowHeightXs = 22;
+// Only worth offering a filter field when scanning is actually hard. Below
+// this the box is furniture — it applies to both sources, so a 2-branch local
+// repo and a 5-branch seed repo both get a plain list.
+var pickerSearchThreshold = 8;
+
+// Peer identity colours. Indexed by a hash of the FULL node id, never the
+// abbreviated label: two peers can share a `gFq6z5…` prefix, and giving them
+// one colour would undo the only thing telling them apart at a glance.
+var peerDots = ["#58a6ff", "#3fb950", "#d29922", "#a371f7",
+                "#f85149", "#39c5cf", "#db6d28", "#8b949e"];
+
+/// Stable colour for a peer, derived from its node id.
+function peerColor(nid) {
+    var h = 0;
+    for (var i = 0; i < nid.length; i++)
+        h = ((h << 5) - h + nid.charCodeAt(i)) | 0;
+    return peerDots[Math.abs(h) % peerDots.length];
+}
