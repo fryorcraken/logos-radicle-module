@@ -661,6 +661,10 @@ upstream — re-run `lgs init` to refresh it. Until then, treat
 
 ### If you are working in a git worktree
 
+This is the `lgs` half only. For the git-level mechanics — where worktrees
+live, what they branch from, the shared stash stack, and cleaning them up —
+see "Working in a git worktree" below.
+
 A worktree has no `.scaffold/` — that directory is untracked, so it does not
 come along.
 
@@ -1166,6 +1170,53 @@ this paragraph describes history, not the current state. The distinction those
 stubs preserved still holds in the working implementation: "no local node" and
 "no repositories" return different answers, because the UI renders them
 differently.
+
+## Working in a git worktree
+
+Non-trivial work happens in a worktree, on its own branch — that is how M1.1,
+M2.1 and most of what followed were built. The mechanics that differ from a
+normal checkout are below; the `lgs`-specific half is under "If you are working
+in a git worktree" in the scaffold section, and is worth reading before you run
+any verb from one.
+
+**Where they live, and why that surprises people.** Worktrees are created under
+`.claude/worktrees/<name>/` — inside the repository directory, but `.gitignore`
+excludes `.claude/` wholesale, so they are invisible to git status in the main
+tree. Do not `cd` back to the main checkout to "check something" mid-task; run
+every command from the worktree, or you will read and edit the wrong tree.
+
+**You branch from `origin/main`, not from your local `main`.** The default base
+is the fetched remote head at creation time. If local `main` is behind or ahead
+of `origin/main`, the worktree matches neither — verified here: the main tree
+sat at `6771497`, `origin/main` at `b8e50f4`, and a worktree created between
+them came off a third commit. **Read files from the worktree rather than
+trusting a copy already in context**, including this one. A stale `CLAUDE.md`
+is the most likely thing to mislead you, because it is the file most likely to
+be in context from the start and least likely to be re-read.
+
+**The stash stack is shared with the main checkout and every other worktree,
+and other sessions may be using it concurrently.** Never bare `git stash` /
+`git stash pop`. Prefer a throwaway WIP commit to set work aside — it is local
+to your branch and cannot be popped by anyone else. If you must stash, use
+`git stash push -u -m "<unique-tag>"` and recover with `git stash apply <sha>`,
+never `pop`.
+
+**Clean up when the branch lands.** Worktrees accumulate silently and nothing
+prunes them: this repo reached **15** at once, most on branches merged
+milestones ago — M1.1's `worktree-agent-a42af4ef65b0dcc3b` was still on disk
+long after PR #2 merged, two worktrees shared one branch, and one sat on a
+stale detached HEAD. That is not free: each is a full checkout, each holds a
+branch ref alive so merged branches never look merged, and a stale one is an
+invitation to edit code that is no longer anybody's `main`. After a branch is
+merged, `git worktree remove <path>` it. `git worktree list` is the thing to
+run when you are unsure what is lying around; `git worktree prune` clears
+entries whose directories are already gone.
+
+One consequence to expect rather than debug: a worktree's `lgs basecamp launch
+alice` is a **separate** Basecamp instance with its own profile state. That is
+isolation working as intended — but see the `local.yaml` caveat about two
+Basecamps contending on the same `~/.radicle`, which that isolation does *not*
+protect you from.
 
 ## How to shape a change
 
