@@ -106,7 +106,7 @@ directly.
 **Phase 0 confirmed this and sharpened it in three ways**
 ([findings](M3-phase0-findings.md) §5):
 
-- There are **five** bare-name spawn sites across `radicle` and
+- There are **six** bare-name spawn sites across `radicle` and
   `radicle-node`, not one — so there is no single "spawn path" to wrap.
 - **`GIT_EXEC_PATH` is not an option.** It names git's *helper* directory
   rather than the binary, and the node's own sites `env_clear()` and
@@ -180,7 +180,7 @@ controllable:
 | Resource | Default | Collision if shared | How we isolate |
 |---|---|---|---|
 | **Storage / keys** | `~/.radicle` | Two nodes writing one git storage. **This is the dangerous one** — CLAUDE.md already records step-9 e2e flakes caused by two Basecamps on one `~/.radicle`. | `RAD_HOME` → Basecamp's own XDG dir. `profile.rs:509` `home()` honours it. |
-| **Control socket** | `$RAD_HOME/node/control.sock` | Commands sent to the wrong node | `RAD_SOCKET` env var, `profile.rs:48` + `socket_from_env():692`. Follows `RAD_HOME` by default anyway. |
+| **Control socket** | `$RAD_HOME/node/control.sock` | Commands sent to the wrong node | `RAD_SOCKET` env var, `profile.rs:48` + `socket_from_env():692`. **Must be set explicitly — letting it follow `RAD_HOME` overshoots the 108-byte `sun_path` cap under Basecamp's per-profile dirs; measured in [findings](M3-phase0-findings.md) §6.** |
 | **P2P port** | `8776` (`node.rs:61` `DEFAULT_PORT`) | Second node cannot bind; startup fails | `config.listen` (`node/config.rs:603`). Embedded default: **`listen: []`** — outbound-only. |
 
 `listen: []` deserves emphasis, because it is both the safe default and a
@@ -333,8 +333,12 @@ per-spawn wrapper), and the control socket's 108-byte `sun_path` cap
 constrains where `RAD_HOME` may live. Both are in the "still needs
 verifying" list below, marked resolved.
 
-**Phase 1 — isolation, detection and settings, no daemon yet.** The
-settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing, mode selection,
+**Phase 1 — isolation, detection and settings, no daemon yet.** Note before
+designing the `RAD_HOME` layout: [findings](M3-phase0-findings.md) §6 measured
+this document's "socket follows the home" proposal against Basecamp's real
+per-profile paths and it does not fit, so `RAD_SOCKET` is a requirement rather
+than a knob. The settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing,
+mode selection,
 extended `getCapabilities`, and the `git` preflight plus its configurable
 path. Attach mode works end to end. This alone is shippable and useful: it
 makes today's M2.1 honest about *which* node it is reading, and makes the
@@ -389,7 +393,7 @@ one-line answers are here so this list stays readable.
 - ~~**How a configured git path reaches the transport.**~~ **RESOLVED, and
   it changes the answer above.** It is the process's own `PATH` — *not*
   `GIT_EXEC_PATH`, which is both the wrong variable and stripped by the
-  node's own env filter. There are **five** bare-name spawn sites, not one,
+  node's own env filter. There are **six** bare-name spawn sites, not one,
   so a wrapper "on the spawn path" is not available. It is a one-line
   `set_var`, but a **process-global** one that must run at module init
   before any thread starts. See the findings doc before designing the
@@ -400,12 +404,17 @@ one-line answers are here so this list stays readable.
   this repo's own worktree already overshoots at 114 bytes and
   `Runtime::init` fails with an error naming neither the path nor the limit.
   This is the same cap that once made every Basecamp module segfault and is
-  why `runtime_dir` is pinned in `scaffold.toml`. Phase 1's `RAD_HOME`
-  plumbing must measure the resolved socket path, and `RAD_SOCKET` is the
-  deliberate escape hatch when the home must be deep.
+  why `runtime_dir` is pinned in `scaffold.toml`. **Measured against
+  Basecamp's own profile dirs, this document's "socket follows the home"
+  proposal fails** — 192 bytes in the dev-profile layout, ~20 bytes of slack
+  in the installed one — so `RAD_SOCKET` is a Phase 1 requirement, not an
+  escape hatch, and the socket wants a short home of its own
+  (`$XDG_RUNTIME_DIR` is the obvious candidate). Phase 1 still owes a length
+  check with a real error message, since the crate's names neither the path
+  nor the limit.
 - **`git` availability inside a shipped Basecamp bundle.** Still open.
   Testable now, and worth testing early since it constrains all write
-  features — now with five spawn sites behind it rather than one.
+  features — now with six spawn sites behind it rather than one.
 - Whether the node needs the passphrase at *start* or only at *sign* time —
   determines whether the wizard can start a node without prompting. Phase 0
   only exercised an *unencrypted* key, which starts with no prompt.

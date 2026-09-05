@@ -1,9 +1,11 @@
 # M3 Phase 0 — spike findings
 
 Status: **spike complete.** Every claim below was produced by running a
-command or reading source, not by reasoning about what ought to be true. The
-commands are given so the next session can re-run them rather than trust this
-file; the source citations are `file:line` into the crates as vendored in
+command or reading source, not by reasoning about what ought to be true —
+with one flagged exception, the comparison against a spawned binary, which
+nobody built and which is therefore argued rather than measured. The commands
+are given so the next session can re-run them rather than trust this file; the
+source citations are `file:line` into the crates as vendored in
 `~/.cargo/registry`.
 
 **Recommendation: in-process. The evidence supports it, and the one hint the
@@ -21,7 +23,7 @@ the `node-spike` cargo feature. It is not wired into the module — see
 | 2 | Does `radicle 0.25.1` stay single? | **Yes**, and so do `git2` and `libgit2-sys`. |
 | 3 | Library drivable in-process, or `main()`-shaped? | **Drivable.** `Runtime::init` + `run` + `Handle::shutdown`; no process-global state touched. |
 | 4 | Link size delta | **+7.05 MB** (4.88 → 11.93 MB) on a comparable full-surface link. |
-| 5 | How does a configured `git` path reach the transport? | **Process `PATH` only** — and it is one line, but it is *process-global*, which is the real design constraint. |
+| 5 | How does a configured `git` path reach the transport? | **Process `PATH` only** — one line, but *process-global*, across **six** bare-name spawn sites rather than the one the plan cited. |
 
 A sixth thing turned up that the plan did not anticipate, and it is the one
 finding most likely to cost a session if it is rediscovered the hard way: the
@@ -275,7 +277,7 @@ child-`PATH` tweak or needs a wrapper on the spawn path". The answer is: it is
 one line, but it is a *process-global* line, and that is the part worth
 designing around.
 
-### There are five bare-name spawn sites, not one
+### There are six bare-name spawn sites, not one
 
 The plan cited one. There are more, across both crates:
 
@@ -283,11 +285,12 @@ The plan cited one. There are more, across both crates:
 |---|---|
 | `radicle-0.25.1/src/storage/git/transport/local.rs:53` | `upload-pack` / `receive-pack` — every push into storage |
 | `radicle-0.25.1/src/git.rs:134` | `git version` — the preflight check |
+| `radicle-0.25.1/src/git.rs:748` | `pub fn run()` — the general-purpose spawn helper behind `git::process` (`fetch-pack` and friends). Public, not test-only. |
 | `radicle-0.25.1/src/storage/git/transport/remote/mock.rs:63` | test-only |
 | `radicle-node-0.21.1/src/worker/upload_pack.rs:63` | serving fetches to peers |
 | `radicle-node-0.21.1/src/worker/garbage.rs:54` | `git gc --auto` |
 
-All five are `Command::new("git")` — a bare name, resolved through `PATH`. A
+All six are `Command::new("git")` — a bare name, resolved through `PATH`. A
 search for any configuration hook finds nothing:
 
 ```
@@ -376,23 +379,44 @@ sockets, and is why `runtime_dir` is pinned in `scaffold.toml` with a
 load-bearing comment. It arrives here from the opposite direction: not the
 socket Basecamp creates, but the one an embedded node would.
 
-Consequences for M3, which belong in Phase 1's `RAD_HOME` work rather than
-being discovered in Phase 2:
+### The measurement has been taken, and the plan's layout fails it
 
-- **The embedded home cannot go just anywhere.** The plan's "`RAD_HOME` →
-  Basecamp's own XDG dir" is right in principle, but Basecamp's per-profile XDG
-  paths are already deep (`…/profiles/alice/…`), and adding a Radicle home plus
-  `node/control.sock` beneath one may not fit. **Measure before choosing**, the
-  way the probe does.
-- **`RAD_SOCKET` is the escape hatch, and this is what it is for.** The plan
-  lists it as a knob for avoiding collisions; it is *also* how to keep the
-  socket short when the home must be long. `Home::socket_from_env()`
-  (`profile.rs:692`) honours it, and `Runtime::init` takes the socket path as
-  an explicit parameter independent of the home — so the two can be separated
-  deliberately.
-- **Whatever is chosen needs a length check with a real error message**, since
-  the crate's own is unusable. The probe's guard (measure, compare to 108,
-  say the number) is the minimum shape.
+The obvious advice here would be "measure before choosing". That advice is
+already spent: the measurement exists, and it comes back negative. From `lgs
+basecamp paths alice` on this machine:
+
+| Path | Bytes | Plus `/radicle/node/control.sock` |
+|---|---:|---:|
+| dev profile `module_data_dir` (`…/.scaffold/basecamp/profiles/alice/xdg-data/Logos/LogosBasecampDev/module_data`) | 166 | **192 — 84 over the cap** |
+| installed shape (`~/.local/share/Logos/LogosBasecamp/module_data`) | 62 | **88 — ~20 bytes of headroom** |
+
+So this is a settled constraint on Phase 1, not a caution:
+
+- **The plan's proposal — `RAD_HOME` → Basecamp's own per-profile XDG dir, with
+  the socket following the home by default — cannot work in the dev-profile
+  layout, and is marginal in the installed one.** The dev profile is already
+  84 bytes over before Phase 1 writes a line of code, and the installed shape's
+  ~20 bytes of slack is one longer username or one `XDG_DATA_HOME` override
+  from gone.
+- **`RAD_SOCKET` is therefore mandatory, not an escape hatch held in reserve.**
+  Phase 1 should treat "**the socket path is chosen independently of the home,
+  and is short by construction**" as a design requirement of the `RAD_HOME`
+  plumbing, not a fallback for when a measurement fails.
+  `Home::socket_from_env()` (`profile.rs:692`) honours it, and `Runtime::init`
+  takes the socket path as an explicit parameter independent of the home — so
+  the crate already supports separating the two deliberately.
+- **This repo has already solved the identical problem once**, which is the
+  likely answer rather than a decision made here: `scaffold.toml` pins
+  `runtime_dir` to the session runtime dir precisely because per-profile paths
+  blow the same 108-byte cap. A node's control socket has no Wayland-style
+  constraint on *where* it lives — only that both ends agree — so something
+  like `$XDG_RUNTIME_DIR/radicle-<profile>.sock` is short, correctly scoped
+  per user session, and cleaned up on logout. Phase 1 should probably just do
+  that; naming it here saves rediscovering it.
+- **Whatever is chosen still needs a length check with a real error message**,
+  since the crate's own names neither the path nor the limit. That holds
+  regardless of which directory wins. The probe's guard (measure, compare to
+  108, say the number) is the minimum shape.
 
 The probe deliberately keeps its directory names down to `n/h` for this reason
 and still does not fit in a worktree — which is the clearest possible statement
@@ -411,12 +435,45 @@ Left open on purpose; none of it blocks the in-process decision.
   the plan's open question stays open until someone inits an encrypted profile
   and tries.
 - **`git` availability inside a shipped Basecamp bundle.** Untouched here. Still
-  the most likely "works on my machine" failure, and now with five spawn sites
+  the most likely "works on my machine" failure, and now with six spawn sites
   behind it instead of one.
 - **Windows/macOS.** Not attempted; this was measured on Linux x86_64 only.
 - **Long-run behaviour.** The probe starts and stops a node in 97 ms. It says
-  nothing about memory growth, fd usage, or what happens when the host process
-  forks — all Phase 2 concerns.
+  nothing about memory growth or fd usage over hours, or what happens when the
+  host process forks.
+
+### The panic surface, named rather than deferred
+
+This is not a reason to prefer a child process — a child has its own worse
+version of most of it — but it is what choosing in-process makes *our*
+problem, and the spike had the source open, so it is cheaper to name now than
+to rediscover in Phase 2.
+
+- **`Runtime::run()` unwinds on its error paths.** It ends with
+
+  ```rust
+  self.pool.run().unwrap();
+  self.reactor.join().unwrap();
+  ```
+  — `radicle-node-0.21.1/src/runtime.rs:300-301`
+
+  so a worker-pool or reactor failure panics rather than returning `Err`. The
+  probe only ever exercised the clean path.
+- **An embedded node adds threads outside `guarded()`'s reach.** The reactor,
+  the worker pool, the control listener and the signals thread are all spawned
+  by the library, and none of them is behind this crate's `extern "C"` panic
+  boundary. [`docs/rust-ffi.md`](rust-ffi.md) treats "every panic in this crate
+  is caught at a known boundary" as a safety invariant; an in-process node
+  makes that stop being true. The failure shape to design for is a node that
+  is **half-dead with nothing reporting it** — a panicked reactor while the
+  `local*` read path keeps answering normally.
+- **Shutdown cost under load was not measured.** The probe's 97 ms is
+  start-to-stop at idle, with nothing in flight. Nobody measured what
+  `Handle::shutdown()` costs with a fetch running, and Basecamp closing is
+  exactly when a user notices a hang. Related: the probe could join its own
+  thread to know the node had really stopped; a Basecamp module being unloaded
+  has no equivalent, so "stopped" needs a definition that does not rely on
+  joining.
 
 ## Recommendation
 
@@ -427,17 +484,21 @@ flagged for Phase 0 came back clear:
 - `default-features = false` genuinely excludes systemd;
 - the runtime is a real start/stop API whose process-global concerns all live
   in the binary, not the library — the `radicle-signals` worry was misplaced;
-- the size cost is ~7 MB, and a spawned binary would cost comparably while
-  adding packaging, discovery and orphan-cleanup work.
+- the size cost is ~7 MB. The comparison against a spawned binary — that it
+  would cost comparably in size while adding packaging, discovery and
+  orphan-cleanup work — is *reasoned*, not measured: nobody built the
+  fallback. It is the one argument here that is not a command's output.
 
 Two things the plan should absorb before Phase 1:
 
 1. **The git path is a process-global `PATH` write, ordered before any thread
-   starts** — not a per-spawn wrapper, and not `GIT_EXEC_PATH`. There are five
+   starts** — not a per-spawn wrapper, and not `GIT_EXEC_PATH`. There are six
    bare-name spawn sites, two of which `env_clear()` down to `PATH`.
-2. **Socket path length is a first-class constraint on where `RAD_HOME` may
-   live**, with `RAD_SOCKET` as the deliberate escape hatch. Measure the
-   resolved path against 108 bytes and fail with a message that says so.
+2. **The socket path must be chosen independently of `RAD_HOME`, and be short
+   by construction.** This is not a caution to measure later: measured against
+   Basecamp's real dev-profile paths, the plan's "`RAD_HOME` → Basecamp's XDG
+   dir, socket follows the home" **already overshoots 108 bytes by 84**.
+   `RAD_SOCKET` is mandatory, not a reserve escape hatch. See §6.
 
 ## What the branch contains
 
