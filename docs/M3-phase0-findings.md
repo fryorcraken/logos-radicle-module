@@ -11,9 +11,17 @@ source citations are `file:line` into the crates as vendored in
 **Recommendation: in-process. The evidence supports it, and the one hint the
 plan flagged as a likely blocker turned out to be a false alarm.**
 
-The spike code is `radicle/rust-ffi/examples/probe_node_runtime.rs`, behind
-the `node-spike` cargo feature. It is not wired into the module — see
-"What the branch contains" at the end.
+The spike code is parked at `docs/M3-phase0-probe_node_runtime.rs.txt`. It is
+**not** a build target: the `node-spike` cargo feature that once gated it was
+removed before merge, because a default-off feature is not free under Nix — see
+"But 'compiles nothing extra' is not 'costs nothing'" in §4.
+
+It is kept rather than deleted because it encodes the *method*, not just the
+result: the exact `Runtime::init` argument shape, the caller-supplied
+`mpsc::sync_channel` the signal channel needs, the two-way shutdown sequence,
+and the `sun_path` length check. This file records what those proved; it does
+not record working code that re-proves them against a future `radicle-node`.
+Its header says how to restore the feature and re-run it.
 
 ## The five questions
 
@@ -264,11 +272,50 @@ the `.lgx` regardless. **In-process is not the expensive option here; running a
 node at all is.** That reframing is what makes §3's answer decisive rather than
 merely encouraging.
 
-**The default build is unaffected**, which is the property that keeps this
-branch safe to merge: rebuilt with no features, the archive is 54,072,958
-bytes against 54,073,164 before the change — a 206-byte difference that is
-build-path metadata, not code. `cargo tree -e normal -i radicle` in the default
-build prints a single `radicle v0.25.1` with one consumer, exactly as before.
+**The default build compiles nothing extra**: rebuilt with no features, the
+archive is 54,072,958 bytes against 54,073,164 before the change — a 206-byte
+difference that is build-path metadata, not code. `cargo tree -e normal -i
+radicle` in the default build prints a single `radicle v0.25.1` with one
+consumer, exactly as before.
+
+### But "compiles nothing extra" is not "costs nothing" — and that broke CI
+
+This section originally read "the default build is unaffected, which is the
+property that keeps this branch safe to merge". That was true of **cargo** and
+false of **Nix**, and the gap is worth recording, because every gate the spike
+ran was green while the build that actually ships was broken.
+
+`radicle/flake.nix` vendors the crate's dependencies through one fixed-output
+derivation with a pinned `hash`, so the Nix sandbox can build offline. **Cargo's
+vendoring is feature-blind: it vendors every entry in `Cargo.lock`, regardless
+of which features would enable them.** Adding two optional dependencies took the
+lock file from 208 packages to 319 — +111, of which 37 are the `gix-*` family —
+and `cargo tree` confirms *none* of those 111 are compiled by the default build.
+
+So the cost was not compilation, it was vendoring: every CI run and every
+developer's first build would download and store 111 crates for code nothing
+links. And because the lock changed, the pinned hash went stale and the Nix
+build failed outright:
+
+```text
+error: hash mismatch in fixed-output derivation '…-cargo-deps-vendor-staging.drv':
+         specified: sha256-sbh9xX8T/NaCibhw4tQfppkODZHTKW1qOEmFg7WEkwc=
+            got:    sha256-z1PVnyi8JdXz9igdgk6bVTV7udlmv6mH/h9X6v3c1jk=
+```
+
+**The fix was to drop the feature and the optional dependencies rather than to
+re-pin the hash.** Re-pinning would have worked and was the smaller diff, but it
+would have bought a permanent ~111-crate vendoring cost on every build, forever,
+for a spike that ships nothing. The findings above are the deliverable; the
+probe is kept as reference at
+`docs/M3-phase0-probe_node_runtime.rs.txt`, with instructions in its header for
+restoring the feature to re-run it.
+
+The general lesson, which is this repo's recurring one: **a dependency change
+can be free in one build system and expensive in another.** `cargo build`,
+`cargo clippy` and `cargo test` were all clean and all blind to this, because
+none of them reads `flake.nix`. When a change touches `Cargo.lock` at all, the
+gate that can see it is `nix build '.#checks.x86_64-linux.unit-tests'`.
 
 ## 5. The `git` path reaches the transport through the process's `PATH`, and nothing else
 
@@ -504,29 +551,42 @@ Two things the plan should absorb before Phase 1:
 
 Deliberately minimal, and **not wired into the shipped module**:
 
-- `radicle/rust-ffi/Cargo.toml` — a `node-spike` feature (default off) enabling
-  optional `radicle-node` (`default-features = false`) and `radicle-signals`.
-  The example is declared `required-features = ["node-spike"]`, so
-  `cargo build --all-targets` and `cargo clippy --all-targets` in the default
-  build never compile either crate.
-- `radicle/rust-ffi/examples/probe_node_runtime.rs` — the probe, following the
-  existing `probe_*` convention: an example, not a test, because standing up a
-  real node with real SQLite and a real socket is Phase 2 work and a flaky
-  `cargo test` here would say nothing about the `local*` path.
-- `Cargo.lock` — updated by resolving the optional dependency.
+- `docs/M3-phase0-probe_node_runtime.rs.txt` — the probe, parked as reference.
+  It was written as a cargo example (following the existing `probe_*`
+  convention: an example, not a test, because standing up a real node with real
+  SQLite and a real socket is Phase 2 work and a flaky `cargo test` here would
+  say nothing about the `local*` path). It is **not** in `examples/` now, and
+  the `.txt` suffix is load-bearing: cargo auto-discovers `examples/*.rs`, so a
+  `.rs` file there would have to compile, which would mean keeping
+  `radicle-node` in `Cargo.lock`.
 - This document, and the struck-through items in
   `docs/M3-embedded-node-plan.md`.
 
-Nothing in `src/` references `radicle-node`; `CMakeLists.txt` and `flake.nix`
-are untouched. **Deleting the feature and the example removes the spike
-entirely** — which is the right move once M3 commits, rather than letting a
-probe drift into looking like a supported entry point.
+**No manifest or lock-file changes ship.** `Cargo.toml` and `Cargo.lock` are
+byte-identical to `main`; nothing in `src/` references `radicle-node`; and
+`CMakeLists.txt` and `flake.nix` are untouched — including `flake.nix`'s
+vendor `hash`, which is the thing a lock-file change would have invalidated.
+
+The spike originally merged a `node-spike` feature and the optional
+dependencies, and that is what broke CI. The measurements in this document were
+all taken with that feature enabled; reproducing them means restoring it, per
+the probe header. What ships is the evidence, not the machinery that produced
+it.
 
 Gates on this branch, all green (`radicle/rust-ffi/`):
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --check` | clean |
-| `cargo clippy --all-targets -- -D warnings` | clean (never compiles `radicle-node`) |
-| `cargo clippy --all-targets --features node-spike -- -D warnings` | clean |
+| `cargo clippy --all-targets -- -D warnings` | clean |
 | `cargo test` | 51 passed, 0 failed, 0 ignored |
+
+The `--features node-spike` clippy run that this table used to list is gone
+with the feature. Note what the first version of this table missed: **all three
+of these commands were green on the branch that broke CI.** None of them reads
+`flake.nix`, so none could see the stale vendor hash. The gate that catches a
+`Cargo.lock` change is the core module's unit tests:
+
+```text
+cd radicle && nix build '.#checks.x86_64-linux.unit-tests' -L --out-link result-test
+```

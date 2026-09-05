@@ -1,11 +1,26 @@
 //! M3 Phase 0 spike: is `radicle-node`'s library target drivable in-process,
 //! or is it `main()`-shaped?
 //!
-//! Run with:
+//! **This file is reference material, not a build target.** It is parked here
+//! as `.txt`, outside `rust-ffi/examples/`, deliberately: cargo auto-discovers
+//! `examples/*.rs`, and the `node-spike` feature that once gated it has been
+//! removed. Keeping it compilable would mean keeping `radicle-node` in
+//! `Cargo.lock` — and Nix vendors every lock entry regardless of features, so
+//! that costs every build ~111 extra crates for code nothing links. See the
+//! "What running this cost, and why it is not in the lock file" section of
+//! `docs/M3-phase0-findings.md`.
+//!
+//! To re-run it, restore the `node-spike` feature and its two optional
+//! dependencies (`radicle-node`, `radicle-signals`) in `rust-ffi/Cargo.toml`,
+//! copy this file back to `rust-ffi/examples/probe_node_runtime.rs`, and:
 //!
 //! ```text
 //! cargo run --release --features node-spike --example probe_node_runtime
 //! ```
+//!
+//! Then revert the manifest and lock before pushing, or the vendor hash in
+//! `radicle/flake.nix` goes stale and the Nix build fails — which is exactly
+//! what happened on the PR that introduced this probe.
 //!
 //! It writes its throwaway home to the repo's gitignored `tmp/`. An optional
 //! first argument overrides that base directory, which is needed when the
@@ -14,11 +29,11 @@
 //! can exhaust that on its own. The probe measures the path and says so
 //! rather than failing obscurely. See `scratch()` below.
 //!
-//! **This is a spike, not a feature and not a test.** It is gated behind the
-//! `node-spike` cargo feature so the default build — the one CMake links and
-//! Nix packages — never sees `radicle-node` at all. Nothing in `src/` refers
-//! to it. See `docs/M3-phase0-findings.md` for what it established; delete
-//! both this file and the feature once M3 commits to an approach.
+//! **This is a spike, not a feature and not a test.** The default build — the
+//! one CMake links and Nix packages — never sees `radicle-node` at all, and
+//! now does not even carry it in `Cargo.lock`. Nothing in `src/` refers to it.
+//! See `docs/M3-phase0-findings.md` for what it established; delete this file
+//! once M3 commits to an approach.
 //!
 //! It is deliberately an *example* rather than a `#[test]`. A test that starts
 //! a real node binds a real control socket, opens real SQLite databases and
