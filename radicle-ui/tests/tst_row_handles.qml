@@ -148,13 +148,13 @@ Item {
         function test_issue_rows_are_addressable_one_per_row() {
             issues.load();
             wait(50);
-            check(issues, "threadRow", 2);
+            check(issues, "issueRow", 2);
         }
 
         function test_patch_rows_are_addressable_one_per_row() {
             patches.load();
             wait(50);
-            check(patches, "threadRow", 2);
+            check(patches, "patchRow", 2);
         }
 
         function test_commit_rows_are_addressable_one_per_row() {

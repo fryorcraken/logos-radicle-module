@@ -254,6 +254,14 @@ Item {
     readonly property bool canCreateIssue: repoPage.canCreateIssue
     readonly property bool newIssueOpen:   repoPage.newIssueOpen
 
+    /// The open thread's comment count, and the composer itself. Both are for
+    /// tests/ui/write.yaml; see ThreadView.qml for why each is needed and what
+    /// the count in particular proves. The count is the one assertion that can
+    /// distinguish a write that landed from one that only looked like it did.
+    readonly property int threadCommentCount: repoPage.threadCommentCount
+    readonly property var composerItem: repoPage.composerItem
+    readonly property var newIssueFormItem: repoPage.newIssueFormItem
+
     /// Open a repository object directly (deep links and testing).
     function openRepoExternal(repo) {
         if (repo && repo.rid) nav.openRepo(repo);
