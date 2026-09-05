@@ -202,16 +202,21 @@ LOGOS_TEST(list_branches_on_a_repo_with_no_refs_returns_an_empty_list_not_an_err
     LOGOS_ASSERT_EQ(out["items"].size(), size_t(0));
 }
 
-/// `localListBranches` derives its answer from the local backend's repo
-/// document using this same function, rather than adding a `listBranches`
-/// entry point to the FFI. That is only correct if the derivation depends on
-/// nothing but the document — no seed, no transport, no client state. Calling
-/// it directly on a parsed document is what pins that.
-LOGOS_TEST(branches_are_derived_from_the_document_alone_so_both_sources_agree)
+/// `branchesFrom` must depend on nothing but the document it is handed — no
+/// seed, no transport, no client state — so that `listBranches` is exactly
+/// "fetch the document, then filter it" and can be reasoned about in those two
+/// halves separately.
+///
+/// This test once justified itself by `localListBranches` sharing this
+/// function. It no longer does: local storage keeps each peer's branches under
+/// `refs/namespaces/<nid>/`, not in the canonical `refs.refs` this reads, so
+/// the local path has its own backend entry point. The property below is still
+/// worth pinning for the seed path on its own account.
+LOGOS_TEST(branches_are_derived_from_the_document_alone)
 {
     const auto doc = nlohmann::json::parse(kRepoJson);
 
-    // Straight from the document, exactly as localListBranches does it.
+    // Straight from the document.
     const auto direct = branchesFrom(doc);
 
     // Through the seed client, which fetches the same document first.
@@ -221,16 +226,16 @@ LOGOS_TEST(branches_are_derived_from_the_document_alone_so_both_sources_agree)
     client.setTransport(seed.transport());
     const auto viaSeed = client.listBranches("rad:zTEST");
 
-    // Byte-identical: a view must render either source without branching, and
-    // a branch picker is no exception.
+    // Byte-identical: fetching the document changes nothing about how it is
+    // filtered.
     LOGOS_ASSERT_EQ(direct.dump(), viaSeed.dump());
 }
 
 LOGOS_TEST(branches_from_passes_an_error_document_through_untouched)
 {
-    // localListBranches relies on this: it hands the local backend's reply
-    // straight in, and an error must stay an error rather than becoming an
-    // empty branch list that would render as "this repo has no branches".
+    // An error must stay an error rather than becoming an empty branch list,
+    // which would render as "this repo has no branches" — a wrong answer that
+    // looks like a valid one.
     const auto err = makeError("repository not found locally");
     LOGOS_ASSERT_TRUE(isError(branchesFrom(err)));
     LOGOS_ASSERT_EQ(branchesFrom(err)["error"].get<std::string>(),

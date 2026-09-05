@@ -251,16 +251,22 @@ std::string RadicleImpl::localListBranches(const std::string& rid)
 {
     if (!local().available()) return localUnavailable();
 
-    // Derived from the repo document rather than added to the FFI surface,
-    // exactly as `SeedClient::listBranches` derives it from `getRepo`. The
-    // local backend already returns `refs.refs` in the same shape, so a
-    // dedicated Rust entry point would be a second implementation of one
-    // filter — and a second place for the two sources to drift apart.
-    const auto repo = nlohmann::json::parse(localReader().getRepo(rid), nullptr, false);
-    if (repo.is_discarded()) return dump(radicle::makeError("malformed reply from local storage"));
-    if (radicle::isError(repo)) return dump(repo);
-
-    return dump(radicle::branchesFrom(repo));
+    // This used to derive the list from `getRepo`'s `refs.refs`, exactly as
+    // `SeedClient::listBranches` does, on the reasoning that one filter over
+    // one shape leaves the two sources no room to drift. That reasoning
+    // assumed the two sources were reporting the same thing. They are not:
+    // `refs.refs` is the *canonical* `refs/heads/*`, which in local storage
+    // holds a single delegate-consensus ref, while every peer's branches —
+    // including this node's own — live under `refs/namespaces/<nid>/`. The
+    // derived version therefore reported exactly one branch for every
+    // repository on the machine.
+    //
+    // The namespaced refs cannot just be folded into `refs.refs` instead:
+    // `resolveSha` reads that same map to turn a name into a commit, so
+    // widening it would change what an unqualified branch name resolves to.
+    // Branches get their own reply from the local backend; `refs.refs` keeps
+    // its canonical meaning. See `local::list_branches` for the shape.
+    return localReader().listBranches(rid);
 }
 
 std::string RadicleImpl::localGetTree(const std::string& rid, const std::string& sha,
