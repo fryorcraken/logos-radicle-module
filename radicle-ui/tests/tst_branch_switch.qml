@@ -232,4 +232,97 @@ Item {
         }
         return null;
     }
+
+    // -------------------------------------------------------------------
+    // SourceTab.loadTree()'s branch guard, against a DEFERRED fake.
+    //
+    // The BranchSwitch suite above replies synchronously, so every GetTree
+    // started under one branch is also answered before the next branch's
+    // request can begin — the false path (a reply for the OLD branch
+    // arriving after the switch to a NEW branch has already fetched and
+    // painted) can never actually happen there, the same masking
+    // tst_sync_epoch.qml's own header documents for syncEpoch. This section
+    // holds GetTree replies until the test delivers them, so both branches'
+    // requests can be in flight at once and delivered out of order.
+    //
+    // loadTree() used to capture only wantRid, not wantBranch, on the theory
+    // that RepoView.onBranchChanged's source.reset() (which clears
+    // treeCache before the new branch's request goes out) made a stale
+    // branch's reply harmless. Confirmed NOT true: reset() only stops a
+    // stale reply from being served FROM THE CACHE on a later click — it
+    // does nothing about a reply already in flight when the branch changes,
+    // which still ran the "paint this tree" side of the callback because
+    // rid alone matched.
+    // -------------------------------------------------------------------
+
+    QtObject {
+        id: deferredTreeApp
+        property var pendingByBranch: ({})
+        function call(method, args, onOk, onFail) {
+            if (method === "GetTree") {
+                pendingByBranch[args[1]] = onOk;
+            } else {
+                onOk({ items: [], hasMore: false });
+            }
+        }
+        // Different entry counts per branch — not the same reply for every
+        // input — so the assertions below can tell "dev's tree" from "main's
+        // tree" instead of both looking like "some tree, count unknown".
+        function deliver(forBranch, n) {
+            var cb = pendingByBranch[forBranch];
+            if (!cb) return false;
+            delete pendingByBranch[forBranch];
+            var list = [];
+            for (var i = 0; i < n; i++)
+                list.push({ name: forBranch + "-" + i, kind: "blob", path: forBranch + "/" + i });
+            cb({ entries: list });
+            return true;
+        }
+    }
+
+    Ui.SourceTab {
+        id: deferredTree
+        anchors.fill: parent
+        visible: false
+        app: deferredTreeApp
+        rid: "rad:zTEST"
+        branch: "main"
+    }
+
+    TestCase {
+        name: "SourceTabLoadTreeBranchGuard"
+        when: windowShown
+
+        function init() {
+            deferredTreeApp.pendingByBranch = ({});
+            deferredTree.rid = "rad:zTEST";
+            deferredTree.branch = "main";
+            deferredTree.reset();
+        }
+
+        function test_a_stale_branch_reply_does_not_overwrite_the_new_branchs_tree() {
+            deferredTree.load(); // issues GetTree for "main"
+            verify(deferredTreeApp.pendingByBranch["main"] !== undefined,
+                   "expected main's GetTree in flight");
+
+            // Mirrors RepoView.onBranchChanged: reset() clears state/caches,
+            // then a fresh load() fires for the new branch — while main's
+            // request is still outstanding underneath.
+            deferredTree.reset();
+            deferredTree.branch = "dev";
+            deferredTree.load(); // issues GetTree for "dev"
+            verify(deferredTreeApp.pendingByBranch["dev"] !== undefined,
+                   "expected dev's GetTree in flight");
+
+            verify(deferredTreeApp.deliver("dev", 3));
+            compare(deferredTree.entryCount, 3, "dev's tree painted");
+
+            // main's stale reply lands afterwards.
+            verify(deferredTreeApp.deliver("main", 2));
+
+            compare(deferredTree.entryCount, 3,
+                    "a stale reply for the branch the user left must not repaint the tree " +
+                    "(would be 2 — main's count — if it leaked through)");
+        }
+    }
 }
