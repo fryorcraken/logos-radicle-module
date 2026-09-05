@@ -28,6 +28,7 @@ logos_test(
     TEST_SOURCES
         main.cpp
         test_seed_client.cpp
+        test_http_client.cpp
         test_local_store.cpp
         test_local_reader.cpp
         test_local_writer.cpp

@@ -47,6 +47,15 @@ HttpResponse httpGet(const std::string& url, int timeoutMs)
 
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
+        // The deadline timer and reply->finished() are two independently
+        // scheduled Qt events: a reply that completes at (almost) the same
+        // moment the deadline elapses can still have this callback run
+        // afterwards, because nothing guarantees finished() is processed
+        // first. isGenuineTimeout() is the guard — only abort (and only
+        // report a timeout) when the reply has not already finished. Without
+        // it, a request that actually succeeded could be reported as timed
+        // out and its body discarded.
+        if (!isGenuineTimeout(reply->isFinished())) return;
         timedOut = true;
         reply->abort();          // triggers finished(), which quits the loop
     });
@@ -59,18 +68,38 @@ HttpResponse httpGet(const std::string& url, int timeoutMs)
     const QByteArray body = reply->readAll();
     out.body.assign(body.constData(), static_cast<size_t>(body.size()));
 
-    if (timedOut) {
-        out.error = "request timed out after " + std::to_string(timeoutMs) + "ms";
-    } else if (reply->error() != QNetworkReply::NoError) {
-        out.error = reply->errorString().toStdString();
-    } else if (out.status < 200 || out.status >= 300) {
-        out.error = "HTTP " + std::to_string(out.status);
-    } else {
-        out.ok = true;
-    }
+    HttpOutcomeInputs in;
+    in.timedOut = timedOut;
+    in.networkErrorPresent = reply->error() != QNetworkReply::NoError;
+    in.networkErrorString = reply->errorString().toStdString();
+    in.status = out.status;
+    in.timeoutMs = timeoutMs;
+    applyHttpOutcome(out, in);
 
     reply->deleteLater();
     return out;
+}
+
+bool isGenuineTimeout(bool replyAlreadyFinished)
+{
+    // If the reply had already finished by the time the deadline timer's
+    // callback ran, the timer lost the race and there is nothing to time
+    // out — the reply's own outcome (success or a real network error)
+    // already stands and must not be overwritten.
+    return !replyAlreadyFinished;
+}
+
+void applyHttpOutcome(HttpResponse& out, const HttpOutcomeInputs& in)
+{
+    if (in.timedOut) {
+        out.error = "request timed out after " + std::to_string(in.timeoutMs) + "ms";
+    } else if (in.networkErrorPresent) {
+        out.error = in.networkErrorString;
+    } else if (in.status < 200 || in.status >= 300) {
+        out.error = "HTTP " + std::to_string(in.status);
+    } else {
+        out.ok = true;
+    }
 }
 
 } // namespace radicle
