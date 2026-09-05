@@ -83,12 +83,11 @@ paging, file tree, blob viewer, README, sync-to-cache, commits with diffs,
 issues and patches with full discussion), branch switching, sync staleness
 detection, and the same surface again against the local node.
 
-**Writing has begun, local node only.** Two write actions are on `main` and
-covered end to end: commenting on an issue, and creating one. Both are gated on
-`getCapabilities().canWriteLocal`, a real probe — a profile can exist while its
-key stays locked, so **gate every write affordance on `canWriteLocal`, never on
-`localAvailable`**. Closing/reopening, labels, assignees, patch review and
-commenting on a patch are deliberately deferred; see
+**Writing has begun, local node only** — commenting on an issue and creating
+one, covered end to end. **Gate every write affordance on
+`getCapabilities().canWriteLocal`, never on `localAvailable`**: a profile can
+exist while its key stays locked, and a compose box that cannot be submitted
+loses whatever the user typed. What else is deferred, and why, is in
 [`docs/writes.md`](docs/writes.md).
 
 **Both modules carry the same version, and `ci.yml` asserts it** — a bump
