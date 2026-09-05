@@ -96,8 +96,8 @@ feature that was written and never wired in, and `-D warnings` is what turns
 - **`guarded()` was never called.** Its doc comment says it is a soundness
   guard, not error handling — a Rust panic unwinding through an `extern "C"`
   frame is undefined behaviour. Every `radicle_local_*` function called
-  `to_c_string(...)` directly, so nothing was guarded. All twelve read entry
-  points now route through it, and `tests/panic_guard.rs` drives the real
+  `to_c_string(...)` directly, so nothing was guarded. Every read entry point
+  now routes through it, and `tests/panic_guard.rs` drives the real
   boundary with pathological inputs (junk RIDs, traversal-shaped paths,
   `i64::MAX`/`i64::MIN` paging), asserting parseable JSON comes back every
   time. If a change drops `guarded` from a call site, the panic aborts the
