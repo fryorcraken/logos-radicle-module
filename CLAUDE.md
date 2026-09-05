@@ -19,13 +19,13 @@ and `M3-embedded-node-plan.md` (not started).
 
 ### Keeping this file true
 
-This file was once 1594 lines, about a third of it a session-by-session
-changelog. It was deleted, not because the writing was bad but because it had
-quietly become **false**: it claimed a milestone was unmerged that had shipped
-two releases earlier, quoted a test count off by more than half, and named a
-"next step" long since done. Every one of those was true on the day it was
-written. That is the failure mode to design against — not carelessness, but
-accuracy with a short half-life.
+This file was once more than twice its current length, about a third of it a
+session-by-session changelog. That third was deleted, not because the writing
+was bad but because it had quietly become **false**: it claimed a milestone was
+unmerged that had shipped two releases earlier, quoted a test count off by more
+than half, and named a "next step" long since done. Every one of those was true
+on the day it was written. That is the failure mode to design against — not
+carelessness, but accuracy with a short half-life.
 
 **Do not write down anything a command can answer.** Version numbers, test
 counts, step counts, timings, what is released, what is merged, how many files
@@ -649,9 +649,9 @@ covers that, and runs first in CI.
 | QML component tests | every PR | one component's own behaviour |
 | End-to-end spec (sitometres) | every PR + push to main | the wiring: does the module load, does the replica connect, does data arrive |
 
-The end-to-end job takes about three minutes warm. A PR from a fork, or the
-first run after `BASECAMP_REV` changes, pays roughly nine minutes because the
-Nix store cache is cold.
+The end-to-end job is much slower on a cold Nix store cache — which is what a
+fork PR gets, and what every PR gets on the first run after `BASECAMP_REV`
+changes.
 
 ## The test layers
 
@@ -701,11 +701,11 @@ hardcoded to `browse.yaml`, so three specs sat in the tree running nowhere. If
 you add a spec, add it to that matrix, or it is decoration. `write` is the odd
 one out: it needs a signable key, so the job seeds a throwaway profile for the
 run and hands it over as `RAD_HOME` — see [`docs/writes.md`](docs/writes.md).
-`ci.yml`'s schema check
-already globs `tests/ui/*.yaml` and needs no change. It builds Basecamp from source —
-the inspector-enabled bundle is not in the public binary cache — but a warm Nix
-store cache brings that to about three minutes. A fork PR, or the first run
-after `BASECAMP_REV` changes, pays roughly nine minutes.
+`ci.yml`'s schema check already globs `tests/ui/*.yaml` and needs no change.
+It builds Basecamp from source — the inspector-enabled bundle is not in the
+public binary cache — but a warm Nix store cache brings that down
+substantially. A fork PR, or the first run after `BASECAMP_REV` changes, pays
+for a cold cache.
 
 ### Does CI use `lgs`?
 
