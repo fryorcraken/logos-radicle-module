@@ -88,8 +88,17 @@ char* radicle_local_can_write(const char* home);
 ///
 /// `announced` false with an `id` present is a SUCCESSFUL write that the local
 /// node has not yet told the network about — an ordinary state, not a failure.
-char* radicle_local_comment_on_issue(const char* home, const char* rid,
-                                     const char* id, const char* body);
+///
+/// `socket` is the node control socket, used only for that announce step, and
+/// is a parameter for the same reason `home` is: `LocalStore` owns the
+/// resolution, and a second opinion on the Rust side is precisely how the read
+/// path came to probe `$XDG_RUNTIME_DIR/radicle.sock` while a write announced
+/// to `<home>/node/control.sock`. Because an unannounced write is legitimately
+/// not an error, that disagreement surfaced nowhere. Empty falls back to
+/// `<home>/node/control.sock`.
+char* radicle_local_comment_on_issue(const char* home, const char* socket,
+                                     const char* rid, const char* id,
+                                     const char* body);
 
 /// Opens a new issue. `description` becomes its root comment.
 ///
@@ -97,8 +106,11 @@ char* radicle_local_comment_on_issue(const char* home, const char* rid,
 ///
 /// The `id` is the ISSUE's id, not an entry id — a caller passes it straight
 /// to `radicle_local_get_issue` to open what was just created.
-char* radicle_local_create_issue(const char* home, const char* rid,
-                                 const char* title, const char* description);
+///
+/// `socket` as above.
+char* radicle_local_create_issue(const char* home, const char* socket,
+                                 const char* rid, const char* title,
+                                 const char* description);
 
 // ---------------------------------------------------------------------------
 // Environment.

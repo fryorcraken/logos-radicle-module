@@ -14,6 +14,7 @@ import "../src/qml" as Ui
  * it stored, and refuses specific inputs with specific messages.
  */
 Item {
+    id: harness
     width: 640
     height: 800
 
@@ -55,16 +56,32 @@ Item {
         }
     }
 
+    // The DEFAULT capabilities: mode "attach", which IS startable.
+    //
+    // This fixture used to say `modeStartable: false`, and that single line was
+    // load-bearing in the worst way — it was the only reason the honesty test
+    // below passed. The panel derived its startable SET from that boolean, so a
+    // fixture pinning it false produced the right annotation by accident; in
+    // the state every real first-time user is in (attach, startable) the same
+    // derivation offered Embedded with no caveat at all.
+    //
+    // So the fixture now describes the default state, and the honesty test is
+    // an assertion about the code rather than about the fixture.
+    readonly property var defaultCaps: ({
+        mode: "attach",
+        modeStartable: true,
+        startableModes: ["attach", "seedOnly"],
+        modeUnavailableReason: "",
+        gitFound: true,
+        gitPath: "/usr/bin/git",
+        gitVersion: "git version 2.55.0",
+        gitConfigured: false
+    })
+
     Ui.SettingsPanel {
         id: panel
         width: 600
-        caps: ({ modeStartable: false,
-                 modeUnavailableReason: "Embedded mode is selected but this build "
-                                      + "cannot start a node yet.",
-                 gitFound: true,
-                 gitPath: "/usr/bin/git",
-                 gitVersion: "git version 2.55.0",
-                 gitConfigured: false })
+        caps: harness.defaultCaps
         fetchSettings: function (cb) { fakeBackend.get(cb); }
         saveSetting: function (k, v, cb) { fakeBackend.set(k, v, cb); }
     }
@@ -94,13 +111,11 @@ Item {
             // state into whichever test runs next — QtTest orders by name, so
             // the victim is arbitrary and the failure reads as unrelated. This
             // was a real failure here before the restore was added.
-            panel.caps = ({ modeStartable: false,
-                            modeUnavailableReason: "Embedded mode is selected but "
-                                                 + "this build cannot start a node yet.",
-                            gitFound: true,
-                            gitPath: "/usr/bin/git",
-                            gitVersion: "git version 2.55.0",
-                            gitConfigured: false });
+            //
+            // Restored to the DEFAULT capabilities — the attach/startable state
+            // a first-time user is in — rather than to a hand-picked shape that
+            // happens to make the assertions below easy.
+            panel.caps = harness.defaultCaps;
             panel.reload();
         }
 
@@ -195,26 +210,87 @@ Item {
         name: "ModePicker"
         when: windowShown
 
+        // Same reason as the SettingsPanel case's: a test that rewrites `caps`
+        // must not leave the next one running against it. QtTest orders by
+        // name, so the victim would be arbitrary and the failure would read as
+        // unrelated to the test that caused it.
+        function init() {
+            panel.caps = harness.defaultCaps;
+        }
+
         function test_a_non_startable_mode_says_so_in_its_own_row() {
-            // Embedded is offered (it is a real, persisted choice) but the row
-            // must state that it cannot run yet. Selectable-and-silent is the
-            // failure this asserts against.
+            // The honesty guarantee, asserted IN THE DEFAULT STATE — mode
+            // "attach", which is startable. That is the whole point: the panel
+            // used to derive its startable set from `caps.modeStartable`, a
+            // fact about the CURRENT mode, so with attach selected the set
+            // became all three and Embedded was offered with no caveat at all.
+            // The user selected it, it persisted, and only then did a warning
+            // appear — a control that silently does nothing.
+            //
+            // This test passed before only because the fixture hardcoded
+            // `modeStartable: false`, which is the same-answer-for-every-input
+            // trap in fixture form. With the fixture describing the real
+            // default, the assertion is about the panel again.
+            compare(panel.caps.mode, "attach", "the default state, on purpose");
+            compare(panel.caps.modeStartable, true,
+                    "attach IS startable — which is exactly why deriving the "
+                    + "set from this boolean cannot work");
+
             var picker = findChild(panel, "modePicker");
             verify(picker !== null);
 
             var note = findChild(picker, "modeUnavailable_embedded");
             verify(note !== null, "the embedded row must carry an availability note");
-            verify(note.visible, "and it must be visible when not startable");
+            verify(note.visible,
+                   "Embedded must be annotated as unavailable BEFORE it is "
+                   + "chosen, not after");
         }
 
         function test_a_startable_mode_carries_no_unavailability_note() {
             // The other half: if every row showed the note, the note would say
-            // nothing. Attach is startable, so its note must be hidden.
+            // nothing. Attach and Seed-only are startable, so their notes stay
+            // hidden while Embedded's shows — one fixture, three different
+            // answers, which is what makes the annotation meaningful.
             var picker = findChild(panel, "modePicker");
-            var note = findChild(picker, "modeUnavailable_attach");
-            verify(note !== null);
-            verify(!note.visible,
+            verify(!findChild(picker, "modeUnavailable_attach").visible,
                    "a startable mode must not be annotated as unavailable");
+            verify(!findChild(picker, "modeUnavailable_seedOnly").visible,
+                   "nor the other startable one");
+            verify(findChild(picker, "modeUnavailable_embedded").visible,
+                   "while the unstartable one is");
+        }
+
+        function test_the_annotation_follows_the_startable_set_not_the_selection() {
+            // Input-dependent on the field that actually decides this. Handing
+            // the panel a build in which Embedded IS startable must move the
+            // annotation, with nothing about the selected mode changing — which
+            // a panel still deriving from `modeStartable` could not do.
+            var picker = findChild(panel, "modePicker");
+            verify(findChild(picker, "modeUnavailable_embedded").visible);
+
+            panel.caps = ({ mode: "attach",
+                            modeStartable: true,
+                            startableModes: ["attach", "embedded", "seedOnly"],
+                            modeUnavailableReason: "",
+                            gitFound: true, gitPath: "/usr/bin/git",
+                            gitVersion: "git version 2.55.0",
+                            gitConfigured: false });
+
+            verify(!findChild(picker, "modeUnavailable_embedded").visible,
+                   "when the build can start Embedded, the caveat must go");
+
+            // And the reverse, so this cannot pass by never showing the note.
+            panel.caps = ({ mode: "attach",
+                            modeStartable: true,
+                            startableModes: ["seedOnly"],
+                            modeUnavailableReason: "",
+                            gitFound: true, gitPath: "/usr/bin/git",
+                            gitVersion: "git version 2.55.0",
+                            gitConfigured: false });
+
+            verify(findChild(picker, "modeUnavailable_attach").visible,
+                   "a build that cannot start Attach must say so on the Attach "
+                   + "row, even though Attach is the mode in force");
         }
 
         function test_clicking_a_mode_row_chooses_it() {

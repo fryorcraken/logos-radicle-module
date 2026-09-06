@@ -107,7 +107,9 @@ public:
      *
      *     // --- which node, and whether this build can run it --------------
      *     "mode":"attach"|"embedded"|"seedOnly",
-     *     "modeStartable":bool,    // false for embedded until Phase 2
+     *     "modeStartable":bool,    // can the CURRENT mode start? false for
+     *                              //   embedded until Phase 2
+     *     "startableModes":["attach","seedOnly"], // which modes can, at all
      *     "modeUnavailableReason":"...", // "" when modeStartable
      *     "radHome":"<path>",      // the home actually resolved
      *     "radSocket":"<path>",    // the control socket actually resolved
@@ -126,6 +128,21 @@ public:
      * A view MUST gate every write affordance on it rather than on
      * `localAvailable`: offering a compose box that cannot be submitted loses
      * whatever the user typed into it.
+     *
+     * **A picker MUST consume `startableModes` rather than deriving a set from
+     * `modeStartable`.** The two answer different questions: the boolean is
+     * about the mode in force, the array is about the build. In Attach — the
+     * default state, and where every first-time user is — the boolean is true,
+     * from which nothing follows about Embedded. A UI that derived the set from
+     * it therefore offered Embedded with no caveat, and the user discovered it
+     * could not run only after selecting it and having that persisted. Neither
+     * field is redundant; a view generally needs both.
+     *
+     * **A non-startable mode is inert, not aliased.** `mode:"embedded"` reports
+     * an empty `radHome` and `localAvailable:false` — it does NOT fall through
+     * to whatever Attach would have resolved. Reporting the attached profile's
+     * home under an "Embedded" badge would be the identity confusion this whole
+     * design exists to prevent; see `storeForSettings` in radicle_impl.cpp.
      *
      * **A view MUST always show `mode` and `nodeId`.** The failure this design
      * is most exposed to is a user believing they are operating as their
@@ -441,6 +458,23 @@ private:
      */
     void setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local,
                                 radicle::SettingsStore settings);
+
+    /**
+     * Adopt whatever the settings persist onto the freshly-built dependencies.
+     *
+     * Shared by the constructor and `setDependenciesForTest` so a test builds
+     * the same instance a restart would, rather than a differently-configured
+     * one that happens to be close.
+     *
+     * This exists because of a test that could not fail. `setDependenciesForTest`
+     * replaces `m_seed` *after* the constructor already adopted the persisted
+     * seed, so the injected client came back blank and the test compensated by
+     * calling `setSetting("remoteSeed", ...)` itself — and then asserted the
+     * value it had just written. Deleting the constructor's adoption entirely
+     * left it green, which is the one property a regression test must not have.
+     * Re-running adoption here means the assertion is about the adoption again.
+     */
+    void adoptPersistedSettings();
 
     // Instance-scoped dependencies. These used to be function-local `static`s
     // in radicle_impl.cpp — built once per process on first use and never

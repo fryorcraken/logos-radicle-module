@@ -7,10 +7,12 @@
 #include "local_store.h"
 #include "seed_client.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <utility>
 
 namespace radicle {
@@ -83,13 +85,25 @@ bool SettingsStore::isKnownMode(const std::string& mode)
     return mode == kModeAttach || mode == kModeEmbedded || mode == kModeSeedOnly;
 }
 
-bool SettingsStore::modeIsStartable(const std::string& mode)
+std::vector<std::string> SettingsStore::startableModes()
 {
     // Embedded is selectable and persisted, but its node lifecycle is Phase 2.
     // Reporting it as not-startable is what lets the UI say so plainly instead
     // of offering a control that silently does nothing — the same reasoning
     // that makes SourceToggle hide the local segment rather than disable it.
-    return mode == kModeAttach || mode == kModeSeedOnly;
+    //
+    // THIS list is the single source of truth: `modeIsStartable` is derived
+    // from it below rather than repeating the condition, so the boolean and the
+    // set cannot drift into disagreeing, and Phase 2 adds `kModeEmbedded` here
+    // and nowhere else.
+    return {kModeAttach, kModeSeedOnly};
+}
+
+bool SettingsStore::modeIsStartable(const std::string& mode)
+{
+    for (const auto& m : startableModes())
+        if (m == mode) return true;
+    return false;
 }
 
 nlohmann::json SettingsStore::load() const
@@ -131,10 +145,38 @@ bool SettingsStore::save(const nlohmann::json& settings) const
     if (m_path.empty()) return false;
     makeParentDirs(m_path);
 
-    std::ofstream out(m_path, std::ios::trunc);
-    if (!out) return false;
-    out << settings.dump(2) << "\n";
-    return out.good();
+    // Write to a temporary beside the target, then rename over it.
+    //
+    // The obvious version — open the real file with `trunc` and write — has a
+    // window in which the file exists and is empty or half-written. Two
+    // Basecamp profiles do not share this file, but one profile's module and a
+    // second instance of it can (the repo has hit exactly that with two
+    // Basecamps over one ~/.radicle), and a crash mid-write leaves the same
+    // wreckage. The failure it produces is quiet: `load()` treats an
+    // unparseable file as "use defaults", so the user's mode, home and seed
+    // silently revert with nothing reported.
+    //
+    // `rename(2)` within one directory is atomic, so a reader sees either the
+    // whole old file or the whole new one and never a partial third thing.
+    // Same directory matters — across filesystems rename fails rather than
+    // silently copying.
+    const std::string temp = m_path + ".tmp";
+    {
+        std::ofstream out(temp, std::ios::trunc);
+        if (!out) return false;
+        out << settings.dump(2) << "\n";
+        out.flush();
+        if (!out.good()) {
+            ::unlink(temp.c_str());
+            return false;
+        }
+    } // closed here: the rename must not race the stream's own flush-on-close.
+
+    if (::rename(temp.c_str(), m_path.c_str()) != 0) {
+        ::unlink(temp.c_str());
+        return false;
+    }
+    return true;
 }
 
 nlohmann::json SettingsStore::all() const

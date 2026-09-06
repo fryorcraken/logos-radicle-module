@@ -51,10 +51,28 @@ namespace {
 /// has chosen to browse a seed over HTTP has said they do not want this module
 /// touching a local profile, and silently reading one anyway would be the
 /// module ignoring an explicit choice.
+///
+/// **Embedded yields no home either, and for a sharper reason.** Phase 2 owns
+/// the Basecamp-managed home an embedded node runs against; until it exists,
+/// the only two behaviours available are "inert" and "quietly whatever Attach
+/// would have done". The second is not a lesser version of the feature — it is
+/// the exact failure this milestone is justified by. Embedded's own blurb
+/// promises "a SEPARATE identity from any node you already run"; falling
+/// through to the environment gives the user their ATTACHED node's DID in the
+/// chrome, their attached repositories, and writes enabled against them, all
+/// under a badge reading "Embedded". A mode that lies about which identity is
+/// in use is worse than one that does nothing, so this does nothing, visibly:
+/// `localAvailable` is false and `modeUnavailableReason` says why.
+///
+/// Note this is NOT a switch with a default: every mode is named, so adding a
+/// fourth is a compile-time visit to this function rather than a silent
+/// inheritance of Attach's behaviour. That inheritance is what went wrong here.
 radicle::LocalStore storeForSettings(const radicle::SettingsStore& settings)
 {
     const auto mode = settings.get(radicle::SettingsStore::kKeyMode);
-    if (mode == radicle::SettingsStore::kModeSeedOnly)
+
+    if (mode == radicle::SettingsStore::kModeSeedOnly
+        || mode == radicle::SettingsStore::kModeEmbedded)
         return radicle::LocalStore{radicle::NodePaths{}};
 
     return radicle::LocalStore{radicle::resolvePathsFromEnv(
@@ -83,12 +101,11 @@ RadicleImpl::RadicleImpl()
     // which home it points at. That ordering is the whole of mode selection.
     , m_local(storeForSettings(m_settings))
     , m_localReader(m_local.home())
-    , m_localWriter(m_local.home())
+    // The writer takes the store's SOCKET as well as its home: the announce
+    // step needs it, and the store is the one place that resolves it.
+    , m_localWriter(m_local.home(), m_local.socket())
 {
-    // A persisted seed must survive a restart — that is the cheapest proof the
-    // settings store works, and it is behaviour users could see missing before.
-    const auto seed = m_settings.get(radicle::SettingsStore::kKeyRemoteSeed);
-    if (!seed.empty()) m_seed.setSeedUrl(seed);
+    adoptPersistedSettings();
 
     // The one process-global write, done here and nowhere else: before any
     // thread exists, once. See radicle_ffi.h for why PATH is the only channel
@@ -103,6 +120,14 @@ RadicleImpl::RadicleImpl()
     if (!gitPath.empty()) radicle::LocalReader::applyGitPath(gitPath);
 }
 
+void RadicleImpl::adoptPersistedSettings()
+{
+    // A persisted seed must survive a restart — that is the cheapest proof the
+    // settings store works, and it is behaviour users could see missing before.
+    const auto seed = m_settings.get(radicle::SettingsStore::kKeyRemoteSeed);
+    if (!seed.empty()) m_seed.setSeedUrl(seed);
+}
+
 void RadicleImpl::setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local,
                                          radicle::SettingsStore settings)
 {
@@ -115,7 +140,14 @@ void RadicleImpl::setDependenciesForTest(radicle::SeedClient seed, radicle::Loca
     // its reader/writer follow, not keep reading whatever home the
     // zero-arg constructor resolved first.
     m_localReader = radicle::LocalReader(m_local.home());
-    m_localWriter = radicle::LocalWriter(m_local.home());
+    m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
+
+    // And adoption runs again over the injected settings and seed client, so
+    // the instance a test holds is the one a restart would produce. Without
+    // this the constructor's adoption was overwritten by the injection and the
+    // only test covering it had to set the value it then asserted — a test that
+    // stayed green with the adoption deleted. See adoptPersistedSettings().
+    adoptPersistedSettings();
 }
 
 namespace {
@@ -187,12 +219,27 @@ std::string RadicleImpl::getCapabilities()
     // an empty repository list that looks like a node with nothing in it.
     const auto mode = m_settings.get(radicle::SettingsStore::kKeyMode);
     const bool startable = radicle::SettingsStore::modeIsStartable(mode);
+
+    // The startable SET, not just a boolean about the mode in force. A picker
+    // draws three rows and has to annotate each one *before* it is chosen; the
+    // boolean cannot answer that, because in Attach — the default — it is true
+    // and says nothing whatever about Embedded. Deriving the set from it left
+    // the Embedded row uncaveated in exactly the state every new user starts
+    // in. See SettingsStore::startableModes().
+    nlohmann::json startableModes = nlohmann::json::array();
+    for (const auto& m : radicle::SettingsStore::startableModes())
+        startableModes.push_back(m);
+
+    // Phrased from the mode's own name rather than hardcoding "Embedded".
+    // Today embedded is the only unstartable mode, so the two read identically
+    // — but a hardcoded sentence becomes silently wrong the moment that stops
+    // being true, and nothing would report it.
     std::string modeReason;
     if (!startable) {
-        modeReason = "Embedded mode is selected but this build cannot start a "
-                     "node yet — the embedded daemon arrives in a later "
-                     "milestone. Browsing a seed still works; switch to Attach "
-                     "to use a Radicle node you already run.";
+        modeReason = "the '" + mode + "' mode is selected but this build cannot "
+                     "start that node yet — it arrives in a later milestone. "
+                     "Browsing a seed still works; switch to Attach to use a "
+                     "Radicle node you already run.";
     }
 
     // The git preflight. Not cosmetic: Radicle spawns git to read and write
@@ -215,6 +262,7 @@ std::string RadicleImpl::getCapabilities()
 
         {"mode",                   mode},
         {"modeStartable",          startable},
+        {"startableModes",         startableModes},
         {"modeUnavailableReason",  modeReason},
         {"radHome",                m_local.home()},
         {"radSocket",              m_local.socket()},
@@ -255,7 +303,7 @@ std::string RadicleImpl::setSetting(const std::string& key, const std::string& v
         || key == radicle::SettingsStore::kKeyRadSocket) {
         m_local = storeForSettings(m_settings);
         m_localReader = radicle::LocalReader(m_local.home());
-        m_localWriter = radicle::LocalWriter(m_local.home());
+        m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
         // Which node is in use is exactly what this event exists to announce.
         localAvailabilityChanged(getCapabilities());
     }

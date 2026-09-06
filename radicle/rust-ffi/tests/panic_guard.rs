@@ -223,12 +223,18 @@ fn the_write_entry_points_are_guarded_too() {
     let junk = c("not-an-oid-at-all");
     let traversal = c("../../../etc/passwd");
     let body = c("hello");
+    // The socket argument gets the same pathological treatment as every other
+    // string here. It reaches `Node::new` and then a connect(2), so a value
+    // over the 108-byte sun_path cap, or one shaped like a traversal, must come
+    // back as JSON rather than as a panic crossing the ABI.
+    let overlong_socket = c(&"/run/user/1000/".to_string().repeat(20));
 
     assert_is_error_json(
         "comment_on_issue(junk id)",
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_comment_on_issue(
                 home.as_ptr(),
+                traversal.as_ptr(),
                 rid.as_ptr(),
                 junk.as_ptr(),
                 body.as_ptr(),
@@ -241,6 +247,7 @@ fn the_write_entry_points_are_guarded_too() {
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_comment_on_issue(
                 home.as_ptr(),
+                overlong_socket.as_ptr(),
                 traversal.as_ptr(),
                 traversal.as_ptr(),
                 body.as_ptr(),
@@ -258,6 +265,7 @@ fn the_write_entry_points_are_guarded_too() {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
             )
         }),
     );
@@ -267,6 +275,7 @@ fn the_write_entry_points_are_guarded_too() {
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_create_issue(
                 home.as_ptr(),
+                overlong_socket.as_ptr(),
                 rid.as_ptr(),
                 body.as_ptr(),
                 body.as_ptr(),
@@ -284,6 +293,7 @@ fn the_write_entry_points_are_guarded_too() {
             radicle_local_ffi::radicle_local_create_issue(
                 home.as_ptr(),
                 traversal.as_ptr(),
+                traversal.as_ptr(),
                 multiline.as_ptr(),
                 body.as_ptr(),
             )
@@ -294,6 +304,7 @@ fn the_write_entry_points_are_guarded_too() {
         "create_issue(all NULL)",
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_create_issue(
+                std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),

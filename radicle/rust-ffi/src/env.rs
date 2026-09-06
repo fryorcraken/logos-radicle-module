@@ -97,6 +97,24 @@ fn probe_inner(candidate: &str) -> Result<(String, String), String> {
         })?
     } else {
         let p = PathBuf::from(candidate);
+
+        // Refused before the existence check, because for a relative path the
+        // two steps below disagree about what they are talking about:
+        // `p.exists()` resolves it against the process's CURRENT DIRECTORY,
+        // while `Command::new` resolves a bare or relative name against PATH.
+        // So `git` validates as whatever `./git` happens to be and then runs
+        // whatever PATH finds — validating one binary and executing another,
+        // which is the exact confusion this whole preflight exists to remove.
+        // The current directory of a Basecamp-launched module is not something
+        // the user chose or can see, either.
+        if !p.is_absolute() {
+            return Err(format!(
+                "the git path must be absolute, got: {candidate} — a relative \
+                 path is resolved against a working directory this module does \
+                 not control, so it would be validated and run differently"
+            ));
+        }
+
         if !p.exists() {
             // Naming the path is the whole point: an explicit setting that
             // silently fell back to PATH would report success for a path that

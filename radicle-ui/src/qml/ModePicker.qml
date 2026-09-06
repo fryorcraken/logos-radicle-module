@@ -28,10 +28,27 @@ Column {
 
     /// The currently persisted mode.
     property string current: "attach"
-    /// Modes this build can actually start. Anything not listed is offered
-    /// but annotated as unavailable.
-    property var startableModes: ["attach", "seedOnly"]
+
+    /// Modes this build can actually start. Anything not listed is offered but
+    /// annotated as unavailable.
+    ///
+    /// **This must come from `getCapabilities().startableModes`, never from
+    /// `modeStartable`.** The latter is a fact about the mode in force; this is
+    /// a fact about the build, and one cannot be derived from the other. A
+    /// caller that tried shipped a picker which, in the default Attach state,
+    /// offered Embedded with no caveat at all — see SettingsPanel.qml.
+    ///
+    /// The default is deliberately conservative rather than "the two that work
+    /// today": a caller that forgets to wire this gets over-annotation, which
+    /// is visible, instead of under-annotation, which is exactly the bug.
+    property var startableModes: []
+
     /// Why the non-startable modes are not startable, from getCapabilities().
+    ///
+    /// Empty is normal and expected: `modeUnavailableReason` is populated only
+    /// when the mode IN FORCE cannot start, so in the default state there is no
+    /// sentence to show and the row falls back to its own generic wording. That
+    /// fallback is why the note is still honest before anything is selected.
     property string unavailableReason: ""
 
     signal modeChosen(string mode)
@@ -107,16 +124,26 @@ Column {
                     wrapMode: Text.WordWrap
                 }
 
-                // The honesty requirement: a mode that is chosen but cannot
-                // run says so here, in the row, rather than being discovered
-                // as "nothing happened" after selecting it.
+                // The honesty requirement: a mode that cannot run says so here,
+                // in the row, BEFORE it is chosen — not discovered afterwards
+                // as "nothing happened".
+                //
+                // Note this is keyed on `startable`, a per-row fact, and not on
+                // whether this row is the selected one. That is the whole fix:
+                // a user has to be able to see the caveat while deciding.
                 Text {
                     objectName: "modeUnavailable_" + parent.parent.modelData.key
                     visible: !parent.parent.startable
                     width: content.width
+                    // The specific sentence from capabilities is only populated
+                    // for the mode in force, so the generic wording is what the
+                    // common case — an unstartable mode nobody has selected —
+                    // actually shows. It has to stand on its own for that
+                    // reason, rather than being a placeholder.
                     text: picker.unavailableReason !== ""
                           ? picker.unavailableReason
-                          : "Not available in this version yet."
+                          : "This version cannot start this mode yet — choosing "
+                            + "it will not start a node."
                     color: Theme.warn
                     font.pixelSize: Theme.fontSm
                     wrapMode: Text.WordWrap

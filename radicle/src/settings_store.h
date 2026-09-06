@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <string>
+#include <vector>
 
 namespace radicle {
 
@@ -90,7 +91,28 @@ public:
     /// this returns false for it. Kept as a function rather than a constant so
     /// the place that has to change when Phase 2 lands is one line, and so the
     /// UI can ask rather than hardcoding its own copy of the answer.
+    ///
+    /// **This answers a question about ONE mode.** A picker offering three rows
+    /// needs `startableModes()` instead — see the warning there.
     static bool modeIsStartable(const std::string& mode);
+
+    /// Every mode this build can actually start, in the order they are offered.
+    ///
+    /// **This exists because `modeIsStartable(currentMode)` cannot substitute
+    /// for it, and a UI that tried to derive one from the other shipped a real
+    /// bug.** The boolean is a fact about the mode in force; a picker needs the
+    /// fact for every row it draws. In Attach — the default, and where every
+    /// first-time user is — the boolean is true, from which nothing at all
+    /// follows about Embedded. Deriving the set from it therefore annotated
+    /// nothing, and the user learned Embedded could not run only *after*
+    /// selecting it and having the choice persisted: a control that silently
+    /// does nothing, which is precisely what `ModePicker` promises never to be.
+    ///
+    /// So the set is reported directly and consumed directly. When Phase 2
+    /// lands its daemon this and `modeIsStartable` change together — they are
+    /// two views of one fact, and keeping them beside each other is what makes
+    /// that obvious.
+    static std::vector<std::string> startableModes();
 
     /// True when `mode` is one of the three known modes.
     static bool isKnownMode(const std::string& mode);

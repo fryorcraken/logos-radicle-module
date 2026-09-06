@@ -139,18 +139,6 @@ fn open_repo_for_write(home: &str, rid: &str) -> Result<Repository, String> {
         .map_err(|e| format!("repository {rid} not found in local storage: {e}"))
 }
 
-/// Tell the node that this repository's refs moved, so it announces them.
-///
-/// Returns `None` on success, or the reason it could not, which the caller
-/// reports **alongside a successful write rather than instead of one**. A COB
-/// that is written locally but not yet announced is an ordinary Radicle state
-/// — the node announces on next start — so reporting it as a failed write
-/// would be wrong and would invite the user to post the same comment twice.
-///
-/// `Handle::announce_refs_for` is one control-socket round-trip. The richer
-/// `Node::announce` subscribes to an event stream and blocks until seeds
-/// acknowledge or a timeout expires, which is the wrong shape for a
-/// synchronous FFI call that a UI thread is waiting on.
 /// Which control socket to talk to when announcing.
 ///
 /// This used to be `<home>/node/control.sock`, unconditionally — which is a
@@ -160,30 +148,58 @@ fn open_repo_for_write(home: &str, rid: &str) -> Result<Repository, String> {
 /// because, correctly, an unannounced write is *not* an error: the node
 /// announces on next start. That makes a wrong socket path invisible.
 ///
-/// It has to honour `RAD_SOCKET` because the socket genuinely cannot live under
-/// the home in this module's own layout. Phase 0 measured Basecamp's
-/// per-profile data dir at 166 bytes — 192 with the node's socket suffix —
-/// against a `sun_path` cap of 108. So a relocated socket is the normal case
-/// here, not an exotic one, and "derive it from the home" is wrong by default
-/// rather than merely incomplete.
+/// The socket genuinely cannot live under the home in this module's own
+/// layout. Phase 0 measured Basecamp's per-profile data dir at 166 bytes — 192
+/// with the node's socket suffix — against a `sun_path` cap of 108. So a
+/// relocated socket is the normal case here, not an exotic one, and "derive it
+/// from the home" is wrong by default rather than merely incomplete.
 ///
-/// Taken as a parameter rather than read from the environment inside, so the
-/// choice is a pure function that a test can drive. An empty value is treated
-/// as unset — an exported-but-empty `RAD_SOCKET` is ordinary shell behaviour,
-/// and honouring it literally would produce an empty path whose connection
-/// error names nothing at all.
-pub fn control_socket_path(home: &str, rad_socket: Option<&str>) -> std::path::PathBuf {
-    match rad_socket {
+/// **`socket` comes from the caller, exactly as `home` does, and is NOT read
+/// from the environment here.** A first attempt at this bug read `RAD_SOCKET`
+/// inside, which fixed only the case where the environment happened to carry
+/// the answer. It does not: the C++ side (`LocalStore::resolveSocket`) also
+/// honours the module's own `radSocket` setting and *prefers*
+/// `$XDG_RUNTIME_DIR/radicle-<profile>.sock`, and neither of those is exported
+/// anywhere. So on any machine with a runtime dir the read path probed one
+/// socket while a write announced to another — a disagreement by default,
+/// invisible because an unannounced write is legitimately not an error.
+///
+/// One resolver, one answer, passed down: the same rule that already makes the
+/// home a parameter rather than something each side re-derives.
+///
+/// An empty value is treated as unset — an exported-but-empty `RAD_SOCKET` is
+/// ordinary shell behaviour, and honouring it literally would produce an empty
+/// path whose connection error names nothing at all. The `<home>/node/
+/// control.sock` fallback remains for a caller that resolved nothing, because
+/// that is where a hand-run `rad` node puts its socket.
+pub fn control_socket_path(home: &str, socket: Option<&str>) -> std::path::PathBuf {
+    match socket {
         Some(s) if !s.is_empty() => std::path::PathBuf::from(s),
         _ => std::path::Path::new(home).join("node").join("control.sock"),
     }
 }
 
-fn announce(home: &str, rid: &str) -> Option<String> {
+/// Tell the node that this repository's refs moved, so it announces them.
+///
+/// Returns `None` on success, or the reason it could not, which the caller
+/// reports **alongside a successful write rather than instead of one**. A COB
+/// that is written locally but not yet announced is an ordinary Radicle state
+/// — the node announces on next start — so reporting it as a failed write
+/// would be wrong and would invite the user to post the same comment twice.
+///
+/// That tolerance is also what makes the socket path load-bearing rather than
+/// incidental: because a failure here is legitimately not an error, announcing
+/// to the wrong socket produces no signal anywhere. See `control_socket_path`.
+///
+/// `Handle::announce_refs_for` is one control-socket round-trip. The richer
+/// `Node::announce` subscribes to an event stream and blocks until seeds
+/// acknowledge or a timeout expires, which is the wrong shape for a
+/// synchronous FFI call that a UI thread is waiting on.
+fn announce(home: &str, socket: &str, rid: &str) -> Option<String> {
     use radicle::node::Handle as _;
 
     let id = parse_rid(rid).ok()?;
-    let socket = control_socket_path(home, std::env::var("RAD_SOCKET").ok().as_deref());
+    let socket = control_socket_path(home, Some(socket));
     let mut node = radicle::node::Node::new(&socket);
 
     let nid = match node.nid() {
@@ -204,15 +220,24 @@ fn announce(home: &str, rid: &str) -> Option<String> {
 /// argument the view cannot supply and cannot display would be dead API, and
 /// threaded replies are a UI feature first.
 ///
+/// `socket` is the control socket the caller resolved — see
+/// `control_socket_path` for why it is a parameter and not an environment read.
+///
 /// -> `{"id":"<entry id>","announced":bool[,"announceError":"…"]}`
-pub fn comment_on_issue(home: &str, rid: &str, id: &str, body: &str) -> String {
-    match comment_on_issue_inner(home, rid, id, body) {
+pub fn comment_on_issue(home: &str, socket: &str, rid: &str, id: &str, body: &str) -> String {
+    match comment_on_issue_inner(home, socket, rid, id, body) {
         Ok(v) => v,
         Err(e) => error(e),
     }
 }
 
-fn comment_on_issue_inner(home: &str, rid: &str, id: &str, body: &str) -> Result<String, String> {
+fn comment_on_issue_inner(
+    home: &str,
+    socket: &str,
+    rid: &str,
+    id: &str,
+    body: &str,
+) -> Result<String, String> {
     // Refused here rather than by the store, which accepts an empty body
     // happily and produces a comment nothing renders. The UI disables its
     // button too; this is the backstop, because the UI is not the only caller.
@@ -245,7 +270,7 @@ fn comment_on_issue_inner(home: &str, rid: &str, id: &str, body: &str) -> Result
             .map_err(|e| format!("could not post the comment: {e}"))?
     };
 
-    let announce_error = announce(home, rid);
+    let announce_error = announce(home, socket, rid);
 
     Ok(json!({
         "id": entry.to_string(),
@@ -271,8 +296,8 @@ fn comment_on_issue_inner(home: &str, rid: &str, id: &str, body: &str) -> Result
 ///
 /// Note `id` here is the **issue's** id, not an entry id — it is what a view
 /// passes straight back to `localGetIssue` to open what was just created.
-pub fn create_issue(home: &str, rid: &str, title: &str, description: &str) -> String {
-    match create_issue_inner(home, rid, title, description) {
+pub fn create_issue(home: &str, socket: &str, rid: &str, title: &str, description: &str) -> String {
+    match create_issue_inner(home, socket, rid, title, description) {
         Ok(v) => v,
         Err(e) => error(e),
     }
@@ -280,6 +305,7 @@ pub fn create_issue(home: &str, rid: &str, title: &str, description: &str) -> St
 
 fn create_issue_inner(
     home: &str,
+    socket: &str,
     rid: &str,
     title: &str,
     description: &str,
@@ -322,7 +348,7 @@ fn create_issue_inner(
         issue.id().to_string()
     };
 
-    let announce_error = announce(home, rid);
+    let announce_error = announce(home, socket, rid);
 
     Ok(json!({
         "id": id,

@@ -97,12 +97,24 @@ Item {
             objectName: "modePicker"
             Layout.fillWidth: true
             current: panel.currentMode
-            // A mode is startable unless capabilities say otherwise. Derived
-            // from the backend rather than hardcoded here, so when Phase 2
-            // lands the daemon this UI needs no change at all.
-            startableModes: panel.caps.modeStartable === false
-                            ? ["attach", "seedOnly"]
-                            : ["attach", "embedded", "seedOnly"]
+            // Consumed straight from capabilities. This used to be DERIVED from
+            // `caps.modeStartable`, and that was a real bug rather than a
+            // stylistic one: the boolean answers "can the mode in force start?"
+            // and the picker needs "which modes can start at all?". In Attach —
+            // the default, and where every first-time user is — the boolean is
+            // true, so the derivation produced all three modes and the Embedded
+            // row carried no caveat whatever. The user selected it, it
+            // persisted, and only THEN did a warning appear: a control that
+            // silently does nothing, which the design explicitly refuses.
+            //
+            // The fallback is the conservative one — if capabilities have not
+            // arrived yet, claim nothing is startable rather than claiming
+            // everything is. An over-cautious caveat on a row that turns out to
+            // work is a much cheaper mistake than a missing one on a row that
+            // does not.
+            startableModes: panel.caps.startableModes !== undefined
+                            ? panel.caps.startableModes
+                            : []
             unavailableReason: panel.caps.modeUnavailableReason || ""
             onModeChosen: function (mode) { panel.apply("mode", mode); }
         }

@@ -552,6 +552,111 @@ LOGOS_TEST(capabilities_report_the_active_mode_and_whether_it_can_start)
     LOGOS_ASSERT_FALSE(caps["modeUnavailableReason"].get<std::string>().empty());
 }
 
+LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_one)
+{
+    // The honesty guarantee the mode picker depends on. `modeStartable` answers
+    // a question about the CURRENT mode; a picker offering three rows needs the
+    // answer for all three, and deriving one from the other is not possible:
+    // in Attach mode (the default, and where a first-time user always is)
+    // `modeStartable` is true, which says nothing at all about Embedded.
+    //
+    // Before this field existed the UI derived the set from that boolean, so in
+    // the default state the Embedded row carried no caveat — the user selected
+    // it, it persisted, and only THEN did a warning appear. That is exactly the
+    // "control that silently does nothing" the design refuses to ship.
+    //
+    // Asserted in the DEFAULT (attach) state on purpose: the buggy derivation
+    // was correct in every other state, so a test that first switched to
+    // embedded would have passed against it.
+    ScopedRadHome home("caps-startable-set");
+    const auto path = scratchSettingsPath("caps-startable-set");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    impl.setSetting("mode", "attach");
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("attach"));
+    LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
+
+    LOGOS_ASSERT_TRUE(caps.contains("startableModes"));
+    LOGOS_ASSERT_TRUE(caps["startableModes"].is_array());
+
+    const auto startable = caps["startableModes"];
+    const auto has = [&startable](const char* mode) {
+        for (const auto& m : startable)
+            if (m.is_string() && m.get<std::string>() == mode) return true;
+        return false;
+    };
+
+    LOGOS_ASSERT_TRUE(has("attach"));
+    LOGOS_ASSERT_TRUE(has("seedOnly"));
+    // The whole point: embedded is absent even while the current mode IS
+    // startable, so a picker can annotate that row before it is chosen.
+    LOGOS_ASSERT_FALSE(has("embedded"));
+}
+
+LOGOS_TEST(the_startable_set_does_not_change_with_the_selected_mode)
+{
+    // Input-dependent in the direction that matters: the set is a fact about
+    // the BUILD, so selecting the unstartable mode must not make it startable
+    // and must not drop a mode that still is. A capabilities call that returned
+    // "everything except the current mode when the current mode is bad" would
+    // pass the test above and fail here.
+    ScopedRadHome home("caps-startable-stable");
+    const auto path = scratchSettingsPath("caps-startable-stable");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    impl.setSetting("mode", "attach");
+    const auto inAttach = parse(impl.getCapabilities())["startableModes"];
+
+    impl.setSetting("mode", "embedded");
+    const auto inEmbedded = parse(impl.getCapabilities())["startableModes"];
+
+    // Asserted non-empty first, or this whole test passes vacuously against a
+    // build with no `startableModes` at all: two absent values compare equal.
+    LOGOS_ASSERT_TRUE(inAttach.is_array());
+    LOGOS_ASSERT_FALSE(inAttach.empty());
+    LOGOS_ASSERT_EQ(inAttach.dump(), inEmbedded.dump());
+}
+
+LOGOS_TEST(embedded_mode_does_not_alias_the_attached_profile)
+{
+    // The identity-confusion failure this whole milestone exists to prevent,
+    // arriving through the mode picker itself.
+    //
+    // Embedded promises "a SEPARATE identity from any node you already run".
+    // Before this, `storeForSettings` special-cased only seedOnly, so embedded
+    // fell through to the same env resolution as attach — a user who selected
+    // it got the Local toggle, their ATTACHED node's DID in the chrome, their
+    // attached repositories, and writes enabled against them, all under a badge
+    // reading "Embedded".
+    //
+    // Phase 2 owns the embedded home. Until it lands the correct behaviour is
+    // INERT, not aliased: no home, so localAvailable is false and nothing of
+    // the attached profile leaks through.
+    ScopedRadHome home("caps-embedded-inert");
+    home.makeStorage();
+
+    const auto path = scratchSettingsPath("embedded-inert");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    // Attach first, to prove the profile IS visible from this environment —
+    // without this the assertions below would pass against a module that could
+    // never see any profile at all.
+    impl.setSetting("mode", "attach");
+    const auto attached = parse(impl.getCapabilities());
+    LOGOS_ASSERT_EQ(attached["radHome"].get<std::string>(), home.dir);
+    LOGOS_ASSERT_TRUE(attached["localAvailable"].get<bool>());
+
+    impl.setSetting("mode", "embedded");
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
+    LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());
+}
+
 LOGOS_TEST(capabilities_report_the_resolved_home_and_socket)
 {
     ScopedRadHome home("caps-paths");
@@ -621,13 +726,44 @@ LOGOS_TEST(a_persisted_seed_is_adopted_when_the_module_starts)
     }
 
     // A fresh RadicleImpl over the same settings file — which is what a
-    // restart is, at this layer.
+    // restart is, at this layer. Nothing below writes the seed: adoption is
+    // what is under test, so the test must not perform it.
+    //
+    // This test used to call setSetting() with the very value it then asserted,
+    // because setDependenciesForTest replaced the seed client after the
+    // constructor had adopted. It therefore passed with the adoption deleted
+    // outright — which is the one thing a regression test must never do. The
+    // fix was in the code, not here: adoption is now a named method both the
+    // constructor and the injection run, so this asserts the real path.
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
-    // setDependenciesForTest replaces the seed client, so adopt explicitly the
-    // way the production constructor does, then assert the value took.
-    impl.setSetting(SettingsStore::kKeyRemoteSeed, "https://persisted.example.test");
 
     const auto caps = parse(impl.getCapabilities());
     LOGOS_ASSERT_EQ(caps["remoteSeed"].get<std::string>(),
                     std::string("https://persisted.example.test"));
+}
+
+LOGOS_TEST(a_seed_is_adopted_from_the_settings_it_was_given_not_from_a_fixed_default)
+{
+    // Input-dependent, which is what makes the test above mean something: two
+    // settings files carrying two different seeds must produce two differently
+    // configured modules. An adoption step that hardcoded a URL, or one that
+    // read the wrong store, passes the single-value test and fails this.
+    ScopedRadHome home("seed-persist-two");
+
+    const auto pathA = scratchSettingsPath("seed-persist-a");
+    const auto pathB = scratchSettingsPath("seed-persist-b");
+    {
+        SettingsStore a{pathA};
+        a.set(SettingsStore::kKeyRemoteSeed, "https://alpha.example.test");
+        SettingsStore b{pathB};
+        b.set(SettingsStore::kKeyRemoteSeed, "https://beta.example.test");
+    }
+
+    auto implA = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{pathA});
+    auto implB = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{pathB});
+
+    LOGOS_ASSERT_EQ(parse(implA.getCapabilities())["remoteSeed"].get<std::string>(),
+                    std::string("https://alpha.example.test"));
+    LOGOS_ASSERT_EQ(parse(implB.getCapabilities())["remoteSeed"].get<std::string>(),
+                    std::string("https://beta.example.test"));
 }
