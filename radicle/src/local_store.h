@@ -136,6 +136,13 @@ public:
     /// The node control socket path this store would probe.
     const std::string& socket() const { return m_paths.socket; }
 
+    /// Empty when the resolved paths are usable; otherwise a sentence naming
+    /// what is wrong — most usefully, a socket path over the 108-byte cap,
+    /// with the path, its length and the limit all named. Surfaced through
+    /// `getCapabilities().pathsProblem` because it is the difference between
+    /// "the node is not running" and "we could never have talked to it".
+    const std::string& pathsProblem() const { return m_paths.problem; }
+
     /// True when `home()` looks like a real Radicle profile (has storage/).
     bool available() const { return m_available; }
 

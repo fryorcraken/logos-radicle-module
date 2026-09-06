@@ -30,6 +30,24 @@ QString RadicleUiBackend::setRemoteSeed(QString seedUrl)
     return result;
 }
 
+QString RadicleUiBackend::getSettings()
+{
+    return modules().radicle.getSettings();
+}
+
+QString RadicleUiBackend::setSetting(QString key, QString value)
+{
+    const QString result = modules().radicle.setSetting(key, value);
+    // Unlike a comment or an issue, a settings write CAN change what the
+    // module can do: switching mode repoints it at a different Radicle home
+    // (or none), which moves localAvailable, canWriteLocal, the NID and the
+    // resolved paths all at once. Refreshing here is what keeps the source
+    // toggle and the identity display from showing the previous mode's
+    // answers — the specific confusion this milestone exists to prevent.
+    setCapabilities(modules().radicle.getCapabilities());
+    return result;
+}
+
 // --- remote ----------------------------------------------------------------
 
 QString RadicleUiBackend::remoteListRepos(QString query, int page, int perPage)

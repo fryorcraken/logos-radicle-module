@@ -103,4 +103,19 @@ std::string LocalReader::getPatch(const std::string& rid, const std::string& id)
     return take(radicle_local_get_patch(m_home.c_str(), rid.c_str(), id.c_str()));
 }
 
+std::string LocalReader::nodeId()
+{
+    return take(radicle_local_node_id(m_home.c_str()));
+}
+
+std::string LocalReader::gitProbe(const std::string& candidate)
+{
+    return take(radicle_git_probe(candidate.c_str()));
+}
+
+std::string LocalReader::applyGitPath(const std::string& configured)
+{
+    return take(radicle_apply_git_path(configured.c_str()));
+}
+
 } // namespace radicle

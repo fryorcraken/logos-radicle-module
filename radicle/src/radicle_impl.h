@@ -7,6 +7,7 @@
 #include "local_writer.h"
 #include "logos_module_context.h"
 #include "seed_client.h"
+#include "settings_store.h"
 
 /**
  * @brief Radicle core module — all Radicle business logic lives here.
@@ -102,7 +103,22 @@ public:
      *     "remoteSeed":"<url>",    // seed currently proxied to
      *     "remoteReachable":bool,  // last remote call succeeded
      *     "remoteApiVersion":"6.2.0",
-     *     "nodeId":"z6Mk..."}      // local NID, empty when unavailable
+     *     "nodeId":"did:key:z6Mk...", // local NID, empty when unavailable
+     *
+     *     // --- which node, and whether this build can run it --------------
+     *     "mode":"attach"|"embedded"|"seedOnly",
+     *     "modeStartable":bool,    // false for embedded until Phase 2
+     *     "modeUnavailableReason":"...", // "" when modeStartable
+     *     "radHome":"<path>",      // the home actually resolved
+     *     "radSocket":"<path>",    // the control socket actually resolved
+     *     "pathsProblem":"...",    // e.g. the socket is over the 108-byte cap
+     *
+     *     // --- the git preflight -------------------------------------------
+     *     "gitFound":bool,
+     *     "gitPath":"/usr/bin/git",       // resolved absolute path
+     *     "gitVersion":"git version 2.55.0",
+     *     "gitConfigured":bool,           // an explicit path, vs auto-detected
+     *     "gitProblem":"..."}             // "" when gitFound
      *
      * `canWriteLocal` is a real probe for a usable signing key, not a build
      * flag. It is false — with a reason naming the fix — when the node's key
@@ -110,8 +126,58 @@ public:
      * A view MUST gate every write affordance on it rather than on
      * `localAvailable`: offering a compose box that cannot be submitted loses
      * whatever the user typed into it.
+     *
+     * **A view MUST always show `mode` and `nodeId`.** The failure this design
+     * is most exposed to is a user believing they are operating as their
+     * existing DID when they are operating as a different one — at which point
+     * their repositories are "missing" for a reason nothing on screen explains.
+     * `nodeId` is read from the public half of the keystore, so it is present
+     * even when the key is locked and `canWriteLocal` is false.
+     *
+     * `gitFound` is not cosmetic. Radicle spawns `git` to read and write
+     * repository storage — six separate bare-name spawn sites across the crate
+     * and the node — so no git means no writes, and it is the most likely
+     * "works on my machine" failure in a sandboxed bundle.
      */
     std::string getCapabilities();
+
+    /**
+     * Every persisted module setting, with defaults filled in.
+     *
+     * -> {"mode":"attach"|"embedded"|"seedOnly",
+     *     "radHome":"...",     // "" means resolve from RAD_HOME/HOME
+     *     "radSocket":"...",   // "" means $XDG_RUNTIME_DIR, else under the home
+     *     "gitPath":"...",     // "" means find git on PATH
+     *     "remoteSeed":"..."}  // "" means the built-in default seed
+     *
+     * Source-neutral: these describe the module, not either data source.
+     */
+    std::string getSettings();
+
+    /**
+     * Persist one setting, validating it first.
+     *
+     * -> the full settings object (as `getSettings`), or `{"error":"..."}`.
+     * Returning everything means a caller re-renders from one reply rather
+     * than holding a stale view of the keys it did not just change.
+     *
+     * **Validation happens on write, not on use.** A git path is checked by
+     * running its `--version`; a socket path is checked against the 108-byte
+     * `sun_path` cap; a mode must be one of the three known ones. Refusing
+     * here — while the user is still looking at the field they typed into —
+     * is the whole point: discovering a bad git path at the moment someone
+     * pushes their first patch is the deferred-failure shape this module
+     * keeps being bitten by.
+     *
+     * **`gitPath` takes effect on restart, not immediately.** Radicle resolves
+     * `git` by bare name from six spawn sites, two of which clear the
+     * environment down to `PATH`, so the only channel that reaches all of them
+     * is this process's own `PATH` — a process-global write that is only safe
+     * before any thread starts. The setting is therefore stored and validated
+     * now and applied at the next module init. A UI must say so rather than
+     * implying the change is live.
+     */
+    std::string setSetting(const std::string& key, const std::string& value);
 
     /**
      * Point the remote proxy at a different seed (e.g.
@@ -373,12 +439,29 @@ private:
      * `public:`), so it carries no risk of colliding with the generator's
      * constructor heuristic.
      */
-    void setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local);
+    void setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local,
+                                radicle::SettingsStore settings);
 
     // Instance-scoped dependencies. These used to be function-local `static`s
     // in radicle_impl.cpp — built once per process on first use and never
     // rebuilt, which is what made this class untestable (see the constructor
     // doc comment above). Now every RadicleImpl owns its own.
+    //
+    // DECLARATION ORDER IS LOAD-BEARING and is not alphabetical or historical.
+    // C++ initialises members in declaration order regardless of how the
+    // constructor's init list is written, and there is a real dependency chain
+    // here: the settings decide which Radicle home applies (that is what mode
+    // selection *is*), the home decides what LocalStore points at, and
+    // LocalReader/LocalWriter are built from that store's home and have no
+    // default constructor. So settings must come first and the reader/writer
+    // last. Reordering these will not fail obviously — it fails as a
+    // "no matching function for call to LocalReader::LocalReader()" from a
+    // constructor that looks correct.
+    //
+    // m_settings is instance-scoped for the same reason as the rest, and
+    // additionally because two Basecamp profiles must not share one file —
+    // see settings_store.h.
+    radicle::SettingsStore m_settings;
     radicle::SeedClient m_seed;
     radicle::LocalStore m_local;
     radicle::LocalReader m_localReader;

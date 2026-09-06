@@ -19,6 +19,12 @@ class RadicleUi
     SLOT(QString getCapabilities())
     SLOT(QString listKnownSeeds())
     SLOT(QString setRemoteSeed(QString seedUrl))
+    // Module settings: which node mode is active, where its home and socket
+    // are, and where git lives. Source-neutral because they describe the
+    // module rather than either data source. setSetting validates on write and
+    // returns the whole settings object, so a view re-renders from one reply.
+    SLOT(QString getSettings())
+    SLOT(QString setSetting(QString key, QString value))
 
     // --- remote: proxied to a public seed, no local node needed ------------
     SLOT(QString remoteListRepos(QString query, int page, int perPage))

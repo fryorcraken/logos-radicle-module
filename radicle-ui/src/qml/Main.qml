@@ -104,6 +104,12 @@ Item {
         sourceState.select(next);
     }
 
+    /// Whether the settings pane is showing. Deliberately NOT part of NavState:
+    /// settings overlay the current screen rather than replacing it in the
+    /// navigation stack, so closing them returns you to exactly where you were
+    /// without a back-stack entry that has nothing to go back to.
+    property bool settingsOpen: false
+
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
         if (r.ok) caps = r.data;
@@ -206,6 +212,24 @@ Item {
         }, function () {});
     }
 
+    /// Source-neutral call that reports failures to its callback rather than
+    /// swallowing them.
+    ///
+    /// `callPlain` drops errors on purpose — a failed capabilities probe should
+    /// not paint the status strip red on every poll. A settings write is the
+    /// opposite: the refusal IS the useful result, since it names the path that
+    /// was tried or the limit that was exceeded, and a user who typed something
+    /// wrong must see why rather than watch the field silently revert.
+    function callSettings(method, args, onDone) {
+        if (!backend) return;
+        logos.watch(backend[method].apply(backend, args), function (text) {
+            var r = R.parse(text);
+            onDone(r.ok ? r.data : { error: r.error });
+        }, function (err) {
+            onDone({ error: String(err) });
+        });
+    }
+
     // ---- test-observable state -------------------------------------------
     // Read by the UI tests (radicle-ui/tests/ui/*.yaml). Cheap bindings that
     // say what the app believes is true, so assertions do not have to infer it
@@ -231,6 +255,16 @@ Item {
     readonly property string sourceName:  source
     readonly property bool   hasLocal:    localAvailable
     readonly property string capsRaw:     capsJson
+
+    // Which node, and which identity. Asserted from outside because the
+    // failure worth catching is the UI showing one mode while the backend is
+    // in another — which a screenshot cannot distinguish from working.
+    readonly property string nodeMode:      caps.mode || ""
+    readonly property bool   modeStartable: caps.modeStartable !== false
+    readonly property string nodeIdentity:  caps.nodeId || ""
+    readonly property string nodeHome:      caps.radHome || ""
+    readonly property bool   gitFound:      caps.gitFound === true
+    readonly property bool   settingsShown: settingsOpen
 
     // Sync button: its three idle labels ("Download All" / "Re-sync" /
     // "Update") plus the in-progress percentage are the whole of that
@@ -340,6 +374,21 @@ Item {
                         onSourceChosen: function (next) { root.setSource(next); }
                     }
 
+                    // Which node, and which identity — always visible, never
+                    // behind a settings pane. See NodeStatus.qml: the failure
+                    // this milestone exists to prevent is a user operating as
+                    // an identity they did not expect and reading the
+                    // consequence as missing repositories.
+                    NodeStatus {
+                        objectName: "nodeStatus"
+                        mode:         root.caps.mode || "attach"
+                        startable:    root.caps.modeStartable !== false
+                        modeReason:   root.caps.modeUnavailableReason || ""
+                        nodeId:       root.caps.nodeId || ""
+                        radHome:      root.caps.radHome || ""
+                        pathsProblem: root.caps.pathsProblem || ""
+                    }
+
                     SeedPicker {
                         id: seedPicker
                         objectName: "seedPicker"
@@ -373,6 +422,30 @@ Item {
                         Layout.preferredWidth: 260
                         placeholder: "Search repositories"
                         onAccepted: repoList.reload()
+                    }
+
+                    Rectangle {
+                        Layout.preferredHeight: Theme.rowHeightSm
+                        Layout.preferredWidth: settingsLabel.implicitWidth + Theme.gap * 2
+                        radius: Theme.radiusSm
+                        color: root.settingsOpen ? Theme.accentSoft : Theme.bg
+                        border.width: 1
+                        border.color: Theme.border
+
+                        Text {
+                            id: settingsLabel
+                            anchors.centerIn: parent
+                            text: "Settings"
+                            color: root.settingsOpen ? Theme.text : Theme.textDim
+                            font.pixelSize: Theme.fontSm
+                        }
+
+                        MouseArea {
+                            objectName: "settingsToggle"
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.settingsOpen = !root.settingsOpen
+                        }
                     }
                 }
 
@@ -410,6 +483,32 @@ Item {
                     repo: nav.repo
                     active: nav.view === "repo"
                     onBack: nav.back()
+                }
+            }
+        }
+
+        // Settings overlay the body rather than replacing a StackLayout page:
+        // they are orthogonal to where you are in the repository navigation,
+        // and putting them in the stack would mean "back" from settings had to
+        // decide which screen to restore.
+        Rectangle {
+            objectName: "settingsPane"
+            visible: root.settingsOpen
+            anchors.fill: parent
+            color: Theme.bg
+
+            SettingsPanel {
+                id: settingsPanel
+                objectName: "settingsPanel"
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width - Theme.gapLg * 2, 640)
+                caps: root.caps
+                fetchSettings: function (cb) {
+                    root.callPlain("getSettings", [], cb);
+                }
+                saveSetting: function (key, value, cb) {
+                    root.callSettings("setSetting", [key, value], cb);
                 }
             }
         }

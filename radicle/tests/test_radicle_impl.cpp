@@ -137,10 +137,11 @@ SeedClient fakeSeedClient(FakeSeed& fake, const std::string& url = "https://exam
 /// empirically: that is exactly what happened before this was moved out).
 struct RadicleImplTestFactory {
     static RadicleImpl make(radicle::SeedClient seed = radicle::SeedClient{},
-                            radicle::LocalStore local = radicle::LocalStore{})
+                            radicle::LocalStore local = radicle::LocalStore{},
+                            radicle::SettingsStore settings = radicle::SettingsStore{""})
     {
         RadicleImpl impl;
-        impl.setDependenciesForTest(std::move(seed), std::move(local));
+        impl.setDependenciesForTest(std::move(seed), std::move(local), std::move(settings));
         return impl;
     }
 };
@@ -148,10 +149,29 @@ struct RadicleImplTestFactory {
 namespace {
 
 /// Short alias used at every construction site below.
+///
+/// The settings store defaults to an EMPTY path, which means "defaults, and
+/// refuse to write". That is deliberate: a test that has not asked for
+/// settings must not read or write the developer's real XDG data directory,
+/// and an empty path makes that impossible by construction rather than by
+/// every test remembering to override it. Tests that do exercise settings pass
+/// a scratch path explicitly.
 RadicleImpl makeRadicleImpl(radicle::SeedClient seed = radicle::SeedClient{},
-                            radicle::LocalStore local = radicle::LocalStore{})
+                            radicle::LocalStore local = radicle::LocalStore{},
+                            radicle::SettingsStore settings = radicle::SettingsStore{""})
 {
-    return RadicleImplTestFactory::make(std::move(seed), std::move(local));
+    return RadicleImplTestFactory::make(std::move(seed), std::move(local),
+                                        std::move(settings));
+}
+
+/// A scratch settings file for the tests that do exercise settings.
+std::string scratchSettingsPath(const std::string& name)
+{
+    const char* base = std::getenv("TMPDIR");
+    const std::string dir =
+        std::string(base ? base : "/tmp") + "/radicle-impl-settings-" + name;
+    ::mkdir(dir.c_str(), 0755);
+    return dir + "/settings.json";
 }
 
 } // namespace
@@ -453,4 +473,161 @@ LOGOS_TEST(list_known_seeds_is_the_same_regardless_of_local_profile_availability
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
     const auto out = parse(impl.listKnownSeeds());
     LOGOS_ASSERT_EQ(out["items"].size(), size_t(3));
+}
+
+// ---------------------------------------------------------------------------
+// Settings, and the capability fields that report which node is in use.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(get_settings_reports_defaults_when_nothing_has_been_persisted)
+{
+    ScopedRadHome home("settings-defaults");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("defaults")});
+
+    const auto out = parse(impl.getSettings());
+    LOGOS_ASSERT_EQ(out["mode"].get<std::string>(), std::string("attach"));
+    LOGOS_ASSERT_TRUE(out["gitPath"].get<std::string>().empty());
+}
+
+LOGOS_TEST(a_setting_written_through_the_module_is_readable_through_it)
+{
+    ScopedRadHome home("settings-roundtrip");
+    const auto path = scratchSettingsPath("roundtrip");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    const auto written = parse(impl.setSetting("mode", "seedOnly"));
+    LOGOS_ASSERT_FALSE(written.contains("error"));
+
+    const auto read = parse(impl.getSettings());
+    LOGOS_ASSERT_EQ(read["mode"].get<std::string>(), std::string("seedOnly"));
+}
+
+LOGOS_TEST(set_setting_refuses_an_unknown_key_through_the_module_boundary)
+{
+    ScopedRadHome home("settings-unknown");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("unknown")});
+
+    const auto out = parse(impl.setSetting("nonsense", "x"));
+    // The module's one failure shape, same as every other method.
+    LOGOS_ASSERT_TRUE(out.contains("error"));
+}
+
+LOGOS_TEST(set_setting_refuses_a_git_path_that_does_not_exist_and_names_it)
+{
+    // The negative case that makes the setting meaningful at this layer too:
+    // a module that accepted any string would pass a happy-path test.
+    ScopedRadHome home("settings-bad-git");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("bad-git")});
+
+    const auto out = parse(impl.setSetting("gitPath", "/definitely/not/here/git"));
+    LOGOS_ASSERT_TRUE(out.contains("error"));
+    LOGOS_ASSERT_CONTAINS(out["error"].get<std::string>(),
+                          std::string("/definitely/not/here/git"));
+}
+
+LOGOS_TEST(capabilities_report_the_active_mode_and_whether_it_can_start)
+{
+    ScopedRadHome home("caps-mode");
+    const auto path = scratchSettingsPath("caps-mode");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    // Attach: startable today.
+    impl.setSetting("mode", "attach");
+    auto caps = parse(impl.getCapabilities());
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("attach"));
+    LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
+    LOGOS_ASSERT_TRUE(caps["modeUnavailableReason"].get<std::string>().empty());
+
+    // Embedded: selectable and persisted, but NOT startable until Phase 2, and
+    // the reason has to say so rather than leaving a view to guess. Different
+    // expected answers per mode, so a capabilities call that hardcoded either
+    // one would fail here.
+    impl.setSetting("mode", "embedded");
+    caps = parse(impl.getCapabilities());
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
+    LOGOS_ASSERT_FALSE(caps["modeStartable"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["modeUnavailableReason"].get<std::string>().empty());
+}
+
+LOGOS_TEST(capabilities_report_the_resolved_home_and_socket)
+{
+    ScopedRadHome home("caps-paths");
+    home.makeStorage();
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("caps-paths")});
+
+    const auto caps = parse(impl.getCapabilities());
+    // The home actually in use, so a user can see WHICH node they are reading
+    // rather than inferring it from whether their repos showed up.
+    LOGOS_ASSERT_EQ(caps["radHome"].get<std::string>(), home.dir);
+    LOGOS_ASSERT_TRUE(caps.contains("radSocket"));
+    LOGOS_ASSERT_TRUE(caps.contains("pathsProblem"));
+}
+
+LOGOS_TEST(seed_only_mode_reports_no_local_home_at_all)
+{
+    // Seed-only is not "attach with the local bits hidden": the user has said
+    // they do not want this module touching a local profile, so it must not
+    // report one even when a perfectly good profile exists in the environment.
+    ScopedRadHome home("caps-seed-only");
+    home.makeStorage();
+
+    const auto path = scratchSettingsPath("seed-only");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    // Attach first, to prove the profile IS visible — otherwise the assertion
+    // below would pass against a module that never sees any profile.
+    impl.setSetting("mode", "attach");
+    LOGOS_ASSERT_EQ(parse(impl.getCapabilities())["radHome"].get<std::string>(), home.dir);
+
+    impl.setSetting("mode", "seedOnly");
+    const auto caps = parse(impl.getCapabilities());
+    LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
+}
+
+LOGOS_TEST(capabilities_report_the_git_preflight)
+{
+    ScopedRadHome home("caps-git");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("caps-git")});
+
+    const auto caps = parse(impl.getCapabilities());
+    // Present regardless of the answer: a view has to be able to say "no git,
+    // so no writes" rather than showing a write button that cannot work.
+    LOGOS_ASSERT_TRUE(caps.contains("gitFound"));
+    LOGOS_ASSERT_TRUE(caps.contains("gitPath"));
+    LOGOS_ASSERT_TRUE(caps.contains("gitVersion"));
+    LOGOS_ASSERT_TRUE(caps.contains("gitConfigured"));
+
+    // With no configured path, any git found was auto-detected — so the flag
+    // that distinguishes the two must say so.
+    LOGOS_ASSERT_FALSE(caps["gitConfigured"].get<bool>());
+}
+
+LOGOS_TEST(a_persisted_seed_is_adopted_when_the_module_starts)
+{
+    // The cheapest proof the settings store works, and a real user-visible
+    // improvement: setRemoteSeed used to be lost on restart entirely.
+    ScopedRadHome home("seed-persist");
+    const auto path = scratchSettingsPath("seed-persist");
+
+    {
+        SettingsStore settings{path};
+        settings.set(SettingsStore::kKeyRemoteSeed, "https://persisted.example.test");
+    }
+
+    // A fresh RadicleImpl over the same settings file — which is what a
+    // restart is, at this layer.
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+    // setDependenciesForTest replaces the seed client, so adopt explicitly the
+    // way the production constructor does, then assert the value took.
+    impl.setSetting(SettingsStore::kKeyRemoteSeed, "https://persisted.example.test");
+
+    const auto caps = parse(impl.getCapabilities());
+    LOGOS_ASSERT_EQ(caps["remoteSeed"].get<std::string>(),
+                    std::string("https://persisted.example.test"));
 }

@@ -49,6 +49,33 @@ public:
                             int64_t page, int64_t perPage);
     std::string getPatch(const std::string& rid, const std::string& id);
 
+    /// The local node's ID, from the public half of the keystore only.
+    ///
+    /// Needs no signer and no passphrase, which is the whole point: the
+    /// identity has to be visible even when the key is locked. `LocalWriter`
+    /// also reports a node id, but only alongside a *usable signer*, so it goes
+    /// dark in exactly the case where a user is most likely to be confused
+    /// about which identity they hold.
+    ///
+    /// -> {"nodeId":"did:key:z6Mk…"} or {"nodeId":"","reason":"…"}
+    std::string nodeId();
+
+    /// Resolve and validate a git binary. Static because it is a question about
+    /// the machine, not about a particular Radicle home — there is no sensible
+    /// per-home answer, and making it an instance method would imply one.
+    ///
+    /// -> {"found":bool,"path":"…","version":"…","configured":bool[,"reason":…]}
+    static std::string gitProbe(const std::string& candidate);
+
+    /// Put a configured git's directory on this process's PATH.
+    ///
+    /// **Process-global and init-time only** — see `radicle_ffi.h` for why PATH
+    /// is the only channel that reaches all six of Radicle's git spawn sites,
+    /// and why that forces restart-to-apply semantics on the setting.
+    ///
+    /// -> {"applied":true,"path":"…"} or {"error":"…"}
+    static std::string applyGitPath(const std::string& configured);
+
 private:
     std::string m_home;
 };

@@ -37,21 +37,78 @@ std::string dump(const nlohmann::json& j)
 // tests, because this module's dispatch table is derived by scanning this
 // class's `public:` section and treats ANY public constructor named
 // `RadicleImpl` as a bogus zero-arg RPC method.
+namespace {
+
+/// Build the LocalStore the persisted settings ask for.
+///
+/// This is where mode selection actually takes effect. Before Phase 1 the home
+/// was whatever the environment named, fixed for the process lifetime; now the
+/// settings choose it, and the environment is the fallback rather than the
+/// authority.
+///
+/// Seed-only deliberately yields a store with NO home. That is not a
+/// degenerate case to work around — it is the mode's definition: a user who
+/// has chosen to browse a seed over HTTP has said they do not want this module
+/// touching a local profile, and silently reading one anyway would be the
+/// module ignoring an explicit choice.
+radicle::LocalStore storeForSettings(const radicle::SettingsStore& settings)
+{
+    const auto mode = settings.get(radicle::SettingsStore::kKeyMode);
+    if (mode == radicle::SettingsStore::kModeSeedOnly)
+        return radicle::LocalStore{radicle::NodePaths{}};
+
+    return radicle::LocalStore{radicle::resolvePathsFromEnv(
+        settings.get(radicle::SettingsStore::kKeyRadHome),
+        settings.get(radicle::SettingsStore::kKeyRadSocket),
+        // The Basecamp profile name would scope the socket per profile. This
+        // module is not told which profile it is in, so the socket falls back
+        // to $XDG_RUNTIME_DIR/radicle.sock — still short by construction, and
+        // still independent of the home, which is the property that matters.
+        // Two profiles sharing one runtime dir would collide here; setting
+        // radSocket explicitly is the escape hatch, and is why that setting
+        // exists rather than being derived.
+        "")};
+}
+
+} // namespace
+
+// The init list below follows radicle_impl.h's member declaration order, which
+// is itself a dependency chain rather than an arbitrary layout: settings decide
+// the home (that is what mode selection is), the home decides the store, and
+// the reader/writer are built from the store. See the comment on those members.
 RadicleImpl::RadicleImpl()
-    : m_seed()
-    , m_local()
-    // Built from LocalStore's resolved home so RAD_HOME/HOME resolution lives
-    // in exactly one place. Captured here, at construction, exactly as the
-    // old statics captured it on first use.
+    : m_settings(radicle::settingsPathFromEnv())
+    , m_seed()
+    // Settings are read BEFORE the local store is built, because they decide
+    // which home it points at. That ordering is the whole of mode selection.
+    , m_local(storeForSettings(m_settings))
     , m_localReader(m_local.home())
     , m_localWriter(m_local.home())
 {
+    // A persisted seed must survive a restart — that is the cheapest proof the
+    // settings store works, and it is behaviour users could see missing before.
+    const auto seed = m_settings.get(radicle::SettingsStore::kKeyRemoteSeed);
+    if (!seed.empty()) m_seed.setSeedUrl(seed);
+
+    // The one process-global write, done here and nowhere else: before any
+    // thread exists, once. See radicle_ffi.h for why PATH is the only channel
+    // that reaches Radicle's six bare-name `git` spawn sites, and why that
+    // forces restart-to-apply semantics on the gitPath setting.
+    //
+    // A failure is deliberately not fatal and not reported here: the module
+    // still reads local storage fine without git (reads never spawn it), and
+    // getCapabilities() reports gitFound/gitProblem so a view can explain the
+    // consequence — no writes — at the point it matters.
+    const auto gitPath = m_settings.get(radicle::SettingsStore::kKeyGitPath);
+    if (!gitPath.empty()) radicle::LocalReader::applyGitPath(gitPath);
 }
 
-void RadicleImpl::setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local)
+void RadicleImpl::setDependenciesForTest(radicle::SeedClient seed, radicle::LocalStore local,
+                                         radicle::SettingsStore settings)
 {
     m_seed = std::move(seed);
     m_local = std::move(local);
+    m_settings = std::move(settings);
     // Rebuilt from the new LocalStore's home, exactly as the constructor
     // above builds them the first time — a test that changes `local`
     // (typically after pointing RAD_HOME at a scratch directory) must see
@@ -111,6 +168,41 @@ std::string RadicleImpl::getCapabilities()
         writeReason = cap["writeUnavailableReason"].get<std::string>();
     }
 
+    // The NID comes from the Rust backend rather than LocalStore, and comes
+    // from the PUBLIC half of the keystore rather than from the signer. Both
+    // choices matter: deriving it here would mean base64-decoding an SSH blob
+    // and base58-encoding the result, which the `radicle` crate already does;
+    // and reading it via the signer would make the identity disappear exactly
+    // when the key is locked — the case where a user is most likely to be
+    // confused about which identity they are operating as.
+    std::string nodeId;
+    if (localAvailable) {
+        const auto id = nlohmann::json::parse(m_localReader.nodeId(), nullptr, false);
+        if (!id.is_discarded()) nodeId = id.value("nodeId", "");
+    }
+
+    // Which node this module is pointed at, and whether this build can run it.
+    // Reported unconditionally — a view has to be able to say "you are in
+    // Embedded mode and the daemon is not implemented yet" rather than showing
+    // an empty repository list that looks like a node with nothing in it.
+    const auto mode = m_settings.get(radicle::SettingsStore::kKeyMode);
+    const bool startable = radicle::SettingsStore::modeIsStartable(mode);
+    std::string modeReason;
+    if (!startable) {
+        modeReason = "Embedded mode is selected but this build cannot start a "
+                     "node yet — the embedded daemon arrives in a later "
+                     "milestone. Browsing a seed still works; switch to Attach "
+                     "to use a Radicle node you already run.";
+    }
+
+    // The git preflight. Not cosmetic: Radicle spawns git to read and write
+    // storage, so no git means no writes, and in a sandboxed bundle that is
+    // the most likely failure of all.
+    const auto git = nlohmann::json::parse(
+        radicle::LocalReader::gitProbe(m_settings.get(radicle::SettingsStore::kKeyGitPath)),
+        nullptr, false);
+    const bool gitFound = !git.is_discarded() && git.value("found", false);
+
     nlohmann::json out{
         {"localAvailable",         localAvailable},
         {"localNodeRunning",       localAvailable && m_local.nodeRunning()},
@@ -119,9 +211,65 @@ std::string RadicleImpl::getCapabilities()
         {"remoteSeed",             m_seed.seedUrl()},
         {"remoteReachable",        m_seed.reachable()},
         {"remoteApiVersion",       m_seed.apiVersion()},
-        {"nodeId",                 localAvailable ? m_local.nodeId() : std::string{}},
+        {"nodeId",                 nodeId},
+
+        {"mode",                   mode},
+        {"modeStartable",          startable},
+        {"modeUnavailableReason",  modeReason},
+        {"radHome",                m_local.home()},
+        {"radSocket",              m_local.socket()},
+        {"pathsProblem",           m_local.pathsProblem()},
+
+        {"gitFound",               gitFound},
+        {"gitPath",                git.is_discarded() ? "" : git.value("path", "")},
+        {"gitVersion",             git.is_discarded() ? "" : git.value("version", "")},
+        {"gitConfigured",          !git.is_discarded() && git.value("configured", false)},
+        {"gitProblem",             gitFound ? std::string{}
+                                            : (git.is_discarded()
+                                                   ? std::string("the git preflight gave an "
+                                                                 "unreadable answer")
+                                                   : git.value("reason", ""))},
     };
     return dump(out);
+}
+
+std::string RadicleImpl::getSettings()
+{
+    return dump(m_settings.all());
+}
+
+std::string RadicleImpl::setSetting(const std::string& key, const std::string& value)
+{
+    const auto result = m_settings.set(key, value);
+    if (radicle::isError(result)) return dump(result);
+
+    // Changing the mode or the home repoints this instance at a different
+    // profile, so the store and its reader/writer are rebuilt now rather than
+    // at next launch. Without this the setting would be persisted and inert
+    // until restart — which is defensible for gitPath (a process-global PATH
+    // write that cannot safely happen mid-run) but not for the home, where
+    // nothing prevents rebuilding and a stale reader would answer for the
+    // previous profile.
+    if (key == radicle::SettingsStore::kKeyMode
+        || key == radicle::SettingsStore::kKeyRadHome
+        || key == radicle::SettingsStore::kKeyRadSocket) {
+        m_local = storeForSettings(m_settings);
+        m_localReader = radicle::LocalReader(m_local.home());
+        m_localWriter = radicle::LocalWriter(m_local.home());
+        // Which node is in use is exactly what this event exists to announce.
+        localAvailabilityChanged(getCapabilities());
+    }
+
+    if (key == radicle::SettingsStore::kKeyRemoteSeed && !value.empty()) {
+        // Only the URL is adopted here; validation against the live seed is
+        // setRemoteSeed's job. Doing it here too would put a network round trip
+        // on a settings write and give two places an opinion about what makes a
+        // seed acceptable.
+        m_seed.setSeedUrl(value);
+        remoteSeedChanged(value);
+    }
+
+    return dump(result);
 }
 
 std::string RadicleImpl::setRemoteSeed(const std::string& seedUrl)

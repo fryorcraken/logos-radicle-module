@@ -30,6 +30,8 @@ public:
     QString getCapabilities() override;
     QString listKnownSeeds() override;
     QString setRemoteSeed(QString seedUrl) override;
+    QString getSettings() override;
+    QString setSetting(QString key, QString value) override;
 
     // Remote — proxied to a seed node over HTTPS
     QString remoteListRepos(QString query, int page, int perPage) override;

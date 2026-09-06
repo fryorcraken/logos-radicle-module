@@ -333,16 +333,53 @@ per-spawn wrapper), and the control socket's 108-byte `sun_path` cap
 constrains where `RAD_HOME` may live. Both are in the "still needs
 verifying" list below, marked resolved.
 
-**Phase 1 — isolation, detection and settings, no daemon yet.** Note before
-designing the `RAD_HOME` layout: [findings](M3-phase0-findings.md) §6 measured
-this document's "socket follows the home" proposal against Basecamp's real
-per-profile paths and it does not fit, so `RAD_SOCKET` is a requirement rather
-than a knob. The settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing,
-mode selection,
-extended `getCapabilities`, and the `git` preflight plus its configurable
-path. Attach mode works end to end. This alone is shippable and useful: it
-makes today's M2.1 honest about *which* node it is reading, and makes the
-chosen seed survive a restart.
+**Phase 1 — isolation, detection and settings, no daemon yet. SHIPPED.** The
+settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing, mode selection,
+extended `getCapabilities`, and the `git` preflight plus its configurable path.
+Attach mode works end to end. This alone is shippable and useful: it makes
+M2.1 honest about *which* node it is reading, and makes the chosen seed survive
+a restart.
+
+Five things Phase 1 settled that this document had left open or got wrong.
+Recorded so Phase 2 does not re-litigate them:
+
+- **The socket is chosen independently of the home**, as
+  [findings](M3-phase0-findings.md) §6 required — this document's "socket
+  follows the home" proposal was measured against Basecamp's real per-profile
+  paths and does not fit. `resolveSocket()` prefers
+  `$XDG_RUNTIME_DIR/radicle-*.sock` and falls back to
+  `<home>/node/control.sock` only when there is no runtime dir, because that is
+  where a hand-run `rad` node puts its socket and Attach mode must still find
+  it. The resolved path is length-checked, and the message names the path, its
+  length **and** the limit — the kernel's own error names none of the three.
+- **`cobwrite.rs`'s announce step honoured neither `RAD_SOCKET` nor the
+  setting.** It hardcoded `<home>/node/control.sock`, so against any node with
+  a relocated socket the announce silently went nowhere. That failure was
+  invisible by construction: an unannounced write is legitimately *not* an
+  error (the node announces on next start), so nothing surfaced. Fixed, with a
+  regression test watched failing first.
+- **The git path is restart-to-apply**, not live — see
+  [`rust-ffi.md`](rust-ffi.md). `PATH` is the only channel reaching all six
+  spawn sites and writing it is process-global, so it happens once at init. The
+  settings UI states this rather than implying the change is immediate.
+- **Embedded is selectable and persisted, but reported as not startable.**
+  `getCapabilities().modeStartable` is false for it with a reason naming the
+  milestone, and the mode row says so. Hiding it would misrepresent the module
+  as never intending to support it; offering it silently would be a control
+  that does nothing. When Phase 2 lands the daemon,
+  `SettingsStore::modeIsStartable()` is the one line that changes — the UI
+  derives its state from capabilities and needs no edit.
+- **Seed-only means no local home at all**, not "attach with the local parts
+  hidden". A user who chose it has said they do not want this module touching a
+  local profile, so `LocalStore` is built with empty paths and
+  `localAvailable` is false even when a perfectly good profile exists.
+
+**Still open, deliberately:** the module is not told which Basecamp profile it
+runs under, so the socket falls back to an unscoped `radicle.sock` and two
+profiles sharing a runtime dir would collide. `radSocket` is the escape hatch,
+and is why that setting exists rather than being derived — but Phase 2, which
+actually binds the socket, should revisit whether the profile name can be
+plumbed through.
 
 **Phase 2 — embedded lifecycle.** Wizard, `Profile::init`, start/stop, the
 config panel's read-only half.

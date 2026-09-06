@@ -151,11 +151,39 @@ fn open_repo_for_write(home: &str, rid: &str) -> Result<Repository, String> {
 /// `Node::announce` subscribes to an event stream and blocks until seeds
 /// acknowledge or a timeout expires, which is the wrong shape for a
 /// synchronous FFI call that a UI thread is waiting on.
+/// Which control socket to talk to when announcing.
+///
+/// This used to be `<home>/node/control.sock`, unconditionally — which is a
+/// silent-failure bug rather than a cosmetic one. A write that cannot reach the
+/// node still lands in git storage and still reports success, so the comment is
+/// saved and nobody on the network ever hears about it. The user sees no error
+/// because, correctly, an unannounced write is *not* an error: the node
+/// announces on next start. That makes a wrong socket path invisible.
+///
+/// It has to honour `RAD_SOCKET` because the socket genuinely cannot live under
+/// the home in this module's own layout. Phase 0 measured Basecamp's
+/// per-profile data dir at 166 bytes — 192 with the node's socket suffix —
+/// against a `sun_path` cap of 108. So a relocated socket is the normal case
+/// here, not an exotic one, and "derive it from the home" is wrong by default
+/// rather than merely incomplete.
+///
+/// Taken as a parameter rather than read from the environment inside, so the
+/// choice is a pure function that a test can drive. An empty value is treated
+/// as unset — an exported-but-empty `RAD_SOCKET` is ordinary shell behaviour,
+/// and honouring it literally would produce an empty path whose connection
+/// error names nothing at all.
+pub fn control_socket_path(home: &str, rad_socket: Option<&str>) -> std::path::PathBuf {
+    match rad_socket {
+        Some(s) if !s.is_empty() => std::path::PathBuf::from(s),
+        _ => std::path::Path::new(home).join("node").join("control.sock"),
+    }
+}
+
 fn announce(home: &str, rid: &str) -> Option<String> {
     use radicle::node::Handle as _;
 
     let id = parse_rid(rid).ok()?;
-    let socket = std::path::Path::new(home).join("node").join("control.sock");
+    let socket = control_socket_path(home, std::env::var("RAD_SOCKET").ok().as_deref());
     let mut node = radicle::node::Node::new(&socket);
 
     let nid = match node.nid() {

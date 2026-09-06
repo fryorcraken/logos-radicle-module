@@ -100,6 +100,58 @@ char* radicle_local_comment_on_issue(const char* home, const char* rid,
 char* radicle_local_create_issue(const char* home, const char* rid,
                                  const char* title, const char* description);
 
+// ---------------------------------------------------------------------------
+// Environment.
+//
+// Neither of these reads repository storage, so neither takes a `home` in the
+// usual sense. They answer two questions a preflight has to ask before any
+// write can work: where is git, and which identity does this node hold.
+// ---------------------------------------------------------------------------
+
+/// Resolves and validates a git binary.
+///
+/// An empty `candidate` means "find it on PATH". A non-empty one OVERRIDES
+/// detection entirely — there is deliberately no fallback to PATH when the
+/// configured binary is missing, because a silent fallback makes a typo in the
+/// setting look like a Radicle bug. Validation runs the candidate's
+/// `git --version`, so an executable that exists but is not git is refused
+/// here rather than at the moment someone pushes.
+///
+/// Like `radicle_local_can_write`, a negative answer is NOT an error object:
+/// "there is no usable git" is an answer to the question asked.
+///
+/// -> {"found":true,"path":"/usr/bin/git","version":"git version 2.55.0",
+///     "configured":bool}
+/// -> {"found":false,"path":"","version":"","configured":bool,"reason":"…"}
+char* radicle_git_probe(const char* candidate);
+
+/// Puts a configured git's directory at the front of THIS PROCESS's PATH.
+///
+/// **Process-global, and must be called once at module init, before any thread
+/// starts.** Radicle spawns git by bare name from six separate sites across
+/// `radicle` and `radicle-node`, two of which `env_clear()` and re-admit only
+/// PATH — so PATH is the one channel that reaches every site, and it cannot be
+/// scoped to a single call. A settings panel that changes the git path
+/// therefore needs restart-to-apply semantics; see `docs/M3-phase0-findings.md`
+/// §5.
+///
+/// Validates before mutating: an unusable path must not reshape PATH and then
+/// fail later somewhere unrelated.
+///
+/// -> {"applied":true,"path":"/usr/bin/git"} or {"error":"…"}
+char* radicle_apply_git_path(const char* configured);
+
+/// The local node's ID, read from `keys/radicle.pub` alone.
+///
+/// Deliberately independent of signing. `radicle_local_can_write` also reports
+/// a node id, but only when a signer could be loaded — and the identity has to
+/// be visible even when the key is encrypted and locked, because the failure
+/// this design is most exposed to is a user believing they are operating as one
+/// identity when they are operating as another.
+///
+/// -> {"nodeId":"did:key:z6Mk…"} or {"nodeId":"","reason":"…"}
+char* radicle_local_node_id(const char* home);
+
 /// Releases a string returned by any of the above. Passing anything else, or
 /// freeing twice, is undefined behaviour — the same contract as `free()`.
 void radicle_free_string(char* s);
