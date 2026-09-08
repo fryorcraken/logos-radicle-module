@@ -7,9 +7,16 @@
 //!
 //! `tests/ui/write.yaml` drives the comment box in a real Basecamp, which needs
 //! three things no CI runner has: a Radicle profile, a **signable** key, and a
-//! repository holding an **issue** to comment on. The other local spec
-//! (`local.yaml`) needs only the first, which is why it can be pointed at
-//! whatever the developer already has and is deliberately kept out of CI.
+//! repository holding an **issue** to comment on. `tests/ui/local.yaml` needs
+//! the first of those, plus — since the branch picker was rebuilt around peer
+//! grouping — a repository whose branches are not all its own.
+//!
+//! Both specs share this one seeder. `local.yaml` used to be excluded from CI
+//! on the grounds that "a CI runner has no Radicle profile"; that stopped being
+//! true the moment this file existed for the write spec, and the exclusion
+//! outlived its reason. It is the only spec covering the `local*` path, so
+//! leaving it out meant the half of the module that reads `~/.radicle` had no
+//! end-to-end coverage at all.
 //!
 //! A write spec cannot be. Aimed at a real profile it would append junk
 //! comments to a real repository on every run, and it would depend on that
@@ -95,8 +102,9 @@ fn main() {
     let profile = Profile::init(home, Alias::new("write-spec"), None, Seed::new([9u8; 32]))
         .expect("could not init the profile");
 
-    let (rid, _work) = init_repo(&profile, &dir);
+    let (rid, work) = init_repo(&profile, &dir);
     let issue = create_issue(&profile, &rid);
+    seed_branches(&profile, &rid, &work);
 
     // Three lines, in a fixed order, so the wrapper script can read them
     // positionally without parsing. Anything diagnostic goes to stderr so it
@@ -141,6 +149,99 @@ fn init_repo(profile: &Profile, dir: &Path) -> (String, PathBuf) {
     (rid.urn(), work)
 }
 
+/// Give the seeded repository the branch shape the picker is built around:
+/// one branch of this node's own beyond the default, and two belonging to a
+/// second peer.
+///
+/// Without this the repository has exactly one branch, and `local.yaml` could
+/// assert nothing about the thing most likely to break — a single-branch repo
+/// renders the picker as a plain non-interactive label, so peer sections, the
+/// pinned repository default and the local/peer split would all go unexercised
+/// while the spec passed.
+///
+/// The peer is synthetic: a keypair generated here, whose refs are written
+/// under its own namespace and signed with its own key. That is exactly the
+/// shape a replicated peer has in real storage — `refs/namespaces/<nid>/` plus
+/// a matching `rad/sigrefs` — and `list_branches` reads it through
+/// `remotes()`, which replays *signed* ref sets. Writing the refs without
+/// signing them produces a repository whose branches exist to git and are
+/// invisible to the module, which is a fixture that proves nothing.
+fn seed_branches(profile: &Profile, rid: &str, work: &Path) {
+    use radicle::storage::{SignRepository as _, WriteRepository as _};
+
+    let id = radicle::identity::RepoId::from_urn(rid).expect("valid rid");
+    let stored = profile.storage.repository(id).expect("repo in storage");
+    let storage_path = stored.raw().path().to_path_buf();
+    let repo = radicle::git::raw::Repository::open(work).expect("could not open the working copy");
+
+    // A second branch of this node's own, with a file the default lacks so a
+    // spec can tell which branch it is looking at.
+    std::fs::write(work.join("FEATURE.md"), "# on the feature branch\n")
+        .expect("could not write FEATURE.md");
+    commit_all(&repo, "a commit on the feature branch");
+
+    let me = profile.signer().expect("could not load a signer");
+    let my_nid = radicle::crypto::Signer::public_key(&me).to_string();
+    push_branch(&repo, &storage_path, &my_nid, "feature/seeded");
+    stored.sign_refs(&me).expect("could not sign our own refs");
+
+    // And a second peer's branches. Its key never leaves this directory; it
+    // exists only so the picker has a peer section to draw.
+    let peer = radicle::crypto::SigningKey::from_seed(Seed::new([21u8; 32]));
+    let peer_nid = radicle::crypto::Signer::public_key(&peer).to_string();
+    push_branch(&repo, &storage_path, &peer_nid, "master");
+    push_branch(&repo, &storage_path, &peer_nid, "their-work");
+    stored
+        .sign_refs(&peer)
+        .expect("could not sign the peer's refs");
+
+    // Point storage's own HEAD back at THIS node's master.
+    //
+    // Load-bearing, and its absence is what made `local.yaml` step 9 fail with
+    // an empty tree while every backend probe returned entries.
+    // `Repository::head()` prefers storage's local HEAD and only falls back to
+    // a quorum computation over delegates' refs; the pushes above leave HEAD
+    // wherever the last one put it, which is a peer's namespace. The repo
+    // document's `head` then disagreed with the branch the view asked for, and
+    // the tree came back for a commit the UI was not showing.
+    //
+    // `tests/fixture/mod.rs::publish` does exactly this, for exactly this
+    // reason — its comment is the one that explains the fallback. This seeder
+    // pushed branches without it and reproduced the bug that comment prevents.
+    stored
+        .raw()
+        .set_head(&format!("refs/namespaces/{my_nid}/refs/heads/master"))
+        .expect("could not move storage HEAD");
+
+    eprintln!("seeded branches: 2 ours (master, feature/seeded), 2 theirs under {peer_nid}");
+}
+
+/// Push the working copy's current `master` into storage under `namespace`.
+///
+/// Pushed to storage's path directly rather than through the `rad` remote that
+/// `rad::init` configured: that remote's URL is already scoped to THIS node's
+/// namespace, so a namespaced refspec through it nests one namespace inside
+/// another and lands the branch where nothing reads it.
+fn push_branch(
+    repo: &radicle::git::raw::Repository,
+    storage_path: &Path,
+    namespace: &str,
+    branch: &str,
+) {
+    let mut remote = repo
+        .remote_anonymous(&storage_path.display().to_string())
+        .expect("could not open storage as a remote");
+    remote
+        .push(
+            &[
+                format!("+refs/heads/master:refs/namespaces/{namespace}/refs/heads/{branch}")
+                    .as_str(),
+            ],
+            None,
+        )
+        .expect("could not push the branch into storage");
+}
+
 fn commit_all(repo: &radicle::git::raw::Repository, message: &str) {
     let mut index = repo.index().expect("no index");
     index
@@ -152,7 +253,18 @@ fn commit_all(repo: &radicle::git::raw::Repository, message: &str) {
     let sig = radicle::git::raw::Signature::now("write-spec", "write-spec@example.com")
         .expect("could not build a signature");
 
-    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+    // Parented on HEAD when there is one. This used to pass `&[]`
+    // unconditionally, which was correct while there was exactly one commit to
+    // make — but a second call would then create a second ROOT commit,
+    // silently discarding the first and leaving a repository whose branches
+    // share no history.
+    let parents = match repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
+        Some(ref parent) => vec![parent.clone()],
+        None => vec![],
+    };
+    let parent_refs: Vec<&radicle::git::raw::Commit> = parents.iter().collect();
+
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
         .expect("could not commit");
 }
 

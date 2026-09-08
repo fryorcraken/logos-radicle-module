@@ -38,14 +38,28 @@
 # reports the truth rather than skipping quietly — the distinction this
 # repository has been burned on twice before.
 #
-# It is NOT wired into CI: a CI runner has no Radicle profile and seeding one
-# is its own piece of work. Run it locally, against your own node, after
-# `lgs basecamp build-portable`.
+# ---------------------------------------------------------------------------
+# IT RUNS IN CI, AGAINST A SEEDED PROFILE
+# ---------------------------------------------------------------------------
 #
-# The assertions avoid anything specific to one person's node. "How many
-# repositories" and "which repository is first" vary per machine, so what is
-# pinned is the shape: the source actually switched, data arrived through the
-# local path, and no error surfaced.
+# This header used to say the opposite — "a CI runner has no Radicle profile
+# and seeding one is its own piece of work". That stopped being true when
+# `examples/seed_write_profile.rs` was written for write.yaml: it builds a
+# throwaway profile, with a signable key, a repository, an issue, and (since
+# the branch picker was rebuilt) branches belonging to two different peers.
+# The exclusion outlived its reason, and left the half of the module that reads
+# ~/.radicle with no end-to-end coverage at all.
+#
+# So `local` is in ui-tests.yml's matrix and gets the same RAD_HOME treatment
+# the write spec does. The seeded repository is `write-spec-fixture`, and it is
+# the ONLY repository in that profile — which is what lets the branch
+# assertions below be exact rather than directional.
+#
+# Run locally against your own node with `sh radicle-ui/tests/run-local-e2e.sh`,
+# which points RAD_HOME at your real profile instead. The assertions are written
+# to hold either way: nothing here names a repository or counts one, so a
+# developer's node with nine repositories satisfies them as readily as CI's
+# with one.
 
 app: radicle_ui
 with: [radicle]
@@ -112,22 +126,59 @@ steps:
   # refs/namespaces/<nid>/refs/heads/, not the canonical refs/heads/* — which
   # in Radicle storage holds a single delegate-consensus ref. Deriving the list
   # from that canonical set (as the seed path legitimately does) reported
-  # exactly ONE branch for every repository on the machine, which is the bug
-  # this step exists to catch.
+  # exactly ONE branch for every repository on the machine.
   #
-  # Asserting `>= 1` rather than a number: how many branches a given repo has
-  # is a property of whoever's node this runs on. What is machine-independent
-  # is that the picker was populated at all and nothing errored — and the
-  # regression this guards is caught by the component tests, which can pin
-  # exact counts against a fixed reply.
+  # `> 1` rather than `>= 1` is the whole point of the assertion: the bug
+  # returned exactly 1, so `>= 1` was true before the fix as well as after and
+  # could not tell them apart. The seeded profile guarantees 4 (two ours, two a
+  # peer's) and any real developer node with a replicated repository has
+  # several, so this holds in both places without naming a number.
   - name: branches load from local storage
     wait_for:
-      state: "root.branchCount >= 1"
+      state: "root.branchCount > 1"
     timeout: 60s
+
+  # The picker groups by peer, which only the local source ever does — the seed
+  # sends no peer information at all. This is what distinguishes "the list
+  # loaded" from "the list loaded AND was understood as per-peer".
+  - name: the branch list is grouped by peer
+    expect:
+      state: "root.branchesGrouped === true"
+
+  # The closed control must show a branch. It rendered EMPTY on any repository
+  # where the user owns no branches, because the current branch (the bare
+  # default) matched none of the peer-qualified rows. The repository default is
+  # a pinned entry now, so there is always something selected.
+  - name: the picker shows the branch it is on
+    expect:
+      state: "root.branchLabel !== ''"
 
   - name: no error surfaced while listing branches
     expect:
       state: "root.navError === ''"
+
+  # Switch to a different branch and confirm the tree actually reloads from it.
+  # Index 0 is the pinned repository default — the branch already showing — so
+  # picking it would be a no-op that a broken switch would pass. The last row
+  # is a peer's branch in both the seeded profile and any real node.
+  - name: pick another branch through the picker's own handler
+    eval: >-
+      (function () {
+        var p = root.branchPickerItem;
+        p.activated(p.visibleCount - 1);
+        return p.visibleCount;
+      })()
+
+  # Resolution is the half that broke silently: a peer-qualified name that
+  # failed to resolve fell back to the repo head, so the WRONG branch's files
+  # rendered under the right branch's name with no error anywhere. A populated
+  # tree plus no error is what says the qualified name resolved.
+  - name: the tree reloads for the picked branch
+    wait_for:
+      state:
+        - "root.treeCount > 0"
+        - "root.navError === ''"
+    timeout: 60s
 
   # ---- commits ------------------------------------------------------------
   #
