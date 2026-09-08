@@ -77,6 +77,35 @@ Item {
         }
     }
 
+    // The header's source toggle, hosted the way Main.qml hosts it: inside a
+    // Rectangle whose height is the chrome budget. The bug this guards against
+    // is the one the old tooltip had — an explanation rendered outside the bar
+    // that contains it, clipped to an unreadable sliver, with `z: 100` doing
+    // nothing because z orders siblings within one parent and cannot lift an
+    // item over a different parent's later sibling.
+    //
+    // Asserted on geometry, not by clicking: a click test structurally cannot
+    // see a clipped overlay. That is what CommitView's back button taught here.
+    Rectangle {
+        id: headerHost
+        width: 1000
+        height: Math.max(Theme.barHeight, captionToggle.implicitHeight + Theme.gap)
+
+        Ui.SourceToggle {
+            id: captionToggle
+            objectName: "captionToggle"
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            // The DEFAULT state a first-time user is in: `local` mode, which is
+            // startable, on a machine with a profile. It still has a caption —
+            // the Embedded caveat — which is the whole point of asserting it in
+            // this state rather than in a contrived broken one.
+            mode: "local"
+            startableModes: ["explore", "local"]
+            localAvailable: true
+        }
+    }
+
     // A list with rows in it, to check the rows stack rather than overlap.
     ColumnLayout {
         id: sizedHost
@@ -151,6 +180,31 @@ Item {
                    "RepoView content area was " + content + "px of "
                    + repoPage.height + "; the chrome above it should take only "
                    + chrome + "px. Something in the chrome is stretching.");
+        }
+
+        // The header must not clip the toggle's caption. The previous design
+        // put this text in an overlay anchored to `parent.bottom` inside a bar
+        // pinned to Theme.barHeight, so it rendered outside its own container
+        // and the user could not read it. A bar that yields to its caption is
+        // the fix; this pins that it actually does.
+        function test_the_header_does_not_clip_the_source_toggles_caption() {
+            var note = findChild(captionToggle, "sourceToggleNote");
+            verify(note !== null, "the caption must exist");
+            verify(note.visible,
+                   "the default state carries the Embedded caveat, so there IS "
+                   + "something to place");
+            verify(note.height > 0, "a zero-height caption is invisible");
+
+            var bottom = note.mapToItem(headerHost, 0, note.height).y;
+            verify(bottom <= headerHost.height + 1,
+                   "the caption's bottom is at " + bottom + " inside a "
+                   + headerHost.height + "px header — it is being clipped, "
+                   + "which is the tooltip bug returning in a new shape");
+
+            var top = note.mapToItem(headerHost, 0, 0).y;
+            verify(top >= -1,
+                   "the caption starts at " + top + ", above the header's top "
+                   + "edge — also clipped");
         }
 
         function test_rows_stack_instead_of_overlapping() {

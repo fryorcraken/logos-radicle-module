@@ -76,12 +76,12 @@ LOGOS_TEST(a_write_through_one_store_is_invisible_to_a_store_elsewhere)
     SettingsStore alice{a.path()};
     SettingsStore bob{b.path()};
 
-    alice.set(SettingsStore::kKeyMode, SettingsStore::kModeSeedOnly);
+    alice.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
 
     // bob never wrote a mode, so it must still report the default — not
-    // alice's. A shared file would hand back seedOnly here.
+    // alice's. A shared file would hand back `explore` here.
     LOGOS_ASSERT_EQ(bob.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeAttach));
+                    std::string(SettingsStore::kModeLocal));
 }
 
 // ---------------------------------------------------------------------------
@@ -109,13 +109,13 @@ LOGOS_TEST(setting_one_key_leaves_the_others_untouched)
     ScratchSettings s("independent");
     SettingsStore store{s.path()};
 
-    store.set(SettingsStore::kKeyMode, SettingsStore::kModeSeedOnly);
+    store.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
     store.set(SettingsStore::kKeyRemoteSeed, "https://kept.example");
 
     // Distinct values again, so a store that overwrote the whole file on every
     // write would lose the first one and fail here.
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeSeedOnly));
+                    std::string(SettingsStore::kModeExplore));
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyRemoteSeed),
                     std::string("https://kept.example"));
 }
@@ -125,7 +125,7 @@ LOGOS_TEST(set_returns_the_whole_settings_object_not_just_the_changed_key)
     ScratchSettings s("returns-all");
     SettingsStore store{s.path()};
 
-    const auto result = store.set(SettingsStore::kKeyMode, SettingsStore::kModeSeedOnly);
+    const auto result = store.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
 
     LOGOS_ASSERT_FALSE(isError(result));
     // A caller re-renders from this one reply, so every key has to be present
@@ -146,11 +146,11 @@ LOGOS_TEST(a_missing_settings_file_yields_defaults_rather_than_an_error)
     ScratchSettings s("missing");
     SettingsStore store{s.path()};
 
-    // Attach, because that is what the module did before settings existed:
+    // `local`, because that is what the module did before settings existed:
     // read whatever home the environment names. A user upgrading must not find
     // the module behaving differently.
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeAttach));
+                    std::string(SettingsStore::kModeLocal));
 }
 
 LOGOS_TEST(a_corrupted_settings_file_yields_defaults_rather_than_a_dead_module)
@@ -160,18 +160,18 @@ LOGOS_TEST(a_corrupted_settings_file_yields_defaults_rather_than_a_dead_module)
 
     SettingsStore store{s.path()};
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeAttach));
+                    std::string(SettingsStore::kModeLocal));
 }
 
 LOGOS_TEST(unknown_keys_in_the_file_are_ignored_rather_than_surfaced)
 {
     ScratchSettings s("unknown-in-file");
-    s.write(R"({"mode":"seedOnly","somethingElse":"x"})");
+    s.write(R"({"mode":"explore","somethingElse":"x"})");
 
     SettingsStore store{s.path()};
     // The known key is honoured...
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeSeedOnly));
+                    std::string(SettingsStore::kModeExplore));
     // ...and the unknown one does not appear in the reported settings.
     LOGOS_ASSERT_FALSE(store.all().contains("somethingElse"));
 }
@@ -199,12 +199,22 @@ LOGOS_TEST(an_unknown_mode_is_refused_and_the_message_lists_the_valid_ones)
 
     const auto result = store.set(SettingsStore::kKeyMode, "turbo");
     LOGOS_ASSERT_TRUE(isError(result));
-    LOGOS_ASSERT_CONTAINS(result["error"].get<std::string>(), std::string("attach"));
+    // Every valid mode by NAME, from the constants. The message used to be
+    // spelled out in the validator and this assertion checked one hardcoded
+    // word, so a rename could leave the sentence naming modes that no longer
+    // exist with nothing going red. Asserting all three ties the message to the
+    // set it claims to describe.
+    LOGOS_ASSERT_CONTAINS(result["error"].get<std::string>(),
+                          std::string(SettingsStore::kModeExplore));
+    LOGOS_ASSERT_CONTAINS(result["error"].get<std::string>(),
+                          std::string(SettingsStore::kModeLocal));
+    LOGOS_ASSERT_CONTAINS(result["error"].get<std::string>(),
+                          std::string(SettingsStore::kModeEmbedded));
 
     // And the stored value is untouched, which is the half a return-only
     // assertion would miss.
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeAttach));
+                    std::string(SettingsStore::kModeLocal));
 }
 
 LOGOS_TEST(all_three_modes_are_accepted)
@@ -212,9 +222,9 @@ LOGOS_TEST(all_three_modes_are_accepted)
     ScratchSettings s("modes");
     SettingsStore store{s.path()};
 
-    for (const char* mode : {SettingsStore::kModeAttach,
+    for (const char* mode : {SettingsStore::kModeLocal,
                              SettingsStore::kModeEmbedded,
-                             SettingsStore::kModeSeedOnly}) {
+                             SettingsStore::kModeExplore}) {
         const auto result = store.set(SettingsStore::kKeyMode, mode);
         LOGOS_ASSERT_FALSE(isError(result));
         LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode), std::string(mode));
@@ -231,8 +241,8 @@ LOGOS_TEST(embedded_is_selectable_but_reported_as_not_startable)
 
     // The other two are startable today, which is what makes the assertion
     // above about Embedded specifically rather than about every mode.
-    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(SettingsStore::kModeAttach));
-    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(SettingsStore::kModeSeedOnly));
+    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(SettingsStore::kModeLocal));
+    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(SettingsStore::kModeExplore));
 }
 
 LOGOS_TEST(a_git_path_that_does_not_exist_is_refused_and_named)
@@ -347,10 +357,10 @@ LOGOS_TEST(a_store_with_no_path_still_reports_defaults_rather_than_failing)
 {
     SettingsStore store{""};
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeAttach));
+                    std::string(SettingsStore::kModeLocal));
 
     // ...and refuses to write, naming the problem rather than silently
     // pretending the value was stored.
-    const auto result = store.set(SettingsStore::kKeyMode, SettingsStore::kModeSeedOnly);
+    const auto result = store.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
     LOGOS_ASSERT_TRUE(isError(result));
 }

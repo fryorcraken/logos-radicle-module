@@ -41,11 +41,17 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    // Which source every browsing call goes to. The state and the routing it
-    // implies live in SourceState so they can be tested as a unit — inside
-    // this file they could only be covered by a stub reproducing them, which
-    // is a copy asserted against itself. See SourceState.qml.
+    // Which mode the module is in, and the method routing that follows from it.
+    // Both live in SourceState so they can be tested as a unit — inside this
+    // file they could only be covered by a stub reproducing them, which is a
+    // copy asserted against itself. See SourceState.qml.
+    //
+    // `mode` is BOUND to capabilities rather than owned here: the backend is
+    // the authority on what is in force, and a UI holding its own copy could
+    // show a mode the module is not actually in. That is the identity confusion
+    // this milestone exists to prevent, one level up.
     readonly property SourceState sourceState: SourceState {
+        mode: root.caps.mode || "local"
         localAvailable: root.caps.localAvailable === true
 
         // A repo id from one source is meaningless to the other, so the whole
@@ -54,28 +60,35 @@ Item {
         // which is why onBackendReady and setSeed both call reload() alongside
         // it. Omitting the reload here shipped once: the toggle flipped, the
         // screen cleared, and no request was ever issued.
+        //
         // The reload is deferred by one event-loop turn, and that is
-        // load-bearing rather than defensive. `changed()` is emitted from
-        // inside `select()`, immediately after it assigns `current` — so at
-        // this point `root.source` (a binding to `sourceState.current`) has
-        // NOT been re-evaluated, and neither has anything derived from it.
-        // `repoList.reload()` routes through `call()` -> `methodFor()`, so a
-        // synchronous reload issues `remoteListRepos` for a switch TO local:
-        // the user clicked Local, saw Explore's repositories, and had to
-        // toggle away and back before the second reload picked up the source
-        // the binding had by then settled on.
+        // load-bearing rather than defensive. `changed()` fires while the mode
+        // write is still in flight, so `root.source` — a binding through
+        // `caps.mode` — has NOT settled on the new value yet. A synchronous
+        // reload would issue `remoteListRepos` for a switch TO local: the user
+        // clicked Local, saw Explore's repositories, and had to toggle away and
+        // back before a second reload picked up the source the binding had by
+        // then settled on.
         //
         // Same class as the branch-switch bug CLAUDE.md documents ("A binding
         // does not update inside the handler that changed its source"), and
-        // the same remedy.
+        // the same remedy. Note the deferral now spans a backend round trip
+        // rather than one binding evaluation, which makes it MORE necessary
+        // rather than less — see reloadWhenModeSettles below.
         onChanged: {
             nav.reset();
             sourceReload.restart();
         }
     }
 
-    /// Runs `repoList.reload()` one turn after a source switch — see the
-    /// comment on `onChanged` above for why it cannot be called directly.
+    /// Runs `repoList.reload()` one turn after the mode actually changes.
+    ///
+    /// Restarted from two places on purpose. `sourceState.onChanged` covers the
+    /// click, and `onSourceChanged` below covers the capabilities reply that
+    /// makes the change real — because a mode write is a backend round trip and
+    /// the click alone does not tell us the new mode is in force. Restarting a
+    /// zero-interval Timer twice costs one extra reload at worst; missing the
+    /// second is the empty-list bug that has shipped here before.
     readonly property Timer sourceReload: Timer {
         interval: 0
         repeat: false
@@ -84,8 +97,21 @@ Item {
 
     /// Convenience aliases. Views read these rather than reaching through
     /// `sourceState`, so moving the state again does not touch every consumer.
+    ///
+    /// `source` is the backend METHOD PREFIX ("remote"/"local"), derived from
+    /// the mode. `mode` is the persisted choice. They are different things even
+    /// though `local` is spelled the same in both — see SourceState.qml.
     readonly property string source: sourceState.current
+    readonly property string mode: sourceState.mode
     readonly property bool localAvailable: sourceState.localAvailable
+
+    /// The capabilities reply confirming a mode change has taken effect. Until
+    /// it arrives, `source` still names the OLD surface, so anything fetched is
+    /// fetched from the mode the user just left.
+    onSourceChanged: {
+        nav.reset();
+        sourceReload.restart();
+    }
 
     /// Whether a write could actually succeed, and why not when it could not.
     ///
@@ -100,8 +126,24 @@ Item {
     readonly property bool canWrite: caps.canWriteLocal === true
     readonly property string writeUnavailableReason: caps.writeUnavailableReason || ""
 
-    function setSource(next) {
-        sourceState.select(next);
+    /// Switch mode, and PERSIST it.
+    ///
+    /// This is what makes the toggle a real control rather than a decorative
+    /// one: the mode is a stored setting, the backend rebuilds its LocalStore
+    /// from it, and `getCapabilities()` then reports the new mode, home and
+    /// `localAvailable`. `sourceState.mode` is a binding to that reply, so the
+    /// segment that lights up is the mode actually in force — never one the UI
+    /// merely hoped for.
+    ///
+    /// A refusal is surfaced rather than swallowed. `callSettings` exists for
+    /// exactly this: the message names what was wrong, and a user who clicks a
+    /// segment and sees nothing happen has no way to tell "refused" from
+    /// "broken".
+    function setMode(next) {
+        if (!sourceState.select(next)) return;
+        callSettings("setSetting", ["mode", next], function (reply) {
+            if (reply && reply.error) nav.error = reply.error;
+        });
     }
 
     /// Whether the settings pane is showing. Deliberately NOT part of NavState:
@@ -348,7 +390,21 @@ Item {
             // ---- top bar (fixed height) ----
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Theme.barHeight
+                // Normally the fixed chrome height — the layout rule above
+                // still holds, and nothing reflows as requests come and go.
+                //
+                // The one thing allowed to grow it is the source toggle's
+                // caption, and that is the point rather than an exception: the
+                // caption exists BECAUSE the previous design put this text in
+                // an overlay anchored past the bottom of a fixed-height bar,
+                // where `z` cannot lift it over another parent's later sibling
+                // and it rendered as an unreadable sliver. A bar that clips its
+                // own explanation would reintroduce exactly that bug, so the
+                // bar yields to the text instead. It changes only when the
+                // capabilities change, which is not something a user watches
+                // happen.
+                Layout.preferredHeight: Math.max(Theme.barHeight,
+                                                 sourceToggle.implicitHeight + Theme.gap)
                 color: Theme.surface
 
                 RowLayout {
@@ -364,38 +420,53 @@ Item {
                         font.bold: true
                     }
 
+                    // ONE control for "what am I browsing" — exactly three
+                    // segments, one per mode, and nothing else in it.
+                    //
+                    // The mode used to be chosen only in Settings while this
+                    // bar carried a two-segment `source` toggle AND a separate
+                    // "Attached · z6Mko…" badge. Two vocabularies for one
+                    // question, side by side, which a user read as a single
+                    // control with a dead third segment. The badge is gone, the
+                    // vocabularies are one, and the segment IS the mode.
                     SourceToggle {
                         id: sourceToggle
                         objectName: "sourceToggle"
-                        current: root.source
+                        mode:           root.mode
+                        startableModes: root.caps.startableModes !== undefined
+                                        ? root.caps.startableModes : []
+                        modeReason:     root.caps.modeUnavailableReason || ""
                         localAvailable: root.localAvailable
+                        pathsProblem:   root.caps.pathsProblem || ""
                         reason: "No Radicle profile on this machine — "
-                                + "install Radicle and run `rad auth` to browse local repositories"
-                        onSourceChosen: function (next) { root.setSource(next); }
+                                + "install Radicle and run `rad auth` to browse local repositories."
+                        onModeChosen: function (next) { root.setMode(next); }
                     }
 
-                    // Which node, and which identity — always visible, never
-                    // behind a settings pane. See NodeStatus.qml: the failure
-                    // this milestone exists to prevent is a user operating as
-                    // an identity they did not expect and reading the
-                    // consequence as missing repositories.
-                    NodeStatus {
-                        objectName: "nodeStatus"
-                        mode:         root.caps.mode || "attach"
-                        startable:    root.caps.modeStartable !== false
-                        modeReason:   root.caps.modeUnavailableReason || ""
-                        nodeId:       root.caps.nodeId || ""
-                        radHome:      root.caps.radHome || ""
-                        pathsProblem: root.caps.pathsProblem || ""
-                    }
+                    // ---- the mode-detail slot -------------------------
+                    //
+                    // Immediately right of the toggle, showing exactly one
+                    // thing at a time: the detail of whichever mode is
+                    // selected. One rule a user learns once, instead of a
+                    // header whose contents have to be memorised element by
+                    // element.
+                    //
+                    //   Explore  -> which seed is being proxied to
+                    //   Local    -> which identity you are operating as
+                    //   Embedded -> nothing; there is no node yet, and the
+                    //               toggle's own caption already explains that
+                    //
+                    // `SeedPicker` already worked this way (`visible:` keyed on
+                    // the source), so this extends an existing pattern rather
+                    // than inventing a parallel one.
 
                     SeedPicker {
                         id: seedPicker
                         objectName: "seedPicker"
-                        // Which seed is proxied to is a remote-source concern;
-                        // showing the picker while browsing local storage would
-                        // imply it affects what is on screen, which it does not.
-                        visible: root.source === "remote"
+                        // Which seed is proxied to is Explore's detail. Showing
+                        // the picker in any other mode would imply it affects
+                        // what is on screen, which it does not.
+                        visible: root.mode === "explore"
                         currentSeed: root.caps.remoteSeed || ""
                         fetchSeeds: function (cb) {
                             root.callPlain("listKnownSeeds", [], cb);
@@ -411,13 +482,38 @@ Item {
                         }
                     }
 
+                    // Local's detail. Absent — not blank, not a placeholder —
+                    // in any other mode, because in Explore you are not
+                    // operating as an identity at all and showing one there
+                    // would be noise. Same reasoning as the Local segment being
+                    // absent rather than disabled when there is no profile.
+                    NodeIdentity {
+                        id: nodeIdentity
+                        objectName: "nodeIdentity"
+                        // Two conditions, and they are different questions:
+                        // this mode is the one the identity describes, AND
+                        // there is an identity to describe. The component
+                        // already hides itself for the second (it must, or a
+                        // caller could render an empty slot); this adds the
+                        // first.
+                        visible: root.mode === "local" && nodeIdentity.nodeId !== ""
+                        nodeId: root.caps.nodeId || ""
+                        // The obvious destination for someone squinting at a
+                        // truncated DID: Settings holds it in full, alongside
+                        // the resolved home.
+                        onActivated: root.settingsOpen = true
+                    }
+
                     Item { Layout.fillWidth: true }
 
                     FilterField {
                         id: searchField
-                        // Local listing takes a scope, not a search string —
-                        // see RepoList.fetch(). A search box that silently did
-                        // nothing would be worse than no search box.
+                        // The local surface takes a scope, not a search string
+                        // — see RepoList.fetch(). A search box that silently
+                        // did nothing would be worse than no search box. Keyed
+                        // on the derived method prefix rather than the mode,
+                        // because it is the SURFACE that lacks search:
+                        // `embedded` would have the same limitation.
                         visible: nav.view === "repos" && root.source === "remote"
                         Layout.preferredWidth: 260
                         placeholder: "Search repositories"

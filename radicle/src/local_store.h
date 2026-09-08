@@ -16,7 +16,7 @@ namespace radicle {
  *    checked and reported before anything tries to bind or connect, and a
  *    check that needs a live profile cannot run during preflight;
  *  - the home is no longer fixed for the process lifetime. Mode selection
- *    (Attach / Embedded / Seed-only) chooses it, so the resolution has to be a
+ *    (Explore / Local / Embedded) chooses it, so the resolution has to be a
  *    function of its inputs rather than something a constructor did once.
  *
  * Both are pure functions of their arguments — no environment reads inside —
@@ -47,7 +47,7 @@ inline constexpr size_t kSunPathMax = 108;
  * `$HOME/.radicle`.
  *
  * `configuredHome` wins when non-empty: that is the settings store's chosen
- * home (Attach mode pointing at a specific profile). `radHomeEnv` and
+ * home (`local` mode pointing at a specific profile). `radHomeEnv` and
  * `userHomeEnv` are the environment values, passed in rather than read, so the
  * precedence is testable without mutating the process environment.
  */
@@ -70,7 +70,7 @@ std::string resolveHome(const std::string& configuredHome,
  * Precedence: an explicit `configuredSocket`, else `RAD_SOCKET`, else
  * `$XDG_RUNTIME_DIR/radicle-<profile>.sock`, else the crate's own default of
  * `<home>/node/control.sock`. The last is a genuine fallback, not a preference
- * — it is what a hand-run `rad` node uses, so Attach mode must still find it
+ * — it is what a hand-run `rad` node uses, so `local` mode must still find it
  * when no runtime dir exists.
  *
  * `profile` names the Basecamp profile so two profiles do not collide on one

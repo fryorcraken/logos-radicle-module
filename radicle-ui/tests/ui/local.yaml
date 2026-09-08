@@ -224,15 +224,20 @@ steps:
   # ---- back to the seed ---------------------------------------------------
   #
   # Switching back must reset cleanly: a repository id from local storage is
-  # meaningless to a seed, so setSource() drops the whole navigation stack
-  # rather than carrying the current screen across. Ending on the remote source
-  # also leaves the app in its default state for the next run.
+  # meaningless to a seed, so setMode() drops the whole navigation stack rather
+  # than carrying the current screen across.
+  #
+  # The segment is named for the MODE it selects (`explore`), while `root.source`
+  # is the derived backend method prefix (`remote`). They are different things —
+  # see SourceState.qml — which is why the two lines below spell different words
+  # for what looks like one concept.
   - name: switch back to the seed
-    click: { objectName: "sourceToggle_remote" }
+    click: { objectName: "sourceToggle_explore" }
 
-  - name: the switch resets to the repository list on the remote source
+  - name: the switch resets to the repository list on the seed surface
     wait_for:
       state:
+        - "root.mode === 'explore'"
         - "root.source === 'remote'"
         - "root.navView === 'repos'"
     timeout: 30s

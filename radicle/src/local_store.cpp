@@ -84,7 +84,7 @@ std::string resolveSocket(const std::string& configuredSocket,
     }
 
     // Genuine fallback, not a preference: this is where a hand-run `rad` node
-    // puts its socket, so Attach mode has to still find it when there is no
+    // puts its socket, so `local` mode has to still find it when there is no
     // runtime dir to prefer.
     if (!home.empty()) return home + "/node/control.sock";
     return {};

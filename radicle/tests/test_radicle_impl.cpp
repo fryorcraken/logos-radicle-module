@@ -486,7 +486,7 @@ LOGOS_TEST(get_settings_reports_defaults_when_nothing_has_been_persisted)
                                 SettingsStore{scratchSettingsPath("defaults")});
 
     const auto out = parse(impl.getSettings());
-    LOGOS_ASSERT_EQ(out["mode"].get<std::string>(), std::string("attach"));
+    LOGOS_ASSERT_EQ(out["mode"].get<std::string>(), std::string("local"));
     LOGOS_ASSERT_TRUE(out["gitPath"].get<std::string>().empty());
 }
 
@@ -496,11 +496,11 @@ LOGOS_TEST(a_setting_written_through_the_module_is_readable_through_it)
     const auto path = scratchSettingsPath("roundtrip");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    const auto written = parse(impl.setSetting("mode", "seedOnly"));
+    const auto written = parse(impl.setSetting("mode", "explore"));
     LOGOS_ASSERT_FALSE(written.contains("error"));
 
     const auto read = parse(impl.getSettings());
-    LOGOS_ASSERT_EQ(read["mode"].get<std::string>(), std::string("seedOnly"));
+    LOGOS_ASSERT_EQ(read["mode"].get<std::string>(), std::string("explore"));
 }
 
 LOGOS_TEST(set_setting_refuses_an_unknown_key_through_the_module_boundary)
@@ -534,10 +534,10 @@ LOGOS_TEST(capabilities_report_the_active_mode_and_whether_it_can_start)
     const auto path = scratchSettingsPath("caps-mode");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    // Attach: startable today.
-    impl.setSetting("mode", "attach");
+    // Local: startable today.
+    impl.setSetting("mode", "local");
     auto caps = parse(impl.getCapabilities());
-    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("attach"));
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("local"));
     LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
     LOGOS_ASSERT_TRUE(caps["modeUnavailableReason"].get<std::string>().empty());
 
@@ -557,7 +557,7 @@ LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_on
     // The honesty guarantee the mode picker depends on. `modeStartable` answers
     // a question about the CURRENT mode; a picker offering three rows needs the
     // answer for all three, and deriving one from the other is not possible:
-    // in Attach mode (the default, and where a first-time user always is)
+    // in `local` mode (the default, and where a first-time user always is)
     // `modeStartable` is true, which says nothing at all about Embedded.
     //
     // Before this field existed the UI derived the set from that boolean, so in
@@ -565,17 +565,17 @@ LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_on
     // it, it persisted, and only THEN did a warning appear. That is exactly the
     // "control that silently does nothing" the design refuses to ship.
     //
-    // Asserted in the DEFAULT (attach) state on purpose: the buggy derivation
+    // Asserted in the DEFAULT (`local`) state on purpose: the buggy derivation
     // was correct in every other state, so a test that first switched to
     // embedded would have passed against it.
     ScopedRadHome home("caps-startable-set");
     const auto path = scratchSettingsPath("caps-startable-set");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    impl.setSetting("mode", "attach");
+    impl.setSetting("mode", "local");
     const auto caps = parse(impl.getCapabilities());
 
-    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("attach"));
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("local"));
     LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
 
     LOGOS_ASSERT_TRUE(caps.contains("startableModes"));
@@ -588,8 +588,8 @@ LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_on
         return false;
     };
 
-    LOGOS_ASSERT_TRUE(has("attach"));
-    LOGOS_ASSERT_TRUE(has("seedOnly"));
+    LOGOS_ASSERT_TRUE(has("local"));
+    LOGOS_ASSERT_TRUE(has("explore"));
     // The whole point: embedded is absent even while the current mode IS
     // startable, so a picker can annotate that row before it is chosen.
     LOGOS_ASSERT_FALSE(has("embedded"));
@@ -606,47 +606,47 @@ LOGOS_TEST(the_startable_set_does_not_change_with_the_selected_mode)
     const auto path = scratchSettingsPath("caps-startable-stable");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    impl.setSetting("mode", "attach");
-    const auto inAttach = parse(impl.getCapabilities())["startableModes"];
+    impl.setSetting("mode", "local");
+    const auto inLocal = parse(impl.getCapabilities())["startableModes"];
 
     impl.setSetting("mode", "embedded");
     const auto inEmbedded = parse(impl.getCapabilities())["startableModes"];
 
     // Asserted non-empty first, or this whole test passes vacuously against a
     // build with no `startableModes` at all: two absent values compare equal.
-    LOGOS_ASSERT_TRUE(inAttach.is_array());
-    LOGOS_ASSERT_FALSE(inAttach.empty());
-    LOGOS_ASSERT_EQ(inAttach.dump(), inEmbedded.dump());
+    LOGOS_ASSERT_TRUE(inLocal.is_array());
+    LOGOS_ASSERT_FALSE(inLocal.empty());
+    LOGOS_ASSERT_EQ(inLocal.dump(), inEmbedded.dump());
 }
 
-LOGOS_TEST(embedded_mode_does_not_alias_the_attached_profile)
+LOGOS_TEST(embedded_mode_does_not_alias_the_existing_local_profile)
 {
     // The identity-confusion failure this whole milestone exists to prevent,
     // arriving through the mode picker itself.
     //
     // Embedded promises "a SEPARATE identity from any node you already run".
-    // Before this, `storeForSettings` special-cased only seedOnly, so embedded
-    // fell through to the same env resolution as attach — a user who selected
-    // it got the Local toggle, their ATTACHED node's DID in the chrome, their
-    // attached repositories, and writes enabled against them, all under a badge
+    // Before this, `storeForSettings` special-cased only `explore`, so embedded
+    // fell through to the same env resolution as `local` — a user who selected
+    // it got their EXISTING node's DID in the chrome, their existing
+    // repositories, and writes enabled against them, all under a segment
     // reading "Embedded".
     //
     // Phase 2 owns the embedded home. Until it lands the correct behaviour is
     // INERT, not aliased: no home, so localAvailable is false and nothing of
-    // the attached profile leaks through.
+    // the existing profile leaks through.
     ScopedRadHome home("caps-embedded-inert");
     home.makeStorage();
 
     const auto path = scratchSettingsPath("embedded-inert");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    // Attach first, to prove the profile IS visible from this environment —
+    // `local` first, to prove the profile IS visible from this environment —
     // without this the assertions below would pass against a module that could
     // never see any profile at all.
-    impl.setSetting("mode", "attach");
-    const auto attached = parse(impl.getCapabilities());
-    LOGOS_ASSERT_EQ(attached["radHome"].get<std::string>(), home.dir);
-    LOGOS_ASSERT_TRUE(attached["localAvailable"].get<bool>());
+    impl.setSetting("mode", "local");
+    const auto usingLocal = parse(impl.getCapabilities());
+    LOGOS_ASSERT_EQ(usingLocal["radHome"].get<std::string>(), home.dir);
+    LOGOS_ASSERT_TRUE(usingLocal["localAvailable"].get<bool>());
 
     impl.setSetting("mode", "embedded");
     const auto caps = parse(impl.getCapabilities());
@@ -672,23 +672,23 @@ LOGOS_TEST(capabilities_report_the_resolved_home_and_socket)
     LOGOS_ASSERT_TRUE(caps.contains("pathsProblem"));
 }
 
-LOGOS_TEST(seed_only_mode_reports_no_local_home_at_all)
+LOGOS_TEST(explore_mode_reports_no_local_home_at_all)
 {
-    // Seed-only is not "attach with the local bits hidden": the user has said
+    // Explore is not "`local` with the local bits hidden": the user has said
     // they do not want this module touching a local profile, so it must not
     // report one even when a perfectly good profile exists in the environment.
-    ScopedRadHome home("caps-seed-only");
+    ScopedRadHome home("caps-explore");
     home.makeStorage();
 
-    const auto path = scratchSettingsPath("seed-only");
+    const auto path = scratchSettingsPath("explore");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    // Attach first, to prove the profile IS visible — otherwise the assertion
+    // `local` first, to prove the profile IS visible — otherwise the assertion
     // below would pass against a module that never sees any profile.
-    impl.setSetting("mode", "attach");
+    impl.setSetting("mode", "local");
     LOGOS_ASSERT_EQ(parse(impl.getCapabilities())["radHome"].get<std::string>(), home.dir);
 
-    impl.setSetting("mode", "seedOnly");
+    impl.setSetting("mode", "explore");
     const auto caps = parse(impl.getCapabilities());
     LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
     LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());

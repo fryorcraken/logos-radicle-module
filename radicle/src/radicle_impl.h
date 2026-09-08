@@ -106,10 +106,10 @@ public:
      *     "nodeId":"did:key:z6Mk...", // local NID, empty when unavailable
      *
      *     // --- which node, and whether this build can run it --------------
-     *     "mode":"attach"|"embedded"|"seedOnly",
+     *     "mode":"explore"|"local"|"embedded",
      *     "modeStartable":bool,    // can the CURRENT mode start? false for
      *                              //   embedded until Phase 2
-     *     "startableModes":["attach","seedOnly"], // which modes can, at all
+     *     "startableModes":["explore","local"], // which modes can, at all
      *     "modeUnavailableReason":"...", // "" when modeStartable
      *     "radHome":"<path>",      // the home actually resolved
      *     "radSocket":"<path>",    // the control socket actually resolved
@@ -131,18 +131,19 @@ public:
      *
      * **A picker MUST consume `startableModes` rather than deriving a set from
      * `modeStartable`.** The two answer different questions: the boolean is
-     * about the mode in force, the array is about the build. In Attach — the
+     * about the mode in force, the array is about the build. In `local` — the
      * default state, and where every first-time user is — the boolean is true,
-     * from which nothing follows about Embedded. A UI that derived the set from
-     * it therefore offered Embedded with no caveat, and the user discovered it
-     * could not run only after selecting it and having that persisted. Neither
-     * field is redundant; a view generally needs both.
+     * from which nothing follows about `embedded`. A UI that derived the set
+     * from it therefore offered Embedded with no caveat, and the user
+     * discovered it could not run only after selecting it and having that
+     * persisted. Neither field is redundant; a view generally needs both.
      *
      * **A non-startable mode is inert, not aliased.** `mode:"embedded"` reports
      * an empty `radHome` and `localAvailable:false` — it does NOT fall through
-     * to whatever Attach would have resolved. Reporting the attached profile's
-     * home under an "Embedded" badge would be the identity confusion this whole
-     * design exists to prevent; see `storeForSettings` in radicle_impl.cpp.
+     * to whatever `local` would have resolved. Reporting the existing profile's
+     * home under a segment reading "Embedded" would be the identity confusion
+     * this whole design exists to prevent; see `storeForSettings` in
+     * radicle_impl.cpp.
      *
      * **A view MUST always show `mode` and `nodeId`.** The failure this design
      * is most exposed to is a user believing they are operating as their
@@ -161,7 +162,7 @@ public:
     /**
      * Every persisted module setting, with defaults filled in.
      *
-     * -> {"mode":"attach"|"embedded"|"seedOnly",
+     * -> {"mode":"explore"|"local"|"embedded",
      *     "radHome":"...",     // "" means resolve from RAD_HOME/HOME
      *     "radSocket":"...",   // "" means $XDG_RUNTIME_DIR, else under the home
      *     "gitPath":"...",     // "" means find git on PATH

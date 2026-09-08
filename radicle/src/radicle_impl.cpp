@@ -46,32 +46,32 @@ namespace {
 /// settings choose it, and the environment is the fallback rather than the
 /// authority.
 ///
-/// Seed-only deliberately yields a store with NO home. That is not a
-/// degenerate case to work around — it is the mode's definition: a user who
-/// has chosen to browse a seed over HTTP has said they do not want this module
-/// touching a local profile, and silently reading one anyway would be the
-/// module ignoring an explicit choice.
+/// Explore deliberately yields a store with NO home. That is not a degenerate
+/// case to work around — it is the mode's definition: a user who has chosen to
+/// browse a seed over HTTP has said they do not want this module touching a
+/// local profile, and silently reading one anyway would be the module ignoring
+/// an explicit choice.
 ///
 /// **Embedded yields no home either, and for a sharper reason.** Phase 2 owns
 /// the Basecamp-managed home an embedded node runs against; until it exists,
-/// the only two behaviours available are "inert" and "quietly whatever Attach
+/// the only two behaviours available are "inert" and "quietly whatever Local
 /// would have done". The second is not a lesser version of the feature — it is
-/// the exact failure this milestone is justified by. Embedded's own blurb
-/// promises "a SEPARATE identity from any node you already run"; falling
-/// through to the environment gives the user their ATTACHED node's DID in the
-/// chrome, their attached repositories, and writes enabled against them, all
-/// under a badge reading "Embedded". A mode that lies about which identity is
-/// in use is worse than one that does nothing, so this does nothing, visibly:
-/// `localAvailable` is false and `modeUnavailableReason` says why.
+/// the exact failure this milestone is justified by. Embedded promises "a
+/// SEPARATE identity from any node you already run"; falling through to the
+/// environment gives the user their EXISTING node's DID in the chrome, their
+/// existing repositories, and writes enabled against them, all under a segment
+/// reading "Embedded". A mode that lies about which identity is in use is worse
+/// than one that does nothing, so this does nothing, visibly: `localAvailable`
+/// is false and `modeUnavailableReason` says why.
 ///
 /// Note this is NOT a switch with a default: every mode is named, so adding a
 /// fourth is a compile-time visit to this function rather than a silent
-/// inheritance of Attach's behaviour. That inheritance is what went wrong here.
+/// inheritance of Local's behaviour. That inheritance is what went wrong here.
 radicle::LocalStore storeForSettings(const radicle::SettingsStore& settings)
 {
     const auto mode = settings.get(radicle::SettingsStore::kKeyMode);
 
-    if (mode == radicle::SettingsStore::kModeSeedOnly
+    if (mode == radicle::SettingsStore::kModeExplore
         || mode == radicle::SettingsStore::kModeEmbedded)
         return radicle::LocalStore{radicle::NodePaths{}};
 
@@ -222,7 +222,7 @@ std::string RadicleImpl::getCapabilities()
 
     // The startable SET, not just a boolean about the mode in force. A picker
     // draws three rows and has to annotate each one *before* it is chosen; the
-    // boolean cannot answer that, because in Attach — the default — it is true
+    // boolean cannot answer that, because in `local` — the default — it is true
     // and says nothing whatever about Embedded. Deriving the set from it left
     // the Embedded row uncaveated in exactly the state every new user starts
     // in. See SettingsStore::startableModes().
@@ -234,12 +234,18 @@ std::string RadicleImpl::getCapabilities()
     // Today embedded is the only unstartable mode, so the two read identically
     // — but a hardcoded sentence becomes silently wrong the moment that stops
     // being true, and nothing would report it.
+    //
+    // The modes it suggests instead come from the constants for the same
+    // reason: this sentence used to spell out "Attach", and when the mode
+    // vocabulary was unified with the UI's it would have gone on confidently
+    // recommending a mode that no longer exists, with nothing going red.
     std::string modeReason;
     if (!startable) {
         modeReason = "the '" + mode + "' mode is selected but this build cannot "
-                     "start that node yet — it arrives in a later milestone. "
-                     "Browsing a seed still works; switch to Attach to use a "
-                     "Radicle node you already run.";
+                     "start that node yet — it arrives in a later milestone. '"
+                     + radicle::SettingsStore::kModeExplore + "' still browses a "
+                     "seed, and '" + radicle::SettingsStore::kModeLocal
+                     + "' uses a Radicle node you already run.";
     }
 
     // The git preflight. Not cosmetic: Radicle spawns git to read and write

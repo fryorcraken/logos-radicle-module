@@ -3,19 +3,20 @@ import QtTest
 import "../src/qml" as Ui
 
 /*
- * Switching between the seed and local-node sources.
+ * The header's mode control, the identity beside it, and the method routing
+ * derived from the mode.
  *
- * The toggle is what makes M2.1's backend reachable at all, so these drive it
- * with real mouse clicks rather than by setting `current` — setting the
- * property would pass even if the segments had no click handler, which is the
- * exact shape that shipped two click-dead rows in this codebase before (see
- * tst_clicks.qml).
+ * These drive the toggle with real mouse clicks rather than by setting `mode` —
+ * setting the property would pass even if the segments had no click handler,
+ * which is the exact shape that shipped two click-dead rows in this codebase
+ * before (see tst_clicks.qml). The user's own report of this control was that
+ * it "cant be clicked", so a click that changes state is the thing under test.
  */
 Item {
     id: root
 
-    width: 600
-    height: 200
+    width: 800
+    height: 300
 
     property var chosen: []
 
@@ -30,107 +31,537 @@ Item {
         return null;
     }
 
+    /// Every descendant whose objectName starts with `prefix`. Used to count
+    /// segments, so "exactly three" is an assertion about what is rendered
+    /// rather than about what the model happens to say.
+    function collectByPrefix(node, prefix, out) {
+        if (!node) return out;
+        if (typeof node.objectName === "string"
+            && node.objectName.indexOf(prefix) === 0)
+            out.push(node.objectName);
+        for (var i = 0; i < node.children.length; i++)
+            collectByPrefix(node.children[i], prefix, out);
+        return out;
+    }
+
     Ui.SourceToggle {
         id: toggle
         objectName: "toggle"
         anchors.top: parent.top
         anchors.left: parent.left
+        mode: "local"
+        startableModes: ["explore", "local"]
         localAvailable: true
-        current: "remote"
-        onSourceChosen: function (s) { chosen.push(s); }
+        onModeChosen: function (m) { chosen.push(m); }
     }
 
+    Ui.NodeIdentity {
+        id: identity
+        objectName: "identity"
+        anchors.top: parent.top
+        anchors.left: toggle.right
+        nodeId: ""
+    }
+
+    property int identityActivations: 0
+    Connections {
+        target: identity
+        function onActivated() { root.identityActivations++; }
+    }
+
+    // -----------------------------------------------------------------------
+    // The segmented control: exactly three segments, one per mode, nothing else.
+    // -----------------------------------------------------------------------
     TestCase {
         name: "SourceToggle"
         when: windowShown
 
         function init() {
             chosen = [];
+            toggle.mode = "local";
+            toggle.startableModes = ["explore", "local"];
             toggle.localAvailable = true;
-            toggle.current = "remote";
+            toggle.modeReason = "";
+            toggle.pathsProblem = "";
+            toggle.reason = "";
+            // No settle here, deliberately. These tests need none because the
+            // control's geometry is arithmetic rather than a layout pass —
+            // see SourceToggle.qml. Earlier versions of this file called
+            // `wait(0)` in every init(), and each of those was hiding a real
+            // lag between the control's content and the size it reported. If a
+            // settle ever becomes necessary again, that is a defect in the
+            // component, not a missing line here.
         }
 
-        function test_both_segments_are_present_when_a_local_profile_exists() {
-            verify(findByName(toggle, "sourceToggle_remote") !== null,
-                   "the seed segment should exist");
-            verify(findByName(toggle, "sourceToggle_local") !== null,
-                   "the local segment should exist when a profile was found");
+        function test_there_are_exactly_three_segments_one_per_mode() {
+            // The user's instruction, asserted literally: the control is
+            // "explore | local | embedded" and nothing else. Counting rendered
+            // elements rather than reading the model, so a fourth segment
+            // slipped in anywhere would fail here.
+            var names = root.collectByPrefix(toggle, "sourceToggle_", []);
+            compare(names.length, 3, "got: " + names.join(", "));
+
+            verify(root.findByName(toggle, "sourceToggle_explore") !== null);
+            verify(root.findByName(toggle, "sourceToggle_local") !== null);
+            verify(root.findByName(toggle, "sourceToggle_embedded") !== null);
         }
 
-        /// A real click, not an emitted signal: this is what proves the
-        /// segment is actually wired.
-        function test_clicking_local_asks_for_the_local_source() {
-            var seg = findByName(toggle, "sourceToggle_local");
-            verify(seg !== null, "local segment must exist to click");
-            mouseClick(seg);
-            compare(chosen.length, 1, "one choice should have been reported");
-            compare(chosen[0], "local");
+        /// The identity must NOT be inside the control. It answers "who am I",
+        /// which is a different question from "what am I browsing", and putting
+        /// it in a segment made the control's geometry follow the capabilities.
+        function test_no_identity_lives_inside_the_segmented_control() {
+            verify(root.findByName(toggle, "nodeIdentity") === null,
+                   "the identity element must not be inside the toggle");
+            verify(root.findByName(toggle, "nodeIdentityLabel") === null);
+
+            // And no segment label may carry a DID. Asserted on the rendered
+            // text, because the failure mode was a label built from `shortId`.
+            var keys = ["explore", "local", "embedded"];
+            for (var i = 0; i < keys.length; i++) {
+                var lbl = root.findByName(toggle, "sourceToggleLabel_" + keys[i]);
+                verify(lbl !== null, "missing label for " + keys[i]);
+                verify(lbl.text.indexOf("z6Mk") === -1,
+                       "a segment label carries an identity: " + lbl.text);
+                verify(lbl.text.indexOf("·") === -1,
+                       "a segment label carries a second concept: " + lbl.text);
+            }
         }
 
-        function test_clicking_seed_asks_for_the_remote_source() {
-            toggle.current = "local";
-            var seg = findByName(toggle, "sourceToggle_remote");
-            mouseClick(seg);
-            compare(chosen[chosen.length - 1], "remote");
+        /// Each label is the mode's own word — one vocabulary, top to bottom.
+        function test_each_segment_reads_as_its_mode() {
+            compare(root.findByName(toggle, "sourceToggleLabel_explore").text,
+                    "Explore");
+            compare(root.findByName(toggle, "sourceToggleLabel_local").text,
+                    "Local");
+            compare(root.findByName(toggle, "sourceToggleLabel_embedded").text,
+                    "Embedded");
         }
 
-        /// With no profile the local segment is absent rather than disabled.
-        /// A disabled control that can only ever produce an error reads as a
-        /// broken feature, so there must be nothing there to click.
-        function test_no_local_segment_without_a_profile() {
-            toggle.localAvailable = false;
-            verify(findByName(toggle, "sourceToggle_local") === null,
-                   "the local segment must not exist without a profile");
-            verify(findByName(toggle, "sourceToggle_remote") !== null,
-                   "the seed segment stays, naming what is on screen");
+        /// A real click, not an emitted signal: this is what proves the segment
+        /// is actually wired, and it is the literal answer to "cant be clicked".
+        function test_clicking_each_segment_reports_that_mode() {
+            // Input-dependent across all three: a control that reported one
+            // fixed mode for every click would pass a single-segment assertion
+            // and fail this.
+            mouseClick(root.findByName(toggle, "sourceToggle_explore"));
+            compare(chosen[chosen.length - 1], "explore");
+
+            mouseClick(root.findByName(toggle, "sourceToggle_embedded"));
+            compare(chosen[chosen.length - 1], "embedded");
+
+            mouseClick(root.findByName(toggle, "sourceToggle_local"));
+            compare(chosen[chosen.length - 1], "local");
+
+            compare(chosen.length, 3, "every click must have been delivered");
+        }
+
+        /// Embedded is offered rather than hidden or disabled — it is a real,
+        /// persistable choice whose consequence is stated. A control that
+        /// refused the click would be the "silently does nothing" bug in a
+        /// different costume.
+        function test_embedded_is_clickable_even_though_it_cannot_start() {
+            verify(!toggle.isStartable("embedded"),
+                   "the fixture must describe a build that cannot start it");
+            mouseClick(root.findByName(toggle, "sourceToggle_embedded"));
+            compare(chosen[chosen.length - 1], "embedded",
+                    "an unstartable mode must still be selectable");
+        }
+
+        /// Selecting a segment must not resize it.
+        ///
+        /// This is a real defect rather than a test artifact: when the segment
+        /// width followed `font.bold: selected`, every click re-laid the row
+        /// out — the newly selected segment grew, its neighbour shifted, and a
+        /// click computed against the pre-click geometry landed on the WRONG
+        /// segment. A user clicking twice in quick succession hits the same
+        /// window, and it reads as "the toggle sometimes ignores me".
+        ///
+        /// The tempting fix was a `waitForRendering` in the test. That would
+        /// have made the test pass and left the control jumping under real
+        /// fingers, so the geometry is pinned instead.
+        function test_selecting_a_segment_does_not_move_the_others() {
+            var explore = root.findByName(toggle, "sourceToggle_explore");
+            var local = root.findByName(toggle, "sourceToggle_local");
+
+            toggle.mode = "explore";
+            var ew = explore.width, lw = local.width;
+            var ex = explore.mapToItem(toggle, 0, 0).x;
+            var lx = local.mapToItem(toggle, 0, 0).x;
+
+            toggle.mode = "local";
+            compare(explore.width, ew, "Explore changed width on select");
+            compare(local.width, lw, "Local changed width on select");
+            compare(explore.mapToItem(toggle, 0, 0).x, ex, "Explore moved");
+            compare(local.mapToItem(toggle, 0, 0).x, lx, "Local moved");
         }
     }
 
     // -----------------------------------------------------------------------
-    // Routing and switching, against the REAL component.
+    // The caption: everything the old clipped tooltip tried to say, on screen.
+    // -----------------------------------------------------------------------
+    TestCase {
+        name: "SourceToggleCaption"
+        when: windowShown
+
+        function init() {
+            chosen = [];
+            toggle.mode = "local";
+            toggle.startableModes = ["explore", "local"];
+            toggle.localAvailable = true;
+            toggle.modeReason = "";
+            toggle.pathsProblem = "";
+            toggle.reason = "";
+        }
+
+        /// The regression the user actually hit: *"why the warning sign for
+        /// local????"*. Local browsing WORKS on a machine with a profile, and
+        /// decorating a working feature with a warning is a lie.
+        ///
+        /// Asserted on `hasProblem` — which drives the colour — because there
+        /// is no glyph to look for; the amber styling IS what the user read as
+        /// a warning sign.
+        function test_local_carries_no_warning_when_a_profile_exists() {
+            toggle.mode = "local";
+            toggle.localAvailable = true;
+            verify(!toggle.hasProblem,
+                   "a working local profile must not be flagged as a problem");
+        }
+
+        /// The other half, or `hasProblem` could just always be false: a real
+        /// problem must still flag. One component, two different answers.
+        function test_a_real_problem_still_flags() {
+            toggle.pathsProblem = "the node control socket path is too long: "
+                                + "114 bytes, limit 108";
+            verify(toggle.hasProblem,
+                   "an unusable socket path IS a problem and must show as one");
+        }
+
+        /// The assertion the brief singles out: the Embedded caveat must be
+        /// present in the DEFAULT state — mode `local`, which IS startable —
+        /// because the user who has not chosen Embedded is exactly the one who
+        /// needs to know what choosing it would do.
+        ///
+        /// This is why the caveat keys off `startableModes` (a fact about the
+        /// build) and not `modeStartable` (a fact about the mode in force,
+        /// which is true here and says nothing about Embedded). A previous
+        /// version derived one from the other and annotated nothing at all in
+        /// this state.
+        ///
+        /// In WORDS, on screen, with no hover: the old design put this in a
+        /// tooltip clipped to an unreadable sliver.
+        function test_the_embedded_caveat_shows_in_the_default_state() {
+            compare(toggle.mode, "local", "the default state, on purpose");
+            verify(toggle.isStartable(toggle.mode),
+                   "the mode in force IS startable — which is exactly why "
+                   + "deriving the caveat from that boolean cannot work");
+
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(note !== null, "the caption line must exist");
+            verify(note.visible,
+                   "Embedded must be explained BEFORE it is chosen");
+            verify(note.text.indexOf("Embedded") !== -1,
+                   "the caption must name the mode it is about, got: " + note.text);
+            verify(note.text.indexOf("not available") !== -1
+                   || note.text.indexOf("will not start") !== -1,
+                   "and say it will not start a node, got: " + note.text);
+            verify(note.text.indexOf("separate identity") !== -1,
+                   "and state the consequence that actually matters, got: "
+                   + note.text);
+        }
+
+        /// And the caveat goes when the build CAN start Embedded — otherwise
+        /// the caption is decoration that happens to be true today. Input
+        /// dependent on the field that decides it.
+        function test_the_caveat_follows_the_startable_set() {
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(note.visible, "shown for a build that cannot start Embedded");
+
+            toggle.startableModes = ["explore", "local", "embedded"];
+            verify(!note.visible,
+                   "when the build can start every mode there is nothing to "
+                   + "caption, got: " + note.text);
+
+            // And back, so this cannot pass by never showing it.
+            toggle.startableModes = ["explore", "local"];
+            verify(note.visible);
+        }
+
+        /// A missing profile is a different sentence from an unstartable mode,
+        /// and both must be readable rather than hovered. This is the case the
+        /// old clipped tooltip existed for.
+        function test_a_missing_profile_is_explained_in_words() {
+            // Every mode startable, so the Embedded caveat does not mask this.
+            toggle.startableModes = ["explore", "local", "embedded"];
+            toggle.mode = "local";
+            toggle.localAvailable = false;
+            toggle.reason = "No Radicle profile on this machine — run `rad auth`";
+
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(note.visible,
+                   "a mode that wanted a profile and found none must say so");
+            verify(note.text.indexOf("rad auth") !== -1,
+                   "verbatim, got: " + note.text);
+        }
+
+        /// ...and NOT in Explore, where having no local profile is not a
+        /// deficiency: you did not ask for one. A caption that fired here would
+        /// be the "warning on a working feature" complaint again.
+        function test_a_missing_profile_is_not_mentioned_in_explore() {
+            toggle.startableModes = ["explore", "local", "embedded"];
+            toggle.mode = "explore";
+            toggle.localAvailable = false;
+            toggle.reason = "No Radicle profile on this machine — run `rad auth`";
+
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(!note.visible,
+                   "Explore needs no local profile, so its absence is not "
+                   + "news, got: " + note.text);
+        }
+
+        /// A resolved-paths problem is neither of the above — "we could never
+        /// have talked to it" is a different fix from "it is not running" — and
+        /// it must not be swallowed by the other branches.
+        function test_a_paths_problem_is_explained_in_words() {
+            toggle.pathsProblem = "the node control socket path is too long: "
+                                + "114 bytes, limit 108";
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(note.visible);
+            verify(note.text.indexOf("108") !== -1,
+                   "the limit must survive into the caption, got: " + note.text);
+        }
+
+        /// The old control leaked its explanation into a Rectangle anchored to
+        /// `parent.bottom` inside a fixed-height bar, where `z` cannot lift it
+        /// over a later sibling of a DIFFERENT parent — so it rendered as an
+        /// unreadable sliver. The caption is now part of the control's own
+        /// layout; assert it is INSIDE the control's bounds, because a caption
+        /// hanging below its parent is that bug returning.
+        ///
+        /// Asserted on geometry rather than by clicking: a click test
+        /// structurally cannot see a clipped overlay, which is what CommitView's
+        /// back button taught this repo.
+        function test_the_caption_is_inside_the_control_not_hanging_below_it() {
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(note.visible, "the default state has a caption to place");
+
+            // Deliberately NOT preceded by a settle. The caption's width is a
+            // Theme constant rather than a function of the control beneath it,
+            // so its height — and therefore the control's — is known in one
+            // layout pass. When the width tracked `frame.width` the chain took
+            // several passes to settle and this measured a caption genuinely
+            // hanging out of a parent that had not grown yet. Waiting would
+            // have hidden that; the dependency was cut instead.
+            var bottom = note.mapToItem(toggle, 0, note.height).y;
+            verify(bottom <= toggle.height + 1,
+                   "the caption's bottom is at " + bottom + " but the control "
+                   + "is only " + toggle.height + "px tall — it is hanging "
+                   + "outside its parent and will be clipped");
+            verify(note.mapToItem(toggle, 0, 0).y >= -1,
+                   "the caption starts above the control's top edge");
+            verify(note.height > 0, "a zero-height caption is invisible");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The identity: its own element, beside the control, never inside it.
+    // -----------------------------------------------------------------------
+    TestCase {
+        name: "NodeIdentity"
+        when: windowShown
+
+        function init() {
+            root.identityActivations = 0;
+            identity.nodeId = "";
+        }
+
+        function test_the_identity_is_legible_without_hovering() {
+            identity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            var lbl = root.findByName(identity, "nodeIdentityLabel");
+            verify(lbl !== null && lbl.visible);
+            verify(lbl.text.indexOf("z6MkvS2mYc1JMm") === 0,
+                   "the head a person recognises must be shown, got: " + lbl.text);
+            verify(lbl.text.indexOf("did:key:") === -1,
+                   "the prefix is noise in chrome, got: " + lbl.text);
+        }
+
+        /// Input-dependent, so a hardcoded label fails: two identities must
+        /// render differently.
+        function test_two_identities_render_differently() {
+            identity.nodeId = "did:key:z6MkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+            var a = root.findByName(identity, "nodeIdentityLabel").text;
+            identity.nodeId = "did:key:z6MkBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+            var b = root.findByName(identity, "nodeIdentityLabel").text;
+            verify(a !== b, "got " + a + " for both");
+        }
+
+        /// It must NOT restate the mode. The segment already says "Local", and
+        /// the badge saying "Attached" beside it was the duplicated vocabulary
+        /// that made the header unreadable in the first place.
+        function test_the_identity_does_not_restate_the_mode() {
+            identity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            var t = root.findByName(identity, "nodeIdentityLabel").text;
+            verify(t.indexOf("Attached") === -1, "got: " + t);
+            verify(t.indexOf("Local") === -1, "got: " + t);
+            verify(t.indexOf("Embedded") === -1, "got: " + t);
+        }
+
+        /// Absent rather than blank when there is nothing to show — the same
+        /// reasoning that makes a missing segment better than a disabled one.
+        function test_no_identity_means_no_element_at_all() {
+            identity.nodeId = "";
+            verify(!identity.visible,
+                   "an empty identity slot reads as a rendering fault");
+            compare(identity.implicitWidth, 0,
+                   "and it must take no space in the header row");
+        }
+
+        /// Priority 2: anything that looks clickable must BE clickable. The
+        /// badge this replaces looked like a button and did nothing, which is
+        /// what made it read as broken. A real click, asserting a real effect.
+        function test_clicking_the_identity_asks_for_the_detail() {
+            identity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            var area = root.findByName(identity, "nodeIdentity");
+            verify(area !== null, "the clickable element must carry the objectName");
+            mouseClick(area);
+            compare(root.identityActivations, 1,
+                    "clicking the identity must do something");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The mode-detail slot.
     //
-    // An earlier version of this block drove hand-written QtObject stubs that
-    // reproduced Main.qml's logic — which meant deleting `setSource` from
-    // Main.qml, or reverting `call()` to a hardcoded "remote", left every test
-    // green while the local backend became unreachable. A copy asserted
-    // against itself is not a test.
+    // One rule the user learns once: the thing beside the toggle is the detail
+    // of whichever mode is selected. Explore's detail is the seed, Local's is
+    // the identity, Embedded has none until Phase 2.
     //
-    // The logic now lives in SourceState.qml (extracted the way M1.1 extracted
-    // NavState, for the same reason), so these drive the real object. Break
-    // `methodFor` or `select` and these go red.
+    // The two REAL components are hosted here under the same `visible:`
+    // bindings Main.qml gives them, so this pins the rule rather than a copy of
+    // it. Main.qml itself needs a live QtRO backend and cannot be instantiated
+    // in a component test; what CAN drift — the two conditions — is what is
+    // asserted, and `slotMode` below is the single input both read.
+    // -----------------------------------------------------------------------
+    property string slotMode: "local"
+
+    Ui.SeedPicker {
+        id: slotSeedPicker
+        objectName: "slotSeedPicker"
+        anchors.top: toggle.bottom
+        visible: root.slotMode === "explore"
+        // Input-dependent: a different seed list per call, so a picker that
+        // never fetched could not accidentally look right.
+        fetchSeeds: function (cb) {
+            cb({ items: [{ url: "https://seed.example", alias: "example" }] });
+        }
+    }
+
+    Ui.NodeIdentity {
+        id: slotIdentity
+        objectName: "slotIdentity"
+        anchors.top: slotSeedPicker.bottom
+        visible: root.slotMode === "local" && slotIdentity.nodeId !== ""
+        nodeId: "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd"
+    }
+
+    TestCase {
+        name: "ModeDetailSlot"
+        when: windowShown
+
+        function init() {
+            root.slotMode = "local";
+            slotIdentity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+        }
+
+        /// Local's detail is the identity, and the seed picker steps aside.
+        function test_local_shows_the_identity_and_hides_the_seed_picker() {
+            root.slotMode = "local";
+            verify(slotIdentity.visible,
+                   "the identity is Local's detail and must be shown");
+            verify(!slotSeedPicker.visible,
+                   "which seed is proxied to is not a fact about Local");
+        }
+
+        /// Explore's detail is the seed, and the identity steps aside — you are
+        /// not operating as any identity there, so showing one is noise.
+        function test_explore_shows_the_seed_picker_and_hides_the_identity() {
+            root.slotMode = "explore";
+            verify(slotSeedPicker.visible,
+                   "the seed is Explore's detail and must be shown");
+            verify(!slotIdentity.visible,
+                   "in Explore you are not operating as an identity at all");
+        }
+
+        /// Embedded has no node yet, so it has no detail. Not a placeholder,
+        /// not an empty pill — nothing, with the toggle's caption carrying the
+        /// explanation instead.
+        function test_embedded_shows_neither() {
+            root.slotMode = "embedded";
+            verify(!slotSeedPicker.visible);
+            verify(!slotIdentity.visible);
+        }
+
+        /// Exactly one at a time, across every mode. Asserted as a loop over
+        /// all three rather than three separate checks, because the invariant
+        /// is "at most one", and a fourth mode added later inherits it.
+        function test_at_most_one_detail_is_ever_shown() {
+            var modes = ["explore", "local", "embedded"];
+            for (var i = 0; i < modes.length; i++) {
+                root.slotMode = modes[i];
+                var shown = (slotSeedPicker.visible ? 1 : 0)
+                          + (slotIdentity.visible ? 1 : 0);
+                verify(shown <= 1,
+                       modes[i] + " showed " + shown + " details at once");
+            }
+        }
+
+        /// And the identity is absent even in its own mode when there is
+        /// nothing to show — blank would read as a rendering fault.
+        function test_local_without_an_identity_shows_no_slot_at_all() {
+            root.slotMode = "local";
+            slotIdentity.nodeId = "";
+            verify(!slotIdentity.visible);
+            verify(!slotSeedPicker.visible);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Routing and mode switching, against the REAL component.
+    //
+    // An earlier version drove hand-written QtObject stubs reproducing
+    // Main.qml's logic — which meant reverting `call()` to a hardcoded "remote"
+    // left every test green while the local backend became unreachable. A copy
+    // asserted against itself is not a test.
     // -----------------------------------------------------------------------
 
     Ui.SourceState {
         id: sourceState
+        mode: "local"
         localAvailable: true
         onChanged: reloads++
     }
 
     property int reloads: 0
 
-    // -----------------------------------------------------------------------
-    // The reload a source switch triggers must go to the NEW source.
+    // The reload a mode switch triggers must go to the NEW surface.
     //
-    // `changed()` is emitted from inside `select()`, one line after it assigns
-    // `current`. Anything reading a BINDING derived from `current` inside that
-    // handler still sees the old value — so Main.qml's `onChanged` calling
-    // `repoList.reload()` directly issued `remoteListRepos` when switching TO
-    // local. Symptom: click Local, see Explore's repositories, toggle away and
-    // back to get the real ones.
-    //
-    // `switchSource()` below mirrors Main.qml's wiring exactly: a binding to
-    // `current` (not a live read), a handler that fires on `changed`, and a
-    // zero-interval Timer deferring the fetch by one turn. Drop the Timer and
-    // call `doReload()` straight from the handler and this goes red.
-    // -----------------------------------------------------------------------
+    // `changed()` fires while the mode write is still in flight, so anything
+    // reading a BINDING derived from the mode still sees the old value — which
+    // is why Main.qml defers the fetch. `switchMode()` below mirrors that
+    // wiring: a binding to `current` (not a live read), a handler on `changed`,
+    // and a zero-interval Timer. Drop the Timer and call `doReload()` straight
+    // from the handler and this goes red.
     readonly property string boundSource: sourceState.current
     property string fetchedWith: ""
 
     function doReload() {
-        // What Main.qml's call() does: resolve the method from the BOUND
-        // alias, not by reading sourceState.current directly. Reading the
-        // property directly would mask the bug, since the assignment itself
-        // is immediate — it is the binding that lags.
+        // What Main.qml's call() does: resolve the method from the BOUND alias,
+        // not by reading sourceState.current directly. Reading it directly
+        // would mask the bug, since the assignment itself is immediate — it is
+        // the binding that lags.
         fetchedWith = boundSource + "ListRepos";
     }
 
@@ -150,55 +581,78 @@ Item {
         name: "SourceRouting"
 
         function init() {
-            sourceState.current = "remote";
+            sourceState.mode = "local";
             sourceState.localAvailable = true;
             reloads = 0;
         }
 
-        function test_calls_go_to_the_remote_surface_by_default() {
+        /// The derivation, asserted for every mode. This is the single source
+        /// of truth the whole collapse rests on: there is no stored `source`
+        /// that could disagree with the mode.
+        ///
+        /// Input-dependent across all three, so a routing function that
+        /// hardcoded either prefix fails at least one leg.
+        function test_the_surface_is_derived_from_the_mode() {
+            sourceState.mode = "explore";
+            compare(sourceState.current, "remote");
             compare(sourceState.methodFor("ListRepos"), "remoteListRepos");
-        }
 
-        function test_calls_follow_the_selected_source() {
-            sourceState.select("local");
+            sourceState.mode = "local";
+            compare(sourceState.current, "local");
             compare(sourceState.methodFor("ListRepos"), "localListRepos");
-            compare(sourceState.methodFor("GetCommit"), "localGetCommit",
-                    "every method follows the source, not just listing");
+
+            // The line that shows a mode and a method prefix are different
+            // things that happen to share a word: `embedded` is neither, and
+            // routes to the local surface.
+            sourceState.mode = "embedded";
+            compare(sourceState.current, "local");
+            compare(sourceState.methodFor("ListRepos"), "localListRepos");
         }
 
-        /// The per-call override, the seam for a screen showing both sources.
-        function test_an_explicit_source_overrides_the_selected_one() {
-            sourceState.select("local");
+        function test_every_method_follows_the_mode_not_just_listing() {
+            sourceState.mode = "explore";
+            compare(sourceState.methodFor("GetCommit"), "remoteGetCommit");
+            sourceState.mode = "local";
+            compare(sourceState.methodFor("GetCommit"), "localGetCommit");
+        }
+
+        /// The per-call override, the seam for a screen showing both surfaces.
+        function test_an_explicit_source_overrides_the_derived_one() {
+            sourceState.mode = "local";
             compare(sourceState.methodFor("GetRepo", "remote"), "remoteGetRepo");
         }
 
         /// The bug a user hit: clicking Local listed the SEED's repositories,
         /// and only a second toggle showed the node's own.
-        function test_the_reload_after_a_switch_uses_the_new_source() {
+        function test_the_reload_after_a_switch_uses_the_new_surface() {
             fetchedWith = "";
+            sourceState.mode = "explore";
             sourceState.select("local");
 
             // Nothing fetches synchronously — the deferral is what guarantees
-            // the fetch happens after bindings settle. (This test cannot
-            // reproduce the stale-binding window itself: a `Connections`
-            // handler is invoked later than the inline `onChanged` Main.qml
-            // uses, so the binding has already updated by the time it runs.
-            // What is pinned here is the observable contract — the fetch is
-            // deferred, and it targets the new source — which is what the
-            // user-visible bug violated.)
+            // the fetch happens after the mode has actually settled. (This test
+            // cannot reproduce the stale-binding window itself: a `Connections`
+            // handler runs later than Main.qml's inline `onChanged`, so the
+            // binding has already updated by the time it fires. What is pinned
+            // is the observable contract — the fetch is deferred, and it
+            // targets the new surface — which is what the user-visible bug
+            // violated.)
             compare(fetchedWith, "", "nothing should have been fetched yet");
 
+            // The mode is applied by the caller persisting it; here that is
+            // simulated by the same assignment Main.qml's capabilities binding
+            // would make.
+            sourceState.mode = "local";
             tryCompare(root, "fetchedWith", "localListRepos", 1000,
                        "the deferred reload must hit the LOCAL surface");
         }
 
         /// And back again, so the deferral is not just right in one direction.
         function test_switching_back_to_the_seed_reloads_from_the_seed() {
-            sourceState.select("local");
-            tryCompare(root, "fetchedWith", "localListRepos", 1000);
-
+            sourceState.mode = "local";
             fetchedWith = "";
-            sourceState.select("remote");
+            sourceState.select("explore");
+            sourceState.mode = "explore";
             tryCompare(root, "fetchedWith", "remoteListRepos", 1000,
                        "switching back must refetch from the seed");
         }
@@ -208,41 +662,44 @@ Item {
         name: "SourceSwitching"
 
         function init() {
-            sourceState.current = "remote";
+            sourceState.mode = "local";
             sourceState.localAvailable = true;
             reloads = 0;
         }
 
-        /// Regression test. `setSource()` once called only `nav.reset()`,
-        /// which was right when NavState did its own reload — M1.1 made it a
-        /// pure state holder and every caller responsible for reloading. The
-        /// stale assumption meant flipping to "Local" in a live Basecamp
-        /// switched the toggle, cleared the screen, and issued no request at
-        /// all: an empty list that read as "your node has no repositories".
-        ///
-        /// Main.qml responds to `changed` by resetting nav AND reloading, so
-        /// the signal firing exactly once per real switch is what makes that
-        /// possible. Suppress the signal and this goes red.
+        /// Regression test. `setSource()` once called only `nav.reset()`, which
+        /// was right when NavState did its own reload — M1.1 made it a pure
+        /// state holder and every caller responsible for reloading. The stale
+        /// assumption meant flipping the toggle in a live Basecamp switched the
+        /// control, cleared the screen, and issued no request at all: an empty
+        /// list that read as "your node has no repositories".
         function test_a_real_switch_signals_once_so_the_caller_can_refetch() {
-            verify(sourceState.select("local"), "the switch should be accepted");
-            compare(sourceState.current, "local");
+            verify(sourceState.select("explore"), "the switch should be accepted");
             compare(reloads, 1, "a real switch must notify exactly once");
         }
 
-        function test_switching_to_the_same_source_changes_nothing() {
-            verify(!sourceState.select("remote"), "a no-op returns false");
+        function test_switching_to_the_same_mode_changes_nothing() {
+            verify(!sourceState.select("local"), "a no-op returns false");
             compare(reloads, 0, "no notification when nothing changed");
         }
 
-        /// Guarded here as well as by hiding the segment: a spec, or a future
-        /// caller, can reach select() directly.
-        function test_local_is_refused_when_no_profile_exists() {
-            sourceState.localAvailable = false;
-            verify(!sourceState.select("local"), "local must be refused");
-            compare(sourceState.current, "remote");
+        /// An unknown mode is refused rather than announced: the backend would
+        /// reject the write, and a UI that had already told the user it
+        /// switched would then be showing a mode the module is not in.
+        function test_an_unknown_mode_is_refused() {
+            verify(!sourceState.select("turbo"));
+            compare(sourceState.mode, "local");
             compare(reloads, 0);
-            // And the routing must not have moved either.
-            compare(sourceState.methodFor("ListRepos"), "remoteListRepos");
+        }
+
+        /// Embedded is accepted here — this layer's job is not to second-guess
+        /// which modes can start. Refusing it would make the segment a control
+        /// that silently does nothing, which is the bug the caption exists to
+        /// avoid; the honest treatment is to persist it and say what it will do.
+        function test_embedded_is_a_real_choice_at_this_layer() {
+            verify(sourceState.select("embedded"),
+                   "an unstartable mode is still a persistable choice");
+            compare(reloads, 1);
         }
     }
 }

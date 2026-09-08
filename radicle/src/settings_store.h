@@ -27,7 +27,7 @@ namespace radicle {
  * git, are facts about the *module* — a different owner and a different
  * lifetime. Writing them into the node's file would mean this module editing a
  * document another program owns, and would tie settings to a profile that, in
- * Seed-only mode, does not exist at all.
+ * Explore mode, does not exist at all.
  *
  * ## Validation on write, not on use
  *
@@ -43,17 +43,30 @@ namespace radicle {
  */
 class SettingsStore {
 public:
-    /// Node lifecycle modes. Stored as the strings below, which are the API
-    /// contract — a UI may relabel them but must not rename them.
+    /// Node lifecycle modes. Stored as the strings below.
     ///
-    /// - `attach`    — use an existing Radicle home; the node is not ours.
+    /// - `explore`   — no local node at all; browse a seed over HTTP.
+    /// - `local`     — use an existing Radicle home; the node is not ours.
     /// - `embedded`  — a Basecamp-owned home whose node we start. **Selectable
     ///                 but not startable** until Phase 2 lands the daemon; see
     ///                 `modeIsStartable()`.
-    /// - `seedOnly`  — no local node at all; browse a seed over HTTP.
-    static constexpr const char* kModeAttach   = "attach";
+    ///
+    /// **These are the same words the UI shows**, deliberately. They used to be
+    /// `attach`/`seedOnly` while the view called the same things "Local" and
+    /// "Explore", and that gap was not cosmetic: the view carried a SECOND
+    /// vocabulary — a `source` of `remote`/`local` — for the same question, the
+    /// two leaked into the same header bar, and a user reported the result as
+    /// unintelligible. One vocabulary end to end is what stops that recurring,
+    /// so a rename here is a rename of the label too, and vice versa.
+    ///
+    /// Note the deliberate near-collision: `local` is a mode value AND the
+    /// prefix of the `local*` backend methods. They are different things that
+    /// happen to share a word — `SourceState.qml` derives the method prefix
+    /// from the mode rather than passing one off as the other, and nothing
+    /// should conflate them just because the strings match.
+    static constexpr const char* kModeExplore  = "explore";
+    static constexpr const char* kModeLocal    = "local";
     static constexpr const char* kModeEmbedded = "embedded";
-    static constexpr const char* kModeSeedOnly = "seedOnly";
 
     /// Settings keys. Named constants rather than bare strings so a typo is a
     /// compile error on this side of the boundary.
@@ -101,7 +114,7 @@ public:
     /// **This exists because `modeIsStartable(currentMode)` cannot substitute
     /// for it, and a UI that tried to derive one from the other shipped a real
     /// bug.** The boolean is a fact about the mode in force; a picker needs the
-    /// fact for every row it draws. In Attach — the default, and where every
+    /// fact for every row it draws. In `local` — the default, and where every
     /// first-time user is — the boolean is true, from which nothing at all
     /// follows about Embedded. Deriving the set from it therefore annotated
     /// nothing, and the user learned Embedded could not run only *after*

@@ -23,7 +23,7 @@ Item {
         id: fakeBackend
 
         property var stored: ({
-            mode: "attach",
+            mode: "local",
             radHome: "",
             radSocket: "",
             gitPath: "",
@@ -56,21 +56,21 @@ Item {
         }
     }
 
-    // The DEFAULT capabilities: mode "attach", which IS startable.
+    // The DEFAULT capabilities: mode "local", which IS startable.
     //
     // This fixture used to say `modeStartable: false`, and that single line was
     // load-bearing in the worst way — it was the only reason the honesty test
     // below passed. The panel derived its startable SET from that boolean, so a
     // fixture pinning it false produced the right annotation by accident; in
-    // the state every real first-time user is in (attach, startable) the same
+    // the state every real first-time user is in (local, startable) the same
     // derivation offered Embedded with no caveat at all.
     //
     // So the fixture now describes the default state, and the honesty test is
     // an assertion about the code rather than about the fixture.
     readonly property var defaultCaps: ({
-        mode: "attach",
+        mode: "local",
         modeStartable: true,
-        startableModes: ["attach", "seedOnly"],
+        startableModes: ["local", "explore"],
         modeUnavailableReason: "",
         gitFound: true,
         gitPath: "/usr/bin/git",
@@ -86,21 +86,13 @@ Item {
         saveSetting: function (k, v, cb) { fakeBackend.set(k, v, cb); }
     }
 
-    Ui.NodeStatus {
-        id: badge
-        mode: "attach"
-        startable: true
-        nodeId: "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd"
-        radHome: "/home/u/.radicle"
-    }
-
     TestCase {
         name: "SettingsPanel"
         when: windowShown
 
         function init() {
             fakeBackend.stored = {
-                mode: "attach", radHome: "", radSocket: "",
+                mode: "local", radHome: "", radSocket: "",
                 gitPath: "", remoteSeed: ""
             };
             fakeBackend.writes = 0;
@@ -112,7 +104,7 @@ Item {
             // the victim is arbitrary and the failure reads as unrelated. This
             // was a real failure here before the restore was added.
             //
-            // Restored to the DEFAULT capabilities — the attach/startable state
+            // Restored to the DEFAULT capabilities — the local/startable state
             // a first-time user is in — rather than to a hand-picked shape that
             // happens to make the assertions below easy.
             panel.caps = harness.defaultCaps;
@@ -120,23 +112,23 @@ Item {
         }
 
         function test_the_panel_loads_the_persisted_settings() {
-            compare(panel.currentMode, "attach");
+            compare(panel.currentMode, "local");
         }
 
         function test_choosing_a_mode_persists_it_and_the_panel_reflects_it() {
             // Distinct from the starting value, so a panel that ignored the
             // reply and kept showing its initial state would fail here.
-            panel.apply("mode", "seedOnly");
-            compare(fakeBackend.stored.mode, "seedOnly",
+            panel.apply("mode", "explore");
+            compare(fakeBackend.stored.mode, "explore",
                     "the write must reach the backend");
-            compare(panel.currentMode, "seedOnly",
+            compare(panel.currentMode, "explore",
                     "and the panel must re-render from the reply");
         }
 
         function test_two_different_modes_give_two_different_results() {
             // Input-dependent: a panel hardcoding either answer fails one leg.
-            panel.apply("mode", "seedOnly");
-            compare(panel.currentMode, "seedOnly");
+            panel.apply("mode", "explore");
+            compare(panel.currentMode, "explore");
 
             panel.apply("mode", "embedded");
             compare(panel.currentMode, "embedded");
@@ -159,14 +151,14 @@ Item {
             panel.apply("mode", "turbo");
             verify(panel.lastError.indexOf("turbo") !== -1,
                    "got: " + panel.lastError);
-            compare(panel.currentMode, "attach", "the stored mode is untouched");
+            compare(panel.currentMode, "local", "the stored mode is untouched");
         }
 
         function test_a_successful_write_clears_a_previous_error() {
             panel.apply("mode", "turbo");
             verify(panel.hasError);
 
-            panel.apply("mode", "seedOnly");
+            panel.apply("mode", "explore");
             verify(!panel.hasError,
                    "a later success must clear the earlier refusal, or the "
                    + "panel keeps accusing the user of a mistake they fixed");
@@ -220,9 +212,9 @@ Item {
 
         function test_a_non_startable_mode_says_so_in_its_own_row() {
             // The honesty guarantee, asserted IN THE DEFAULT STATE — mode
-            // "attach", which is startable. That is the whole point: the panel
+            // "local", which is startable. That is the whole point: the panel
             // used to derive its startable set from `caps.modeStartable`, a
-            // fact about the CURRENT mode, so with attach selected the set
+            // fact about the CURRENT mode, so with local selected the set
             // became all three and Embedded was offered with no caveat at all.
             // The user selected it, it persisted, and only then did a warning
             // appear — a control that silently does nothing.
@@ -231,9 +223,9 @@ Item {
             // `modeStartable: false`, which is the same-answer-for-every-input
             // trap in fixture form. With the fixture describing the real
             // default, the assertion is about the panel again.
-            compare(panel.caps.mode, "attach", "the default state, on purpose");
+            compare(panel.caps.mode, "local", "the default state, on purpose");
             compare(panel.caps.modeStartable, true,
-                    "attach IS startable — which is exactly why deriving the "
+                    "local IS startable — which is exactly why deriving the "
                     + "set from this boolean cannot work");
 
             var picker = findChild(panel, "modePicker");
@@ -252,9 +244,9 @@ Item {
             // hidden while Embedded's shows — one fixture, three different
             // answers, which is what makes the annotation meaningful.
             var picker = findChild(panel, "modePicker");
-            verify(!findChild(picker, "modeUnavailable_attach").visible,
+            verify(!findChild(picker, "modeUnavailable_local").visible,
                    "a startable mode must not be annotated as unavailable");
-            verify(!findChild(picker, "modeUnavailable_seedOnly").visible,
+            verify(!findChild(picker, "modeUnavailable_explore").visible,
                    "nor the other startable one");
             verify(findChild(picker, "modeUnavailable_embedded").visible,
                    "while the unstartable one is");
@@ -268,9 +260,9 @@ Item {
             var picker = findChild(panel, "modePicker");
             verify(findChild(picker, "modeUnavailable_embedded").visible);
 
-            panel.caps = ({ mode: "attach",
+            panel.caps = ({ mode: "local",
                             modeStartable: true,
-                            startableModes: ["attach", "embedded", "seedOnly"],
+                            startableModes: ["local", "embedded", "explore"],
                             modeUnavailableReason: "",
                             gitFound: true, gitPath: "/usr/bin/git",
                             gitVersion: "git version 2.55.0",
@@ -280,15 +272,15 @@ Item {
                    "when the build can start Embedded, the caveat must go");
 
             // And the reverse, so this cannot pass by never showing the note.
-            panel.caps = ({ mode: "attach",
+            panel.caps = ({ mode: "local",
                             modeStartable: true,
-                            startableModes: ["seedOnly"],
+                            startableModes: ["explore"],
                             modeUnavailableReason: "",
                             gitFound: true, gitPath: "/usr/bin/git",
                             gitVersion: "git version 2.55.0",
                             gitConfigured: false });
 
-            verify(findChild(picker, "modeUnavailable_attach").visible,
+            verify(findChild(picker, "modeUnavailable_local").visible,
                    "a build that cannot start Attach must say so on the Attach "
                    + "row, even though Attach is the mode in force");
         }
@@ -299,71 +291,73 @@ Item {
             // reason, and a delegate whose MouseArea was mis-parented would
             // pass a signal-emitting test and fail this one.
             var picker = findChild(panel, "modePicker");
-            var area = findChild(picker, "modePick_seedOnly");
+            var area = findChild(picker, "modePick_explore");
             verify(area !== null, "the clickable element must carry the objectName");
 
             mouseClick(area);
-            compare(panel.currentMode, "seedOnly");
+            compare(panel.currentMode, "explore");
         }
     }
 
+    // The identity readout that replaced the header's free-floating
+    // "Attached · z6Mko…" badge.
+    //
+    // The badge was a separate chip with button chrome that did nothing, and
+    // the user could not tell what it meant. The abbreviated identity now
+    // rides on the source toggle's Local segment (tst_source.qml covers that);
+    // the FULL DID and the resolved home are reference information, which is
+    // what Settings is for. Neither is behind a hover any more — the tooltip
+    // that used to hold them rendered as a clipped sliver.
     TestCase {
-        name: "NodeStatus"
+        name: "SettingsIdentity"
         when: windowShown
 
-        function test_the_identity_is_shortened_but_recognisable() {
-            // A full DID does not fit in chrome; the head is what people
-            // recognise. Asserting the prefix survives and the whole thing
-            // does not.
-            verify(badge.shortId.indexOf("z6MkvS2mYc1JMm") === 0,
-                   "got: " + badge.shortId);
-            verify(badge.shortId.length < badge.nodeId.length);
+        function init() {
+            panel.caps = harness.defaultCaps;
         }
 
-        function test_the_did_prefix_is_stripped_for_display() {
-            verify(badge.shortId.indexOf("did:key:") === -1);
+        function test_the_full_identity_is_readable_without_hovering() {
+            panel.caps = ({
+                mode: "local", modeStartable: true,
+                startableModes: ["local", "explore"],
+                modeUnavailableReason: "",
+                nodeId: "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd",
+                radHome: "/home/u/.radicle",
+                gitFound: true, gitPath: "/usr/bin/git"
+            });
+            var who = findChild(panel, "identityReadout");
+            verify(who !== null, "the identity readout must exist");
+            verify(who.visible);
+            verify(who.text.indexOf(
+                       "z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd") !== -1,
+                   "the WHOLE did must be here — abbreviating in both places "
+                   + "leaves nowhere to read it, got: " + who.text);
+            verify(who.text.indexOf("/home/u/.radicle") !== -1,
+                   "and the home it resolved to, got: " + who.text);
         }
 
-        function test_a_missing_identity_shows_the_mode_alone() {
-            badge.nodeId = "";
-            compare(badge.shortId, "");
-            var label = findChild(badge, "nodeStatusLabel");
-            compare(label.text, "Attached",
-                    "with no identity the badge still has to say which mode");
-            badge.nodeId = "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+        /// Input-dependent, so a hardcoded readout fails: a different profile
+        /// must produce different text.
+        function test_the_readout_follows_the_capabilities() {
+            panel.caps = ({ nodeId: "did:key:z6MkAAAA", radHome: "/tmp/a",
+                            startableModes: ["local"], modeStartable: true });
+            var a = findChild(panel, "identityReadout").text;
+            panel.caps = ({ nodeId: "did:key:z6MkBBBB", radHome: "/tmp/b",
+                            startableModes: ["local"], modeStartable: true });
+            var b = findChild(panel, "identityReadout").text;
+            verify(a !== b, "got " + a + " for both profiles");
         }
 
-        function test_each_mode_gets_its_own_label() {
-            // Input-dependent: a badge returning one fixed label would pass a
-            // single-mode assertion and fail this.
-            badge.mode = "attach";
-            compare(badge.modeLabel, "Attached");
-            badge.mode = "embedded";
-            compare(badge.modeLabel, "Embedded");
-            badge.mode = "seedOnly";
-            compare(badge.modeLabel, "Seed only");
-            badge.mode = "attach";
-        }
-
-        function test_a_non_startable_mode_is_flagged_as_a_problem() {
-            badge.startable = true;
-            badge.pathsProblem = "";
-            verify(!badge.hasProblem);
-
-            badge.startable = false;
-            verify(badge.hasProblem,
-                   "a chosen-but-unstartable mode must be visibly flagged");
-            badge.startable = true;
-        }
-
-        function test_a_paths_problem_is_flagged_even_when_the_mode_is_fine() {
-            // A socket over the 108-byte cap is not "the node is not running":
-            // it could never have been reached. Different problem, same need
-            // to be visible.
-            badge.startable = true;
-            badge.pathsProblem = "the node control socket path is too long";
-            verify(badge.hasProblem);
-            badge.pathsProblem = "";
+        /// With no profile the readout must say so rather than showing an
+        /// empty line that reads as a rendering bug.
+        function test_no_profile_is_stated_rather_than_left_blank() {
+            panel.caps = ({ nodeId: "", radHome: "",
+                            startableModes: ["local"], modeStartable: true });
+            var who = findChild(panel, "identityReadout");
+            verify(who.visible, "the row stays, saying there is no identity");
+            verify(who.text.length > 0);
+            verify(who.text.indexOf("No local identity") !== -1,
+                   "got: " + who.text);
         }
     }
 }

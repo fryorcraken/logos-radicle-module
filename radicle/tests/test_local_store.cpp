@@ -238,7 +238,7 @@ LOGOS_TEST(two_profiles_get_two_sockets_in_the_same_runtime_dir)
 
 LOGOS_TEST(with_no_runtime_dir_the_socket_falls_back_to_the_crates_own_default)
 {
-    // Attach mode against a hand-run `rad` node has to still find its socket.
+    // `local` mode against a hand-run `rad` node has to still find its socket.
     LOGOS_ASSERT_EQ(resolveSocket("", "", "", "alice", "/home/u/.radicle"),
                     std::string("/home/u/.radicle/node/control.sock"));
 }

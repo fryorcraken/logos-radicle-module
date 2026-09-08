@@ -82,21 +82,20 @@ SettingsStore::SettingsStore(std::string path)
 
 bool SettingsStore::isKnownMode(const std::string& mode)
 {
-    return mode == kModeAttach || mode == kModeEmbedded || mode == kModeSeedOnly;
+    return mode == kModeExplore || mode == kModeLocal || mode == kModeEmbedded;
 }
 
 std::vector<std::string> SettingsStore::startableModes()
 {
     // Embedded is selectable and persisted, but its node lifecycle is Phase 2.
     // Reporting it as not-startable is what lets the UI say so plainly instead
-    // of offering a control that silently does nothing — the same reasoning
-    // that makes SourceToggle hide the local segment rather than disable it.
+    // of offering a control that silently does nothing.
     //
     // THIS list is the single source of truth: `modeIsStartable` is derived
     // from it below rather than repeating the condition, so the boolean and the
     // set cannot drift into disagreeing, and Phase 2 adds `kModeEmbedded` here
     // and nowhere else.
-    return {kModeAttach, kModeSeedOnly};
+    return {kModeExplore, kModeLocal};
 }
 
 bool SettingsStore::modeIsStartable(const std::string& mode)
@@ -109,11 +108,12 @@ bool SettingsStore::modeIsStartable(const std::string& mode)
 nlohmann::json SettingsStore::load() const
 {
     nlohmann::json defaults{
-        // Attach is the default because it is what M2.1 already did: read
+        // Local is the default because it is what M2.1 already did: read
         // whatever Radicle home the environment names. A user who had a working
         // module before this change must not find it behaving differently
-        // after it.
-        {kKeyMode,       kModeAttach},
+        // after it. (This mode was called `attach` before the vocabulary was
+        // unified with the UI's; the meaning is unchanged.)
+        {kKeyMode,       kModeLocal},
         {kKeyRadHome,    ""},
         {kKeyRadSocket,  ""},
         {kKeyGitPath,    ""},
@@ -202,9 +202,14 @@ nlohmann::json SettingsStore::set(const std::string& key, const std::string& val
         return makeError("unknown setting '" + key + "'");
 
     if (key == kKeyMode) {
+        // Built from the constants rather than spelled out: this sentence
+        // listed the old names verbatim, and a rename would have left it
+        // confidently naming modes that no longer exist while the validation
+        // above rejected the ones that do.
         if (!isKnownMode(value))
-            return makeError("unknown mode '" + value
-                             + "' — expected one of: attach, embedded, seedOnly");
+            return makeError("unknown mode '" + value + "' — expected one of: "
+                             + kModeExplore + ", " + kModeLocal + ", "
+                             + kModeEmbedded);
     } else if (key == kKeyGitPath) {
         // Validated by RUNNING it, not by stat-ing it: an executable that
         // exists but is not git has to fail here, while the user is looking at

@@ -73,7 +73,7 @@ Item {
     // Test-observable state, in the same spirit as Main.qml's: assertions
     // should ask the component what it believes rather than infer it from
     // rendered pixels.
-    readonly property string currentMode: settings.mode || "attach"
+    readonly property string currentMode: settings.mode || "local"
     readonly property string currentGitPath: settings.gitPath || ""
     readonly property bool hasError: lastError !== ""
 
@@ -93,6 +93,37 @@ Item {
             font.bold: true
         }
 
+        // Who you are, and where that comes from — in full.
+        //
+        // The header used to carry a separate "Attached · z6Mko…" chip with a
+        // hover tooltip holding the whole DID and the resolved home. It looked
+        // like a button, did nothing when clicked, and the tooltip was clipped
+        // to an unreadable sliver by the fixed-height bar it hung out of.
+        //
+        // The header now shows the abbreviated identity in its mode-detail slot
+        // (NodeIdentity.qml) and that element opens THIS panel, so a user
+        // squinting at a truncated DID has somewhere to click. Which is why the
+        // whole thing has to be here, in full: this is the destination.
+        //
+        // Selectable, because the one thing a user actually DOES with a DID is
+        // paste it into `rad id update --allow`.
+        TextEdit {
+            objectName: "identityReadout"
+            Layout.fillWidth: true
+            readOnly: true
+            selectByMouse: true
+            wrapMode: Text.WrapAnywhere
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSm
+            font.family: Theme.mono
+            // A blank line here would read as a rendering fault rather than as
+            // "there is no profile", so the absence is stated.
+            text: (panel.caps.nodeId ? panel.caps.nodeId : "No local identity")
+                  + "\n"
+                  + (panel.caps.radHome ? panel.caps.radHome
+                                        : "no Radicle home resolved")
+        }
+
         ModePicker {
             objectName: "modePicker"
             Layout.fillWidth: true
@@ -100,7 +131,7 @@ Item {
             // Consumed straight from capabilities. This used to be DERIVED from
             // `caps.modeStartable`, and that was a real bug rather than a
             // stylistic one: the boolean answers "can the mode in force start?"
-            // and the picker needs "which modes can start at all?". In Attach —
+            // and the picker needs "which modes can start at all?". In `local` —
             // the default, and where every first-time user is — the boolean is
             // true, so the derivation produced all three modes and the Embedded
             // row carried no caveat whatever. The user selected it, it
