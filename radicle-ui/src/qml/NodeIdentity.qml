@@ -77,9 +77,9 @@ import "Theme.js" as Theme
  * `minimumWidth` is 0, meaning this item asks for exactly the room its full
  * text needs and nothing forces it smaller.
  *
- * But "never elide" turned out to mean "never yield", and a `RowLayout` child
- * that cannot shrink does not scroll or wrap — it pushes its siblings off the
- * right edge. The ~411px this DID demands, plus the title, toggle, gaps and
+ * But "never elide" turned out to mean "never yield", and a non-shrinking
+ * child of a horizontal layout does not scroll or wrap — it pushes its
+ * siblings off the right edge. The ~411px this DID demands, plus the title, toggle, gaps and
  * chip, pinned the header's minimum at ~830px, below which the **Settings chip
  * left the screen entirely**. Since this element copies rather than opening
  * Settings, that chip is the only way in, so a window narrower than ~830px had
