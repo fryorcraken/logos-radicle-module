@@ -321,6 +321,44 @@ Item {
     readonly property bool   gitFound:      caps.gitFound === true
     readonly property bool   settingsShown: settingsOpen
 
+    // ---- state only the end-to-end layer can assert on --------------------
+    //
+    // Every property below exists because a defect this module actually
+    // shipped was invisible to every other assertion. They are read by
+    // tests/ui/local.yaml; see that spec for what each one catches.
+
+    /// Whether the repository screen is showing the not-implemented state.
+    ///
+    /// The pair with `repoCount` is the assertion that matters: Embedded must
+    /// show this AND no rows. Either alone is satisfied by a bug — a stale
+    /// `localListRepos` reply repopulates the list while this stays true, and
+    /// an empty list is equally true of a node with nothing in it.
+    readonly property bool reposNotImplemented: repoList.notImplemented
+
+    /// Whether the repository screen is blank with no explanation at all.
+    ///
+    /// Never correct, in any mode, at any window size — which is what makes it
+    /// assertable unconditionally rather than only where a count is known. See
+    /// RepoList.sayingNothing for why it is read off the placeholder items
+    /// rather than recomputed from their conditions.
+    readonly property bool reposSayingNothing: repoList.sayingNothing
+
+    /// Whether the node identity told the user it copied.
+    ///
+    /// The confirmation is the ONLY feedback that click produces — the
+    /// clipboard is not observable from a spec — so this is what distinguishes
+    /// a copy that happened from a click that landed on nothing. It is earned
+    /// rather than assumed: NodeIdentity only raises it after reading the
+    /// clipboard back, so it cannot be true for a copy that silently failed.
+    readonly property bool identityCopied: nodeIdentity.confirmShown
+
+    /// Whether the identity is showing less than the whole DID.
+    ///
+    /// The user reported it eliding at a width where it need not. There is no
+    /// single correct value here — it SHOULD elide in a narrow window — so a
+    /// spec asserts it against a known width rather than absolutely.
+    readonly property bool identityShortened: nodeIdentity.shortened
+
     // Sync button: its three idle labels ("Download All" / "Re-sync" /
     // "Update") plus the in-progress percentage are the whole of that
     // feature's user-visible behaviour, so the specs assert on all of them.

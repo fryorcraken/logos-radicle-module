@@ -56,11 +56,90 @@ Give anything a spec needs to click a stable `objectName`. Specs select by
 `objectName`, not by label, so renaming a button must not break a test — and
 changing an `objectName` is an interface change.
 
-**Add new specs to the `ui-tests.yml` matrix.** It runs one job per spec
-(`browse`, `branches`, `source`, `sync`, `write`); `SPEC` was once hardcoded to
-`browse.yaml` and three specs sat in the tree running nowhere. A spec outside
-the matrix is decoration. `ci.yml`'s schema check already globs
-`tests/ui/*.yaml` and needs no change.
+**Add new specs to the `ui-tests.yml` matrix.** It runs one job per spec;
+`SPEC` was once hardcoded to `browse.yaml` and three specs sat in the tree
+running nowhere. A spec outside the matrix is decoration. `ci.yml`'s schema
+check already globs `tests/ui/*.yaml` and needs no change.
+
+## What this layer structurally cannot see
+
+Worth knowing before you try to cover something here and quietly fail to.
+
+**Window geometry — there is no way to drive it.** The step vocabulary is
+closed and validated (`open`, `click`, `type`, `eval`, `set`, `wait_for`,
+`sleep`, `screenshot`, `expect`; an unknown key throws), and none of it takes a
+size. Neither does any CLI flag — `--headed` shows the window but does not size
+it. `geometry` exists in sitometres' inspector protocol only as a **read-only**
+field it never writes.
+
+`eval:` is unvalidated passthrough, so `root.Window.window.width = 1400` *would*
+be forwarded — but the run is on the `offscreen` platform plugin where resizing
+is meaningless, the app's root is docked inside Basecamp's own layout which
+would override it on the next relayout, and `eval:` is a side-effect step whose
+result is never asserted on. Do not reach for it: what you would add is a step
+that cannot see the thing it claims to cover.
+
+This matters because a whole class of real defects lives there — the Settings
+chip pushed off the right edge below ~750px, the header drawn twice in a very
+tall window. Both were found by dragging a window edge and both passed CI.
+**They belong at the component layer**, where a fixture owns the geometry:
+`tst_header_width.qml` drives the width down across a range and asserts the
+Settings chip keeps pixels on screen *and* stays clickable; `tst_layout.qml`
+asserts the header is drawn once. Measure against the container's bounds, not
+against `item.width` — an overflowing `RowLayout` child keeps its full width and
+its `visible` stays true, so every property-based check passes while the user
+sees nothing.
+
+**The system clipboard does not work.** sitometres forces
+`QT_QPA_PLATFORM=offscreen`, and the clipboard round-trip inside the Basecamp
+bundle fails there. Measured, not assumed: `local.yaml`'s identity click lands
+and `NodeIdentity`'s copy confirmation correctly declines to appear, because
+that confirmation is *earned* — the element pastes the clipboard back and
+compares before claiming success.
+
+Note `tst_source.qml` carries a comment asserting the opposite ("an offscreen Qt
+platform plugin always provides one"). That is true of `qmltestrunner` against
+the host session and **not** of the bundle, so neither layer can prove the copy
+happy path end to end: the component layer has a clipboard but not the bundle,
+and the bundle has no clipboard. What `local.yaml` asserts instead is that the
+control is wired and inert-safe — the click reaches a handler, no QML error is
+raised, and the view is intact afterwards.
+
+**What to assert when the interesting thing is unreachable.** Prefer a state
+that is *never correct in any configuration*, so it needs no known-good
+baseline. `RepoList.sayingNothing` is the worked example: no rows, and no
+rendered explanation of why. `repoCount === 0` cannot catch a blank pane —
+it is exactly what a working empty node reports — but "nothing on screen and
+nothing saying why" is wrong at any window size, in any mode, on any profile.
+Read such a property off the placeholder items' own `visible` rather than
+recomputing their conditions, or it will agree with them while they render
+nothing.
+
+## `setup --inspector` and `lgs basecamp launch` cannot coexist
+
+`--inspector` does not only pick a different Basecamp: it moves
+`[repos.basecamp].attr` **and** `[repos.lgpm].attr` to the portable stack
+(`bin-bundle-dir-inspector` / `cli-portable`), and it persists both to
+`scaffold.toml`. That is exactly what the specs need and exactly what an
+interactive `lgs basecamp launch` cannot use — the dev profiles are seeded for
+the dev stack, so a launch afterwards fails with **"no variant for this
+stack"** and the app opens to nothing.
+
+The two states are mutually exclusive, and the switch is a whole-project one
+even from a worktree, because `scaffold.toml` is tracked and shared. So:
+
+- **Before running `setup --inspector`, check nobody is driving Basecamp by
+  hand.** Flipping it under someone doing manual testing breaks their session
+  with a message that does not name the cause.
+- **`lgs basecamp setup --no-inspector` reverts it**, and is what to run when
+  handing the machine back for interactive use.
+- Leaving the two `attr` lines flipped in your working tree is what a spec run
+  needs, but **do not commit them** — they are local machine state, not a
+  project decision. `git diff scaffold.toml` after any `setup` shows both them
+  and the comment stripping described above; restore the comments, keep the
+  attrs, commit neither.
+
+CI is unaffected: each runner does one or the other and is destroyed.
 
 ## Why step 1 is `lgs` and not `nix`
 
@@ -183,9 +262,19 @@ it rather than invoking sitometres by hand. `--real-home` would also work and
 is deliberately not used: it hands the app every credential in `$HOME` to make
 one directory readable.
 
-It is **not** in CI — a CI runner has no Radicle profile, and seeding one is
-its own piece of work. It is the only spec covering `local*`, so run it locally
-after touching that path.
+**It IS in CI**, and this section used to say the opposite. The exclusion was
+justified by "a CI runner has no Radicle profile, and seeding one is its own
+piece of work" — which stopped being true the moment
+`examples/seed_write_profile.rs` was written for `write.yaml`. That seeder
+builds a profile with a signable key, a repository, an issue and branches
+belonging to two peers, and `ui-tests.yml` now runs it for both `write` and
+`local`, handing each the result as `RAD_HOME`. The reason outlived itself by
+long enough that half the module — everything reading `~/.radicle` — had no
+end-to-end coverage anywhere.
+
+`run-local-e2e.sh` is the *local* route to the same spec, pointed at your own
+node rather than a seeded fixture. Almost every assertion holds either way;
+`local.yaml` names the one step that does not and says why.
 
 One caveat before you chase a ghost: step 9 (`treeCount > 0`) can fail
 spuriously when **another Basecamp is running against the same `~/.radicle`** —

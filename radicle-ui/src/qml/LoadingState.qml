@@ -23,6 +23,16 @@ Item {
     /// Shown while loading.
     property string loadingText: "Loading…"
 
+    /// Whether the empty-list message is ACTUALLY on screen right now.
+    ///
+    /// Read off the Text item's own `visible` rather than recomputing its
+    /// condition, so a caller asking "is anything explaining the emptiness?"
+    /// gets an answer that follows the item rather than a second copy of the
+    /// rule that could agree with it while the item renders nothing. Both
+    /// terms matter: `control.visible` (this whole placeholder is stood down
+    /// when there are rows) and the message's own.
+    readonly property bool emptyShown: control.visible && emptyText_.visible
+
     // Only occupy the view when there is nothing to show behind it. Sizing is
     // left to the parent: this is used both anchored (over a plain Item) and
     // as a layout child, and anchors.fill conflicts with the latter.
@@ -67,6 +77,7 @@ Item {
     }
 
     Text {
+        id: emptyText_
         objectName: "listEmptyState"
         anchors.centerIn: parent
         // Only after a request has actually completed, so this never flashes

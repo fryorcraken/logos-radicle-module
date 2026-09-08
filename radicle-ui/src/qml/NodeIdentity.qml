@@ -129,6 +129,16 @@ Item {
     /// internals to do the same thing.
     readonly property bool shortened: label.truncated
 
+    /// Whether the copy confirmation is on screen right now.
+    ///
+    /// Read off `confirmText.visible` rather than off `confirmTimer.running`,
+    /// even though the one is bound to the other. The failure worth catching is
+    /// a confirmation that is running and NOT rendered — the clipped-sliver
+    /// shape this header has already produced twice — and a property reading
+    /// the timer would report success in exactly that case. Asking the item
+    /// means a spec asserting "the user was told" is asserting about the user.
+    readonly property bool confirmShown: confirmText.visible
+
     /// Emitted after the identity has been copied. Not used to DO the copying —
     /// that happens here, so a caller cannot wire this up and get a button that
     /// looks like it copies and does not.

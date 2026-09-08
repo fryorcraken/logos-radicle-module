@@ -68,6 +68,52 @@
 # because the fallback returns a populated tree with no error — an assertion
 # that both outcomes satisfy is not an assertion. Expect that one step to fail
 # against your own node; every other step holds.
+#
+# ---------------------------------------------------------------------------
+# IT ALSO COVERS M3 PHASE 1: MODES, SETTINGS AND THE IDENTITY
+# ---------------------------------------------------------------------------
+#
+# The three-segment mode toggle, the Settings panel and the node identity all
+# landed with 380+ component tests and no end-to-end coverage whatever, and a
+# run of defects was then found by CLICKING: the Settings chip off-screen below
+# ~750px, the header drawn twice in a tall window, the repository list blank
+# with no rows and no message, and a duplicate QML property that stopped the
+# whole module loading. Every one passed CI.
+#
+# This spec is the only one that drives the real Main.qml against a real
+# backend, so it is where that surface belongs. What it adds, and what each
+# addition catches, is written beside the steps themselves — but two are worth
+# stating up front because they are the ones a future edit is most likely to
+# weaken:
+#
+#   * Embedded asserts the not-implemented state AND `repoCount === 0`
+#     TOGETHER. Either alone is satisfied by a real bug; see the step.
+#   * `reposSayingNothing === false` is the blank-pane check. It is the one
+#     assertion here that is correct at any window size in any mode, and it is
+#     the only thing in any layer that can see a pane which renders nothing at
+#     all — `repoCount === 0` is exactly what a working empty node reports.
+#
+# WHAT THIS LAYER STRUCTURALLY CANNOT COVER, so nobody re-derives it.
+#
+# GEOMETRY. sitometres has no resize step and no window-size flag. The step
+# vocabulary is closed and validated — open/click/type/eval/set/waitFor/sleep/
+# screenshot/expect, and an unknown key throws — and `geometry` appears in its
+# protocol only as a READ-ONLY field it never writes. `eval:` is unvalidated
+# passthrough, so `root.Window.window.width = …` would be attempted, but the
+# run is on the `offscreen` platform plugin where that is meaningless, and
+# `eval:` is a side-effect step whose result is never asserted on. So two of
+# the defects above are invisible here by construction. They are covered at the
+# component layer instead, where a fixture owns the geometry:
+# `tst_header_width.qml` drives the width down and asserts the Settings chip
+# stays on screen and clickable, and `tst_layout.qml` asserts the header is
+# drawn once. Do not try to move those here — what would be added is a spec
+# that cannot see the thing it claims to cover.
+#
+# THE SYSTEM CLIPBOARD. sitometres forces `QT_QPA_PLATFORM=offscreen`, and the
+# clipboard round-trip inside the Basecamp bundle fails there — measured, not
+# assumed. So the identity's copy CONFIRMATION cannot be asserted from here;
+# see the step for what is asserted instead and why that is a finding rather
+# than a softened check.
 
 app: radicle_ui
 with: [radicle]
@@ -221,11 +267,205 @@ steps:
     expect:
       state: "root.navError === ''"
 
+  # ---- the identity, and that clicking it copies ---------------------------
+  #
+  # `local` is the only mode with an identity to show, so this is the only
+  # place it can be exercised end to end.
+  #
+  # The DID is asserted to be NON-EMPTY rather than to equal anything: it is
+  # whatever key the profile holds, which differs between CI's seeded profile
+  # and a developer's own node. What matters is that capabilities carried it
+  # through to the view at all — an empty one is the "user believes they are
+  # operating as their existing DID when they are not" failure `radicle_impl.h`
+  # names as this milestone's largest exposure, in its blankest form.
+  - name: the local identity reached the view
+    expect:
+      state:
+        - "root.nodeIdentity !== ''"
+        - "root.nodeHome !== ''"
+
+  # Clicking the identity must reach a live handler and must not fault.
+  #
+  # THIS STEP DELIBERATELY DOES NOT ASSERT THAT THE COPY CONFIRMATION APPEARS,
+  # and that is a finding rather than a weakened assertion. Measured on a real
+  # run of this spec: the click lands (sitometres reports `clicked
+  # QQuickMouseArea "nodeIdentity"`) and `root.identityCopied` never becomes
+  # true, because sitometres forces `QT_QPA_PLATFORM=offscreen` and the
+  # clipboard round-trip inside the offscreen BUNDLE fails.
+  #
+  # That is the confirmation working exactly as designed —
+  # `NodeIdentity.copyToClipboard()` pastes the clipboard back and compares
+  # before raising it, so it correctly declines to claim a copy that did not
+  # happen. Asserting it here would therefore be a step that cannot pass in
+  # CI, which this repository has twice paid for and which docs/e2e.md is
+  # explicit about.
+  #
+  # Worth recording because `tst_source.qml` asserts the opposite in a comment
+  # — "an offscreen Qt platform plugin always provides one" — and that is true
+  # of `qmltestrunner` against the host session, not of the Basecamp bundle.
+  # So the component layer cannot see this, and neither can this layer prove
+  # the happy path. What IS proved here is that the control is wired and
+  # inert-safe: the click reaches a handler, no QML error is raised (the
+  # default `no_errors` check), and nothing is left broken behind it.
+  - name: clicking the identity reaches a live handler
+    click: { objectName: "nodeIdentity" }
+
+  # The failure this catches is a click that faults or leaves the view in a
+  # bad state — which is what a dead or throwing handler looks like from here.
+  # The identity must also still be showing afterwards: an exception midway
+  # through copyToClipboard() would leave the element in place but the app in
+  # an error state.
+  - name: and leaves the view intact
+    expect:
+      state:
+        - "root.navError === ''"
+        - "root.nodeIdentity !== ''"
+        - "root.mode === 'local'"
+
+  # ---- Settings: a door that opens AND closes -----------------------------
+  #
+  # The panel shipped once as a ONE-WAY DOOR: it is an opaque overlay covering
+  # the header that opens it, and it had no way out, so a user who opened it
+  # had to restart Basecamp. The fix (SettingsPanel's Back control) is only
+  # meaningful if both halves are asserted, so both are.
+  #
+  # The chip is also the ONLY route in, since the identity above copies rather
+  # than opening Settings — which is why `tst_header_width.qml` drives the
+  # window width down and asserts the chip survives it. That is the layer for
+  # geometry; this layer proves the chip is wired to the panel at all, which a
+  # component test measuring a detached header cannot see.
+  - name: open Settings from the header chip
+    click: { objectName: "settingsToggle" }
+
+  - name: the panel is up
+    wait_for:
+      state: "root.settingsShown === true"
+    timeout: 30s
+
+  # The git preflight is Phase 1's other new surface, and it is reported by the
+  # backend rather than probed by the view. Asserted as a BOOLEAN that has been
+  # decided either way rather than as `true`: a machine without git is a real
+  # configuration this panel exists to explain, so demanding `true` would make
+  # this spec fail for a reason that is not a defect. What must not happen is
+  # the capability never arriving, which leaves the readout claiming git was
+  # found on a module that never looked.
+  - name: the git preflight reported something
+    expect:
+      state: "typeof root.gitFound === 'boolean'"
+
+  # The way OUT. Clicked, not called: the whole defect was that no control
+  # reached this code, so invoking `closed()` directly would assert the
+  # handler works while leaving the door shut.
+  - name: close it again
+    click: { objectName: "settingsBackButton" }
+
+  - name: the panel is down and the screen underneath is restored
+    wait_for:
+      state:
+        - "root.settingsShown === false"
+        - "root.navView === 'repo'"
+    timeout: 30s
+
+  # Settings overlays rather than replacing a navigation page, so closing must
+  # land the user exactly where they were — deep inside a repository, on the
+  # commits tab, which is where the steps above left them. A panel that pushed
+  # itself onto the navigation stack would satisfy `settingsShown === false`
+  # and land on the repository list instead.
+  - name: including the tab it was opened from
+    expect:
+      state: "root.repoTab === 1"
+
+  # ---- Embedded ------------------------------------------------------------
+  #
+  # The reason this milestone exists. Embedded cannot start a node, and both
+  # halves of that have to hold: the segment must SAY so before it is chosen,
+  # and choosing it must show a not-implemented state rather than another
+  # node's repositories.
+  #
+  # `startableModes` is asserted first, and it is asserted as a SET rather than
+  # via `modeStartable`. The two answer different questions — "which modes can
+  # this build start?" against "can the mode in force start?" — and deriving
+  # one from the other is a bug this module shipped twice: in the default
+  # `local` mode the boolean is true, so a picker deriving from it offered
+  # Embedded with no caveat whatever. The set is the only thing that can be
+  # true here BEFORE Embedded is selected.
+  - name: Embedded is marked unstartable before it is chosen
+    expect:
+      state:
+        - "root.capsRaw.indexOf('startableModes') >= 0"
+        - "JSON.parse(root.capsRaw).startableModes.indexOf('embedded') < 0"
+        - "JSON.parse(root.capsRaw).startableModes.indexOf('local') >= 0"
+
+  - name: select Embedded
+    click: { objectName: "sourceToggle_embedded" }
+
+  # The mode really changed — read back from capabilities, not from the click.
+  # `root.mode` is bound to `getCapabilities().mode`, so this passing means the
+  # backend PERSISTED it and reported it back. A UI holding its own copy would
+  # satisfy this while the module was still in Local, which is the identity
+  # confusion in its purest form.
+  - name: the backend reports Embedded in force
+    wait_for:
+      state:
+        - "root.mode === 'embedded'"
+        - "root.nodeMode === 'embedded'"
+    timeout: 45s
+
+  # And the build still cannot start it, which is what makes the next
+  # assertion mean anything.
+  - name: and still cannot start it
+    expect:
+      state: "root.modeStartable === false"
+
+  # THE ASSERTION THIS SPEC EXISTS FOR, and it is a conjunction on purpose.
+  #
+  # Each term alone is satisfied by a bug:
+  #   * `reposNotImplemented` alone — a stale `localListRepos` reply issued in
+  #     Local passes every staleness guard in RepoList, because those compare
+  #     the method PREFIX and `local` and `embedded` share it. The attached
+  #     node's repositories then render underneath a not-implemented state that
+  #     is still perfectly true.
+  #   * `repoCount === 0` alone — equally true of a node that exists and holds
+  #     nothing, which is the false claim this state replaced.
+  #
+  # Together they say: the screen explains itself, and it is not showing
+  # another node's data while doing so.
+  - name: Embedded shows the not-implemented state and NO repositories
+    wait_for:
+      state:
+        - "root.reposNotImplemented === true"
+        - "root.repoCount === 0"
+    timeout: 45s
+
+  # The blank-pane check, and the one assertion here that holds at any window
+  # size, in any mode. The repository list went blank once with no rows, no
+  # empty state, no error and nothing in the log — a state every other
+  # assertion in this file is blind to, since `repoCount === 0` is exactly what
+  # a working empty node reports. `reposSayingNothing` is read off the
+  # placeholder items' own `visible`, so it can only be false when something is
+  # genuinely rendered. See RepoList.sayingNothing.
+  - name: and it is not merely blank
+    expect:
+      state: "root.reposSayingNothing === false"
+
+  # Nothing was asked of a node that does not exist. Fetching and then hiding
+  # the result is how the bug above returns — the reply would still be in
+  # flight, would still pass the prefix guard, and would still repopulate the
+  # model behind the placeholder.
+  - name: and nothing errored, because nothing was asked
+    expect:
+      state: "root.navError === ''"
+
   # ---- back to the seed ---------------------------------------------------
   #
   # Switching back must reset cleanly: a repository id from local storage is
   # meaningless to a seed, so setMode() drops the whole navigation stack rather
   # than carrying the current screen across.
+  #
+  # Coming from EMBEDDED rather than from Local, which is the stronger route:
+  # Local and Explore differ in method prefix, so a switch between them is
+  # caught by every existing guard. Embedded and Local share a prefix, so this
+  # leg proves the mode itself was carried through the reset.
   #
   # The segment is named for the MODE it selects (`explore`), while `root.source`
   # is the derived backend method prefix (`remote`). They are different things —
@@ -240,4 +480,13 @@ steps:
         - "root.mode === 'explore'"
         - "root.source === 'remote'"
         - "root.navView === 'repos'"
+    timeout: 30s
+
+  # Leaving Embedded must take its not-implemented state with it. Explore is
+  # startable, so the placeholder has to come down — and if it did not, the
+  # seed's repositories would be arriving behind a screen saying no node
+  # exists.
+  - name: and the not-implemented state is gone with it
+    wait_for:
+      state: "root.reposNotImplemented === false"
     timeout: 30s

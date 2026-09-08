@@ -56,6 +56,31 @@ Item {
     /// backend already reports means Phase 2 changes one list and this follows.
     readonly property bool notImplemented: !!app && app.modeStartable === false
 
+    /// Whether this screen is currently saying NOTHING AT ALL: no rows, and no
+    /// rendered explanation of why there are none.
+    ///
+    /// Read off the two placeholder items' OWN `visible`, not recomputed from
+    /// the same terms they are keyed on. That is the whole point: a copy of
+    /// their conditions would agree with them whether or not either actually
+    /// renders, which is the "fixture that answers the same for every input"
+    /// trap. Asking the items themselves means this can only be false when
+    /// something is genuinely on screen.
+    ///
+    /// It exists because "blank pane" is a real defect this module shipped —
+    /// the repository list went blank with no rows, no empty state, no error
+    /// and nothing in the log — and no other assertion can see it.
+    /// `repoCount === 0` is equally true of a legitimately empty node, and a
+    /// screenshot cannot tell a blank pane from one whose message failed to
+    /// render. This combination is never correct, at any window size, in any
+    /// mode, so a spec can assert against it unconditionally.
+    ///
+    /// `loadedOnce` is the term that keeps it honest: before the first reply
+    /// there is legitimately nothing to say yet, and without it this would fire
+    /// on every launch.
+    readonly property bool sayingNothing:
+        count === 0 && loadedOnce && !loading
+        && !notImplementedState.visible && !placeholder.emptyShown
+
     ListModel { id: repos }
 
     function reload() {
@@ -291,6 +316,7 @@ Item {
     }
 
     LoadingState {
+        id: placeholder
         anchors.fill: parent
         // Silenced entirely in Embedded. "No repositories matched" is a
         // DIFFERENT false claim, not a milder one: it says an embedded node
@@ -312,6 +338,7 @@ Item {
     // the header and the body agree — this module has already shipped one bug
     // from having two vocabularies for one fact.
     Column {
+        id: notImplementedState
         objectName: "notImplementedState"
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.gapLg * 2, Theme.captionWidth)
