@@ -724,12 +724,56 @@ public binary cache — but a warm Nix store cache brings that down
 substantially. A fork PR, or the first run after `BASECAMP_REV` changes, pays
 for a cold cache.
 
+### What this repo's own releases publish, and why it is not the dev variant
+
+A `v*` tag runs `ci.yml`'s `release` job, which is separate from the catalog
+pipeline and easy to confuse with it. The two differ on purpose:
+
+|  | this repo's release | the catalog |
+|---|---|---|
+| triggered by | a `v*` tag push | a manual workflow in `logos-modules` |
+| built by | `ci.yml`'s `build` matrix | `logos-modules-release-action` |
+| published to | this repo's Releases | the catalog repo's Releases |
+
+What they now have in common is the artifact: **one multi-variant `.lgx` per
+module carrying all three platforms**, produced by `lgx merge`. That is why
+`logos-radicle-module-lib.lgx` has no platform in its name — there is one file
+and it works everywhere, so nothing downstream has to choose.
+
+Two decisions here that a command cannot tell you:
+
+- **The dev variant is built but never published.** It resolves libraries from
+  the host nix store, so it loads only in a basecamp built from source on a
+  machine holding those exact store paths — never a release asset someone
+  downloads. Publishing it alongside the portable one meant two similarly
+  named files where picking wrong gets basecamp's silent skip. It stays in the
+  build as a compile gate, because it is what `lgs basecamp install` produces
+  locally and a break there should fail CI rather than a contributor's machine.
+- **A missing platform fails the release; it does not ship a partial.** The
+  catalog's action does the opposite — `fail-fast: false` plus `if: always()`,
+  publishing whatever built and naming the gaps in a release body. That is how
+  radicle v0.2.0 shipped linux-amd64 alone (see `radicle/flake.nix`'s note on
+  `ffiSystems`), and the only signal was a line nobody read. Here the merge
+  step asserts all three variants are present both before and after merging, so
+  the tag exists with no assets and the failure is loud.
+
+One shell trap the merge check walked into, worth not re-learning: `tar tzf … |
+grep -q` exits 141. `grep -q` closes the pipe at the first match and `tar` dies
+of SIGPIPE. Under a bare `set -eu` that is invisible, which is why the older
+single-platform assertion passed for several releases — but it becomes a
+spurious failure the moment anyone adds `-o pipefail` to the step. Both
+assertions use `[ "$(… | grep -c …)" -gt 0 ]` instead, which consumes all of
+tar's output.
+
 ### Does CI use `lgs`?
 
 **Yes — every module build in both workflows, and now the Basecamp build too.**
-Exactly **one** raw `nix build` is left in CI, and it is the named gap rather
-than a preference: `ci.yml`'s core-module unit tests, because nothing exposes a
-flake's `checks` outputs.
+Two raw `nix build` calls are left in CI, and neither is a preference:
+`ci.yml`'s core-module unit tests, because nothing exposes a flake's `checks`
+outputs; and the `release` job's `nix build …#lgx`, which fetches the `lgx` CLI
+that merges the per-platform packages — it is a tool this repo consumes, not a
+module build, and it comes from `logos-co/logos-package` exactly as the
+catalog's own action fetches it.
 
 - **`ci.yml`'s `build` job**: four `nix build` calls became one
   `lgs basecamp build --variant all --print-output`.
