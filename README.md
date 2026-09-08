@@ -7,26 +7,29 @@ Radicle is peer-to-peer code collaboration: repositories, issues and patches
 live on a network of nodes rather than on a platform. This module gives
 Basecamp a view onto that network.
 
-**What you can do with it:**
+**Two sources, with a toggle to switch between them:**
 
-- **Browse any public repository, with nothing installed.** Search the
+- **Explore — any public repository, with nothing installed.** Search the
   repositories a public seed node replicates, walk the file tree, read files
-  and READMEs, page through commits with their diffs, and read issues and
-  patches with the full discussion thread. No Radicle install, no local node,
-  no account.
-- **Download a repository for faster browsing.** One button caches everything
-  the seed has, so browsing afterwards needs no further round trips. It tells
-  you which state you are in — *Download All* the first time, a percentage
-  while it runs, *Re-sync* once done, and *Update* when a later check finds the
-  branch has moved on.
-- **Browse your own node.** If you already run Radicle on this machine, point
-  the module at `~/.radicle` instead: your private repositories included, and
-  it works offline. Switch branches, including those of every peer your node
-  has fetched.
+  and READMEs, page through commits and open any one for its diff, and read
+  issues and patches with the full discussion thread. No Radicle install, no
+  local node, no account.
+- **Local — your own node.** If you already run Radicle on this machine, this
+  reads `~/.radicle` directly: your private repositories included, and it
+  works offline. Switch branches, including every peer's, not just your own.
+
+**And two things beyond plain browsing:**
+
+- **Download a repository for faster browsing.** On Explore, one button caches
+  everything the seed has, so browsing afterwards needs no further round trips.
+  Its label is its whole interface — *Download All* the first time, a
+  percentage while it runs, *Re-sync* once done, and *Update* when a later
+  check finds the branch has moved past what you downloaded.
 - **Take part.** Comment on an issue, or open a new one, signed by your own
-  Radicle key. Writing goes through your local node, so it needs a Radicle
-  install with a reachable signing key — the buttons only appear when the
-  module has probed for one and found it.
+  Radicle key. Writing happens on the **Local** source only, and needs a
+  reachable signing key — the buttons appear when the module has probed for one
+  and found it, rather than offering a box that cannot be submitted. Issues
+  only for now; patch comments are not wired up yet.
 
 ## Install
 
@@ -47,19 +50,28 @@ https://raw.githubusercontent.com/fryorcraken/logos-modules/main/logos-repo.json
 ```
 
 That is [`fryorcraken/logos-modules`](https://github.com/fryorcraken/logos-modules),
-a personal catalog — this module is not in a Logos-run one. Once the catalog is
-added, Basecamp can discover and install **Radicle** from it, and will offer
-updates as new versions are published.
+a personal catalog — this module is not in a Logos-run one. Once it is added,
+Basecamp can discover and install from it, and will offer updates as new
+versions are published.
 
-The app ships as two modules, `radicle` (core) and `radicle_ui` (the view).
-**Install the core one first** — the view declares a dependency on it and will
-be skipped if it is missing.
+The app is **two** modules, and the order matters. In the package manager they
+appear as:
+
+| Install | Shown as | What it is |
+|---|---|---|
+| first | **Radicle Module** | the core — all the logic, no UI of its own |
+| second | **Radicle** | the view you actually open |
+
+Install **Radicle Module** first: the view declares a dependency on it and is
+silently skipped if it is missing. The names are easy to get backwards — the
+one with the extra word is the invisible half.
 
 ### Optional: browse your own node, and write
 
-Nothing above requires Radicle itself. To use the **My node** source, or to
-comment on and open issues, install [Radicle](https://radicle.xyz) and let it
-create a profile in `~/.radicle`. The module detects it on its own.
+Nothing above requires Radicle itself. To use the **Local** source — and,
+through it, to comment on and open issues — install
+[Radicle](https://radicle.xyz) and let it create a profile in `~/.radicle`.
+The module detects it on its own.
 
 Writing additionally needs the *private* half of that key reachable — from an
 unencrypted keystore, `RAD_PASSPHRASE`, or an `ssh-agent` holding it. Until one
@@ -88,9 +100,10 @@ rad clone rad:z39LLirsD1d4BvWMa9gFoi2B88413
 cd logos-radicle-module
 ```
 
-A Radicle browser ought to live on Radicle, so it does — and once the module
-is running you can open this repository inside it. Releases still go from
-GitHub, because that is where the Logos catalog publishes modules from.
+A Radicle browser ought to live on Radicle, so it does — and once you have
+`rad clone`d it, the module can open this repository from its own **Local**
+source. Releases still go from GitHub, because that is where the Logos catalog
+publishes modules from.
 
 Contributors push to both:
 
@@ -101,8 +114,11 @@ git push rad main      # Radicle
 
 ### 2. Build and install
 
-Requires `nix` with flakes and [`logos-scaffold`](https://github.com/logos-co/logos-scaffold)
-(`lgs`), which drives every build from `scaffold.toml`:
+Requires `nix` with flakes and [`logos-scaffold`](https://github.com/logos-co/scaffold)
+(`lgs`), which drives every build from `scaffold.toml`. **This repo pins an
+unreleased `lgs` build** — installing the crates.io release will get you
+unrecognised-flag errors on some of the workflows here; [`CLAUDE.md`](CLAUDE.md)
+carries the exact `cargo install` line and the reason.
 
 ```bash
 lgs basecamp build --variant all   # both modules, both variants
@@ -113,6 +129,11 @@ lgs basecamp launch alice
 
 This builds and launches its own Basecamp from source, so it does not need the
 release download or the catalog from the previous section.
+
+> **After any `lgs basecamp setup`, run `git diff scaffold.toml`.** `setup`
+> rewrites the file and drops every comment, including the block explaining why
+> `runtime_dir` is pinned — losing it re-opened a bug that made every module
+> segfault. Restore what it removed.
 
 Basecamp does not hot-reload plugins; after a rebuild, kill it, remove the
 installed modules, then reinstall and relaunch.
@@ -157,11 +178,11 @@ See `radicle/src/radicle_impl.h` for the full contract.
 
 ## Tests
 
-Four layers, each covering what the ones below cannot:
+Each layer covers what the ones below it cannot:
 
 | Layer | Command | Covers |
 |---|---|---|
-| Core module unit tests | `cd radicle && nix build '.#checks.x86_64-linux.unit-tests'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
+| Core module unit tests | `cd radicle && nix build ".#checks.$(nix eval --raw --impure --expr builtins.currentSystem).unit-tests"` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
 | Rust FFI tests | `cd radicle/rust-ffi && cargo test` | The `local*` path against real fixture profiles, and the panic guard at the `extern "C"` boundary |
 | QML component tests | `sh radicle-ui/tests/run-qml-tests.sh` | One component in isolation: selection state, layout invariants, load ordering |
 | End-to-end UI tests | See [`docs/e2e.md`](docs/e2e.md) | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
@@ -172,7 +193,7 @@ because the live API is unforgiving about details that are invisible until they
 fail: path parameters must be full 40-char SHAs, and the tree root needs a
 trailing slash that subpaths must not have.
 
-All four layers run on every pull request.
+All of them run on every pull request.
 
 ## Disclaimer
 
