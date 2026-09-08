@@ -20,7 +20,8 @@ Basecamp a view onto that network.
   what your node last fetched.
 - **Take part.** Comment on an issue, or open a new one, signed by your own
   Radicle key. Writing goes through your local node, so it needs a Radicle
-  install with an unlocked key — the buttons only appear when that is true.
+  install with a reachable signing key — the buttons only appear when the
+  module has probed for one and found it.
 
 ## Install
 
@@ -52,27 +53,68 @@ be skipped if it is missing.
 ### Optional: browse your own node, and write
 
 Nothing above requires Radicle itself. To use the **My node** source, or to
-comment on and open issues, install [Radicle](https://radicle.xyz/#get-started)
-and let it create a profile in `~/.radicle`. The module detects it on its own.
+comment on and open issues, install [Radicle](https://radicle.xyz) and let it
+create a profile in `~/.radicle`. The module detects it on its own.
 
 Writing additionally needs the *private* half of that key reachable — from an
 unencrypted keystore, `RAD_PASSPHRASE`, or an `ssh-agent` holding it. Until one
 of those yields a signer, the module stays read-only and says why, rather than
 offering a compose box it cannot submit.
 
-## Where this lives
+## Build it yourself
 
-Two remotes, on purpose:
+### 1. Get the source
 
-- **GitHub** — <https://github.com/fryorcraken/logos-radicle-module>. Logos
-  modules are published to the catalog from GitHub, so releases go from here.
-- **Radicle** — `rad:z39LLirsD1d4BvWMa9gFoi2B88413`. A Radicle browser ought to
-  live on Radicle; you can open this repository in the module itself.
+This repository lives on two remotes, on purpose. Clone from whichever you
+prefer — they hold the same history.
+
+**From GitHub:**
+
+```bash
+git clone https://github.com/fryorcraken/logos-radicle-module
+cd logos-radicle-module
+```
+
+**From Radicle**, which needs the `rad` CLI — install it by following
+[radicle.xyz](https://radicle.xyz), then clone by repository ID:
+
+```bash
+rad clone rad:z39LLirsD1d4BvWMa9gFoi2B88413
+cd logos-radicle-module
+```
+
+A Radicle browser ought to live on Radicle, so it does — and once the module
+is running you can open this repository inside it. Releases still go from
+GitHub, because that is where the Logos catalog publishes modules from.
+
+Contributors push to both:
 
 ```bash
 git push origin main   # GitHub
 git push rad main      # Radicle
 ```
+
+### 2. Build and install
+
+Requires `nix` with flakes and [`logos-scaffold`](https://github.com/logos-co/logos-scaffold)
+(`lgs`), which drives every build from `scaffold.toml`:
+
+```bash
+lgs basecamp build --variant all   # both modules, both variants
+lgs basecamp setup                 # once: basecamp + lgpm binaries, dev profiles
+lgs basecamp install
+lgs basecamp launch alice
+```
+
+This builds and launches its own Basecamp from source, so it does not need the
+release download or the catalog from the previous section.
+
+Basecamp does not hot-reload plugins; after a rebuild, kill it, remove the
+installed modules, then reinstall and relaunch.
+
+[`CLAUDE.md`](CLAUDE.md) is the contributor guide — the full `lgs` verb table,
+where artefacts land, the test layers, and the traps that have bitten changes
+here.
 
 ## Modules
 
@@ -126,24 +168,6 @@ fail: path parameters must be full 40-char SHAs, and the tree root needs a
 trailing slash that subpaths must not have.
 
 All four layers run on every pull request.
-
-## Build it yourself
-
-Requires `nix` with flakes and [`logos-scaffold`](https://github.com/logos-co/logos-scaffold)
-(`lgs`), which drives the builds from `scaffold.toml`:
-
-```bash
-lgs basecamp build --variant all   # both modules, both variants
-lgs basecamp setup                 # once: basecamp + lgpm binaries, dev profiles
-lgs basecamp install
-lgs basecamp launch alice
-```
-
-Basecamp does not hot-reload plugins; after a rebuild, kill it, remove the
-installed modules, then reinstall and relaunch.
-
-[`CLAUDE.md`](CLAUDE.md) is the contributor guide — the `lgs` verb table, where
-artefacts land, the test layers, and the traps that have bitten changes here.
 
 ## Disclaimer
 
