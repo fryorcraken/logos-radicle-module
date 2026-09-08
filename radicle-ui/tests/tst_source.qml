@@ -433,6 +433,65 @@ Item {
             verify(mark.visible, "and back, so this cannot pass by never showing");
         }
 
+        /// Before the first `getCapabilities` reply, nothing is known — and
+        /// "nothing is known" must not be rendered as "nothing works".
+        ///
+        /// `caps` starts as `({})`, so `caps.startableModes` is `undefined`
+        /// until the reply lands. Passing `[]` for that produced an amber
+        /// border on the whole control and an "unavailable" marker on ALL
+        /// THREE segments, Local included — which is literally the *"why the
+        /// warning sign for local????"* complaint this milestone already fixed,
+        /// reappearing at startup on every launch.
+        ///
+        /// `[]` is still the right default for a caller that FORGOT to wire
+        /// this — over-annotation is visible, under-annotation is the bug the
+        /// property exists to prevent. But "not yet known" and "known to be
+        /// empty" are different states and cannot share one value, so
+        /// `undefined` now means the first and annotates nothing.
+        function test_nothing_is_marked_before_capabilities_arrive() {
+            // Exactly what Main.qml holds before the first reply.
+            toggle.startableModes = undefined;
+
+            verify(!toggle.hasProblem,
+                   "the control claims a problem before it has been told "
+                   + "anything — an amber border on every launch, on a build "
+                   + "where all three modes may be perfectly fine");
+
+            var keys = ["explore", "local", "embedded"];
+            for (var i = 0; i < keys.length; i++) {
+                var mark = root.findByName(toggle,
+                                           "sourceToggleUnavailable_" + keys[i]);
+                verify(mark === null || !mark.visible,
+                       keys[i] + " is marked unavailable before capabilities "
+                       + "have arrived — the UI is asserting something it "
+                       + "cannot know yet, and for Local that is the exact "
+                       + "false warning this milestone already fixed once");
+            }
+        }
+
+        /// ...and the distinction is real in BOTH directions. A known-empty set
+        /// is a genuine statement — this build starts nothing — and must still
+        /// annotate everything.
+        ///
+        /// Without this leg the fix above could be "never annotate on an empty
+        /// array", which would silently drop the caveat for a caller that
+        /// forgot to wire the property at all: exactly the under-annotation the
+        /// conservative default exists to prevent.
+        function test_a_known_empty_set_still_marks_everything() {
+            toggle.startableModes = [];
+
+            var keys = ["explore", "local", "embedded"];
+            for (var i = 0; i < keys.length; i++) {
+                var mark = root.findByName(toggle,
+                                           "sourceToggleUnavailable_" + keys[i]);
+                verify(mark !== null && mark.visible,
+                       keys[i] + " is NOT marked for a build that says it can "
+                       + "start nothing — `[]` is a fact, and a caller who "
+                       + "forgot to wire this must get the visible "
+                       + "over-annotation rather than a silent all-clear");
+            }
+        }
+
         /// Only the unstartable segment is marked. If every segment carried one
         /// the marker would say nothing — the same reason ModePicker asserts
         /// its three rows give three answers from one fixture.
@@ -706,6 +765,54 @@ Item {
                    "a copy with no visible response reads as a dead control");
             verify(note.text.toLowerCase().indexOf("copied") !== -1,
                    "and it must say what happened, got: " + note.text);
+        }
+
+        /// The confirmation must be EARNED, not assumed.
+        ///
+        /// `TextEdit.copy()` returns nothing and signals failure through no
+        /// channel, so the element used to restart the confirm timer and emit
+        /// `copied()` unconditionally on the next line. If the clipboard were
+        /// unavailable — the live-bundle risk, since an offscreen Qt platform
+        /// plugin always provides one while a Wayland bundle may not — the UI
+        /// would say "Copied" with nothing copied.
+        ///
+        /// Proven by mutation rather than argued: deleting `clip.copy()` from
+        /// the component now turns THIS test and
+        /// `test_copying_confirms_itself_on_screen` red. Before the check
+        /// existed, the confirmation test stayed green through exactly that
+        /// deletion, which is what made it worth nothing.
+        ///
+        /// The check itself is asserted directly: it must answer TRUE only when
+        /// the clipboard really holds the value, and FALSE otherwise. A
+        /// verification step that answered the same way regardless would make
+        /// the confirmation exactly as unconditional as it was before, while
+        /// looking like it had been fixed.
+        ///
+        /// Driven through the real system clipboard, using this file's own
+        /// `clipboardSet` helper to put a known decoy there.
+        function test_the_clipboard_check_distinguishes_landed_from_not() {
+            var did = "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+
+            root.clipboardSet(did);
+            verify(identity.clipboardHolds(did),
+                   "the check must recognise a value that IS on the clipboard");
+
+            root.clipboardSet("something-else-entirely");
+            verify(!identity.clipboardHolds(did),
+                   "the check must reject a value that is NOT on the "
+                   + "clipboard — otherwise it confirms every copy, landed or "
+                   + "not, which is the defect it exists to remove");
+        }
+
+        /// ...and reading the clipboard back must not disturb it. The check
+        /// pastes into a scratch editor to see what is there, and a paste that
+        /// left the identity sitting in a second element — or cleared what the
+        /// user had — would be a new bug introduced by the fix for an old one.
+        function test_checking_the_clipboard_leaves_it_alone() {
+            root.clipboardSet("user-had-this");
+            identity.clipboardHolds("something-else");
+            compare(root.clipboardGet(), "user-had-this",
+                    "verifying a copy must not modify the clipboard");
         }
 
         /// The confirmation must not resize the header when it appears — the

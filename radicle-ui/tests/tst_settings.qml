@@ -15,8 +15,12 @@ import "../src/qml" as Ui
  */
 Item {
     id: harness
-    width: 640
-    height: 800
+    // Wide enough to hold the escapability fixture AND the short-window one
+    // side by side. They must not overlap: an opaque pane over another
+    // fixture's panel swallows its clicks, and the resulting failures point at
+    // the tests that were working rather than at the fixture that moved.
+    width: 1400
+    height: 900
 
     // ---- a settings backend that actually remembers ----------------------
     QtObject {
@@ -125,14 +129,21 @@ Item {
     Rectangle {
         id: bodyUnderneath
         objectName: "bodyUnderneath"
-        anchors.fill: parent
+        // Explicitly sized rather than `anchors.fill`: the harness is now wide
+        // enough to host a second fixture beside this one, and filling it would
+        // put this opaque pane over that fixture's panel.
+        x: 0; y: 0
+        width: 640
+        height: 800
         property string screen: "repos"
     }
 
     Rectangle {
         id: overlayPane
         objectName: "overlayPane"
-        anchors.fill: parent
+        x: 0; y: 0
+        width: 640
+        height: 800
         // Opaque, exactly as in Main.qml: this is what makes the panel a door
         // rather than a floating card, and therefore what makes a missing exit
         // a trap rather than a nuisance.
@@ -258,6 +269,220 @@ Item {
                    "the close control's bottom is at " + bottom + " in a "
                    + overlayPane.height + "px pane — it is off-screen, and a "
                    + "way out the user cannot reach is not a way out");
+        }
+    }
+
+    // ---- the panel on a SHORT window --------------------------------------
+    //
+    // Putting the Back button first genuinely fixed the way OUT, and the test
+    // above pins it. But it fixed only the exit: everything BELOW the exit was
+    // still unreachable on a short window, and because that test measures at a
+    // fixed 800px pane it could not see it.
+    //
+    // Measured against a short pane before the fix, with the panel 547px tall
+    // and `anchors.top`-ed into a pane with no scroll:
+    //
+    //   < ~530px  gitPathField, gitPathSave and gitRestartNote all off screen
+    //             — the whole Git section, which is what this milestone's
+    //             preflight work exists for
+    //   < ~470px  gitResolved too
+    //   < ~330px  the mode picker itself
+    //
+    // Same class as the one-way door and as the header's vanishing Settings
+    // chip: a control that exists, reports `visible: true`, and cannot be
+    // reached. So the fixture below is deliberately SHORT, and the assertions
+    // are about the elements furthest down the column — the ones a
+    // comfortable-height fixture can never say anything about.
+    property int shortPaneHeight: 320
+
+    Rectangle {
+        id: shortPane
+        objectName: "shortPane"
+        // Placed clear of the other fixtures rather than on top of them. They
+        // overlap at the origin otherwise, and an opaque pane sitting over
+        // `overlayPanel` swallows the clicks the escapability tests deliver —
+        // which reads as those tests breaking, when what actually happened is
+        // that a new fixture moved into their coordinates.
+        x: 700
+        y: 0
+        width: 600
+        height: harness.shortPaneHeight
+        color: "#0d1117"
+        // Clips, for the same reason tst_header_width.qml's bar does: without
+        // it an element pushed past the bottom still reports a plausible `y`
+        // and a true `visible`, and every property-based assertion passes while
+        // the user sees nothing.
+        clip: true
+
+        Ui.SettingsPanel {
+            id: shortPanel
+            objectName: "shortPanel"
+            anchors.fill: parent
+            caps: harness.defaultCaps
+            fetchSettings: function (cb) { fakeBackend.get(cb); }
+            saveSetting: function (k, v, cb) { fakeBackend.set(k, v, cb); }
+        }
+    }
+
+    TestCase {
+        name: "SettingsAreReachableOnAShortWindow"
+        when: windowShown
+
+        function init() {
+            harness.shortPaneHeight = 320;
+            shortPanel.caps = harness.defaultCaps;
+        }
+
+        /// How much of `item` falls inside `container` vertically. The only
+        /// measure that distinguishes "on screen" from "below the fold" — see
+        /// the block comment above.
+        function visibleHeightIn(item, container) {
+            if (!item || !item.visible) return 0;
+            var top = item.mapToItem(container, 0, 0).y;
+            var bottom = top + item.height;
+            return Math.max(0, Math.min(bottom, container.height)
+                               - Math.max(top, 0));
+        }
+
+        /// THE DEFECT: the Git section is what this milestone's preflight work
+        /// exists for, and on a short window it was entirely below the fold
+        /// with nothing indicating there was more panel to see.
+        ///
+        /// Asserted on the four elements that were lost, not just one, because
+        /// they disappeared at different heights — the field and button at
+        /// ~530px, the resolved readout at ~470px — and a single-element check
+        /// would pick one threshold and miss the others.
+        ///
+        /// "Reachable" is deliberately NOT "currently within the viewport". On
+        /// a 320px pane the panel is genuinely taller than the window, and the
+        /// correct behaviour is that it scrolls — demanding everything be on
+        /// screen at once would fail a working panel and could only be
+        /// satisfied by shrinking the content until it was unreadable. What
+        /// must never be true is the third state: off screen with NO way to get
+        /// to it, which is what shipped. So each element must either be in view
+        /// or be scrollable into view.
+        function test_the_git_section_is_reachable_on_a_short_window() {
+            var names = ["gitResolved", "gitPathField", "gitPathSave",
+                         "gitRestartNote"];
+            for (var i = 0; i < names.length; i++) {
+                var el = harness.findByName(shortPanel, names[i]);
+                verify(el !== null, names[i] + " must exist");
+                verify(shortPanel.canScroll
+                       || visibleHeightIn(el, shortPane) > 0,
+                       names[i] + " is entirely below the fold in a "
+                       + shortPane.height + "px pane AND the panel does not "
+                       + "scroll, so there is no way to reach it at all. The "
+                       + "Git settings are the whole point of this milestone's "
+                       + "preflight work.");
+            }
+        }
+
+        /// ...and scrolling actually GETS there, rather than `canScroll` being
+        /// a claim nothing backs up.
+        ///
+        /// This is the other half of the test above, and without it that one
+        /// would accept a panel that reports itself scrollable and has no
+        /// scrollable extent — which is precisely the "it says it works" shape
+        /// this repo keeps being bitten by. Scrolls to the bottom and asserts
+        /// the LAST element of the column is then genuinely in view.
+        function test_scrolling_to_the_bottom_reveals_the_git_section() {
+            harness.shortPaneHeight = 320;
+            waitForRendering(shortPane);
+            verify(shortPanel.canScroll, "precondition: the panel must scroll");
+
+            var note = harness.findByName(shortPanel, "gitRestartNote");
+            verify(note !== null);
+            verify(visibleHeightIn(note, shortPane) <= 0,
+                   "precondition: the restart note starts below the fold, or "
+                   + "this test is asserting nothing about scrolling");
+
+            // Driven through the scroll view's OWN notion of where the bottom
+            // is, not by an arithmetic guess at it. Computing
+            // `contentHeight - pane.height` here looks equivalent and is not:
+            // the viewport is smaller than the pane by the view's padding, so
+            // that expression stops short of the real bottom and the test then
+            // reports a scrolling bug that is entirely its own. Asking the
+            // Flickable for `contentHeight - height` uses the viewport it
+            // actually has.
+            var view = harness.findByName(shortPanel, "settingsScroll");
+            verify(view !== null, "the panel must expose its scroll view");
+            var flick = view.contentItem;
+            flick.contentY = flick.contentHeight - flick.height;
+            waitForRendering(shortPane);
+
+            verify(visibleHeightIn(note, shortPane) > 0,
+                   "after scrolling to the bottom the restart note is STILL "
+                   + "off screen — the panel reports itself scrollable but "
+                   + "scrolling does not reach its own content [contentHeight="
+                   + flick.contentHeight + " contentY=" + flick.contentY
+                   + " viewportH=" + flick.height + " noteY="
+                   + note.mapToItem(shortPane, 0, 0).y + "]");
+        }
+
+        /// ...and the mode picker, which went at ~330px. Listed separately
+        /// because it is a different failure in kind: losing the git path is
+        /// losing a setting, losing the mode picker is losing the control this
+        /// milestone is named for.
+        function test_the_mode_picker_is_reachable_on_a_short_window() {
+            var picker = harness.findByName(shortPanel, "modePicker");
+            verify(picker !== null);
+            verify(visibleHeightIn(picker, shortPane) > 0,
+                   "the mode picker is below the fold in a " + shortPane.height
+                   + "px pane — the one control this milestone is about");
+        }
+
+        /// The way out must survive the fix. Wrapping the content in a scroll
+        /// view could just as easily have put the Back button inside the
+        /// scrolled area and pushed it off the top, which would trade one
+        /// unreachable control for another.
+        function test_the_way_out_survives_on_a_short_window() {
+            var back = harness.findByName(shortPanel, "settingsBackButton");
+            verify(back !== null);
+            verify(visibleHeightIn(back, shortPane) > 0,
+                   "the Back button left the screen — the exit must remain "
+                   + "reachable at every height, not just comfortable ones");
+        }
+
+        /// Reachability must not be a coincidence of one height. Driving the
+        /// pane down through a range asserts the guarantee rather than one
+        /// sample of it — the same reason the header tests sweep widths.
+        function test_the_git_section_survives_a_range_of_heights() {
+            var heights = [700, 600, 530, 470, 400, 330, 280];
+            for (var i = 0; i < heights.length; i++) {
+                harness.shortPaneHeight = heights[i];
+                waitForRendering(shortPane);
+
+                var field = harness.findByName(shortPanel, "gitPathField");
+                var back = harness.findByName(shortPanel, "settingsBackButton");
+                verify(visibleHeightIn(back, shortPane) > 0,
+                       "at " + heights[i] + "px the way out is gone");
+                verify(shortPanel.canScroll
+                       || visibleHeightIn(field, shortPane) > 0,
+                       "at " + heights[i] + "px the git path field is off "
+                       + "screen and the panel does not scroll, so there is no "
+                       + "way to reach it at all");
+            }
+        }
+
+        /// The panel must SAY it has more to show. A scroll view that scrolls
+        /// silently is better than a clipped column, but "there is more below"
+        /// still has to be discoverable — the whole family of bugs this
+        /// milestone has been fixing is content that exists and gives the user
+        /// no sign of itself.
+        function test_a_clipped_panel_reports_that_it_scrolls() {
+            harness.shortPaneHeight = 280;
+            waitForRendering(shortPane);
+            verify(shortPanel.canScroll,
+                   "at 280px the panel is taller than its pane but does not "
+                   + "report itself as scrollable, so nothing can indicate "
+                   + "that there is more below the fold");
+
+            harness.shortPaneHeight = 900;
+            waitForRendering(shortPane);
+            verify(!shortPanel.canScroll,
+                   "at 900px everything fits, so claiming it scrolls would be "
+                   + "a scrollbar that means nothing — and this assertion is "
+                   + "what stops `canScroll` being hardcoded true");
         }
     }
 

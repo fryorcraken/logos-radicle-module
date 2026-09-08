@@ -466,10 +466,36 @@ Item {
                     spacing: Theme.gap
 
                     Text {
+                        objectName: "headerTitle"
                         text: "Radicle"
                         color: Theme.text
                         font.pixelSize: Theme.fontXl
                         font.bold: true
+                        // The last thing to go, and the only element here that
+                        // may go COMPLETELY, because it is the only one that
+                        // costs the user nothing: Basecamp's own chrome already
+                        // says which module this is, so the word is a courtesy
+                        // rather than information. Everything else in this row
+                        // is either a control or the answer to a question the
+                        // user has.
+                        //
+                        // Needed because the row's minimums genuinely exceed a
+                        // narrow window: title 58 + toggle 226 + identity 120 +
+                        // chip 66, plus gaps and margins, is ~542px, so at 480
+                        // something has to yield entirely or the chip goes off
+                        // the edge — which is the defect this whole change is
+                        // about. The toggle cannot shrink (it is three labelled
+                        // segments), the chip must not (it is the only way into
+                        // Settings), and the identity is already eliding.
+                        //
+                        // Keyed on the bar's width rather than on a Layout
+                        // minimum so the disappearance is a decision with a
+                        // threshold, not an overflow — an element that vanishes
+                        // because a layout ran out of room is exactly the
+                        // silent failure being fixed here.
+                        visible: headerRow.width > 520
+                        Layout.preferredWidth: visible ? implicitWidth : 0
+                        Layout.maximumWidth: visible ? implicitWidth : 0
                     }
 
                     // ONE control for "what am I browsing" — exactly three
@@ -511,8 +537,18 @@ Item {
                         Layout.preferredHeight: Theme.rowHeightSm
                         Layout.maximumHeight: Theme.rowHeightSm
                         mode:           root.mode
-                        startableModes: root.caps.startableModes !== undefined
-                                        ? root.caps.startableModes : []
+                        // Passed straight through, `undefined` included, and
+                        // that is the point rather than a shortcut. This used
+                        // to substitute `[]` for a missing value, which told
+                        // the toggle "this build starts nothing" during the
+                        // window before the first getCapabilities reply — an
+                        // amber border and an unavailable marker on all three
+                        // segments, Local included, on every launch. `[]` and
+                        // "not yet known" are different claims and the toggle
+                        // now distinguishes them; collapsing them here would
+                        // put the regression back on this side of the
+                        // boundary. See SourceToggle.startableModes.
+                        startableModes: root.caps.startableModes
                         modeReason:     root.caps.modeUnavailableReason || ""
                         localAvailable: root.localAvailable
                         pathsProblem:   root.caps.pathsProblem || ""
@@ -576,6 +612,43 @@ Item {
                         // first.
                         visible: root.mode === "local" && nodeIdentity.nodeId !== ""
                         nodeId: root.caps.nodeId || ""
+                        // The identity is the element that YIELDS when the
+                        // window gets narrow, and it is the right one to pick:
+                        // it is the only thing in this row whose content can be
+                        // shortened without losing a destination. Clicking it
+                        // still copies the whole DID, and Settings shows it in
+                        // full — so the cost is legibility at a width where
+                        // nothing else would have fit anyway.
+                        //
+                        // Everything else in the row is a fixed cost the row
+                        // must simply carry, so with no yielder the row could
+                        // not shrink below ~830px and the Settings chip — now
+                        // the ONLY way into Settings, since this element copies
+                        // instead of opening it — was pushed off the right edge
+                        // entirely. See NodeIdentity.qml.
+                        //
+                        // The floor is ~14 monospace characters plus the
+                        // ellipsis: enough to read `did:key:z6Mk…` and a few
+                        // characters of tail. Below that the element would be
+                        // saying nothing while still taking room, which is
+                        // worse than the honest alternative of it being cut off
+                        // — but it never gets there, because the chip's own
+                        // minimum stops the row shrinking that far.
+                        //
+                        // Every Layout constraint is gated on `visible`, and
+                        // that gate is not decoration: a RowLayout still
+                        // reserves an explicit `Layout.minimumWidth` for a
+                        // child that is NOT visible. Ungated, this element held
+                        // 120px in Explore — where it is hidden — and the
+                        // search field held its own 120px back in Local, so
+                        // ~240px of the row was permanently spoken for by two
+                        // items that were never both on screen. That alone put
+                        // the Settings chip off the edge at 900px in Explore.
+                        Layout.minimumWidth: visible ? 120 : 0
+                        Layout.preferredWidth: visible ? implicitWidth : 0
+                        Layout.maximumWidth: visible ? implicitWidth : 0
+                        Layout.fillWidth: visible
+                        minimumWidth: 120
                         // Clicking copies; the component does that itself and
                         // confirms it on screen. Nothing is wired here on
                         // purpose — it used to open Settings, and the user
@@ -595,7 +668,25 @@ Item {
                         // because it is the SURFACE that lacks search:
                         // `embedded` would have the same limitation.
                         visible: nav.view === "repos" && root.source === "remote"
-                        Layout.preferredWidth: 260
+                        // The other yielder, for the same reason and with the
+                        // same shape as the identity above. In Explore this
+                        // 260px field is what runs the row out of width, so a
+                        // fix that only budgeted for Local's identity would
+                        // leave the Settings chip off screen at ~640px here.
+                        //
+                        // A text field shrinks gracefully in a way a DID cannot:
+                        // it scrolls its own content, so a narrow one still
+                        // accepts and displays a query. 120px holds the
+                        // placeholder's first words and a typed term.
+                        //
+                        // Gated on `visible` for the same reason as the
+                        // identity: an invisible child still holds its declared
+                        // minimum, so an ungated 120px here was being reserved
+                        // in Local, where this field is hidden.
+                        Layout.preferredWidth: visible ? 260 : 0
+                        Layout.minimumWidth: visible ? 120 : 0
+                        Layout.maximumWidth: visible ? 260 : 0
+                        Layout.fillWidth: visible
                         placeholder: "Search repositories"
                         onAccepted: repoList.reload()
                     }
@@ -603,6 +694,21 @@ Item {
                     Rectangle {
                         Layout.preferredHeight: Theme.rowHeightSm
                         Layout.preferredWidth: settingsLabel.implicitWidth + Theme.gap * 2
+                        // Never yields, and that is the whole point of this
+                        // change. `Layout.minimumWidth` equal to the preferred
+                        // width makes the chip incompressible, so the row
+                        // shrinks its two flexible items instead of pushing
+                        // this one past the right edge.
+                        //
+                        // A RowLayout that cannot fit its minimums OVERFLOWS —
+                        // it does not scroll or wrap — and the item that goes
+                        // is the last one, which is this. That is how Settings
+                        // became unreachable below ~750px: the chip is the only
+                        // way in now that the identity copies instead of
+                        // opening it, so it is the one element here that must
+                        // survive at any width. tst_header_width.qml drives the
+                        // width down and asserts exactly that.
+                        Layout.minimumWidth: settingsLabel.implicitWidth + Theme.gap * 2
                         radius: Theme.radiusSm
                         color: root.settingsOpen ? Theme.accentSoft : Theme.bg
                         border.width: 1

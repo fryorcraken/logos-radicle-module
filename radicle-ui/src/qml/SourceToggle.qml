@@ -125,7 +125,30 @@ Item {
     /// The default is conservative rather than "the two that work today": a
     /// caller that forgets to wire this gets over-annotation, which is visible,
     /// instead of under-annotation, which is exactly the bug.
+    ///
+    /// **`undefined` means NOT YET KNOWN, and annotates nothing.** That is a
+    /// third state, distinct from both `[]` and a populated list, and it exists
+    /// because conflating it with `[]` shipped a real regression: `caps` starts
+    /// as `({})`, so before the first `getCapabilities` reply
+    /// `caps.startableModes` is `undefined`, and passing `[]` for it painted an
+    /// amber border on the control and an "unavailable" marker on all three
+    /// segments — Local included. That is the *"why the warning sign for
+    /// local????"* complaint this milestone already fixed, arriving again at
+    /// every launch for as long as the reply took.
+    ///
+    /// `[]` keeps its meaning — a build that reports it can start nothing — so
+    /// a caller who genuinely forgets to wire this still gets the visible
+    /// over-annotation. What changed is only that "I have not been told yet"
+    /// stopped being spelled the same way as "I have been told: nothing".
     property var startableModes: []
+
+    /// Whether the startable set has been reported at all.
+    ///
+    /// Anything that would ANNOTATE AN ABSENCE has to consult this first: until
+    /// it is true, the honest rendering is a control that claims nothing in
+    /// either direction.
+    readonly property bool startableKnown:
+        startableModes !== undefined && startableModes !== null
 
     /// Why the chosen mode cannot start, from
     /// `getCapabilities().modeUnavailableReason`. Shown verbatim. Empty is
@@ -165,6 +188,11 @@ Item {
     ]
 
     function isStartable(key) {
+        // Unknown reads as startable, so nothing is annotated while the answer
+        // is still in flight. The alternative — treating unknown as
+        // unstartable — is what put a warning marker on a working Local
+        // segment at every startup. See `startableModes` above.
+        if (!startableKnown) return true;
         for (var i = 0; i < startableModes.length; i++)
             if (startableModes[i] === key) return true;
         return false;

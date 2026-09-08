@@ -22,6 +22,21 @@ import "Theme.js" as Theme
  * is checked by running its `--version`; a bad one is refused here, while the
  * field is still on screen, rather than surfacing much later as a failed push
  * with no obvious cause.
+ *
+ * **The content scrolls, and it has to.** This panel is taller than a short
+ * window, and it used to be a plain column anchored to the top of an opaque
+ * pane with no scrolling of any kind — so on a short window everything below
+ * the fold was simply unreachable. Measured: under ~530px the git path field,
+ * its Save button and the restart note were all off screen; under ~470px the
+ * resolved-git readout went too; under ~330px so did the mode picker.
+ *
+ * That is the same defect as the one-way door this panel was already fixed for
+ * once, one level down. Putting the Back button first fixed the way OUT and
+ * nothing else — the test covering it measures at a fixed comfortable height,
+ * so it could not see that everything BELOW the exit was still lost. A control
+ * that exists, reports `visible: true`, and cannot be reached is the shape to
+ * watch for; `tst_settings.qml`'s short-window case drives the height down and
+ * asserts against it.
  */
 Item {
     id: panel
@@ -84,6 +99,17 @@ Item {
     implicitWidth: 520
     implicitHeight: column.implicitHeight + Theme.gapLg * 2
 
+    /// Whether there is more content than fits, so the panel is scrolling.
+    ///
+    /// Exposed rather than kept private because "the panel is taller than its
+    /// pane" is exactly the state a caller may need to indicate, and because a
+    /// test asserting the content is reachable has to distinguish "it fits"
+    /// from "it scrolls to it". Both are acceptable; "it is off screen and
+    /// nothing scrolls" is not, and without this property that third state is
+    /// indistinguishable from the first two.
+    readonly property bool canScroll:
+        height > 0 && column.implicitHeight + Theme.gapLg * 2 > height
+
     // Escape closes it, the reflex every dismissable thing owes a keyboard
     // user. `Keys` needs focus to see anything, so the panel takes it when it
     // becomes visible — otherwise the shortcut exists and never fires, which is
@@ -95,10 +121,53 @@ Item {
         event.accepted = true;
     }
 
+    /// Everything below scrolls when it does not fit.
+    ///
+    /// `contentWidth` is pinned to the viewport's width so the content never
+    /// scrolls HORIZONTALLY: a settings form that slid sideways would be a new
+    /// way to lose a control, which is the opposite of the point. Only the
+    /// vertical policy is `AsNeeded`.
+    ///
+    /// The Back button scrolls WITH the content rather than being pinned above
+    /// it, and that is a deliberate choice rather than an oversight. It is the
+    /// first thing in the column, so it is on screen at the scroll position the
+    /// panel opens at — which is where a user looks for it — and pinning it
+    /// would spend vertical space on a chrome bar in exactly the short windows
+    /// where space is scarcest. `tst_settings.qml` asserts it stays reachable
+    /// across the whole range of heights, so this choice is pinned rather than
+    /// assumed.
+    ScrollView {
+        id: scroll
+        objectName: "settingsScroll"
+        anchors.fill: parent
+        contentWidth: availableWidth
+        clip: true
+        ScrollBar.vertical.policy: ScrollBar.AsNeeded
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        // The panel's inset lives HERE, as the scroll view's padding, rather
+        // than as an x/y offset on the column inside it. A ScrollView derives
+        // `contentHeight` from its content item's height, which does not
+        // include an offset applied to that item — so with the margin on the
+        // column, scrolling to what the view believed was the bottom left the
+        // last element `gapLg` px short of the viewport, permanently just out
+        // of reach. Padding is part of the view's own arithmetic and is
+        // accounted for.
+        padding: Theme.gapLg
+
+    // NOTE: the column below is intentionally left at its original indentation
+    // so that introducing this ScrollView shows up in review as the wrapper it
+    // is, rather than as a re-indent of the whole file with the real change
+    // buried inside it.
     ColumnLayout {
         id: column
-        anchors.fill: parent
-        anchors.margins: Theme.gapLg
+        // NOT `anchors.fill` any more: inside a ScrollView the content item
+        // must be sized by its own implicit height, or there is nothing for the
+        // view to scroll — filling the viewport makes the content exactly as
+        // tall as the window and the overflow silently disappears again.
+        //
+        // The inset that `anchors.margins` used to supply is the scroll view's
+        // `padding` now; see the comment on it for why it cannot live here.
+        width: scroll.availableWidth
         spacing: Theme.gapLg
 
         // ---- the way out --------------------------------------------------
@@ -326,5 +395,7 @@ Item {
             font.pixelSize: Theme.fontSm
             text: panel.lastError
         }
+    }
+
     }
 }
