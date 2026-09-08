@@ -51,7 +51,20 @@ Item {
         var first = (app.source === "local") ? "all" : page.query;
         var args = [first, page_, 50];
         page.loading = true;
+
+        // Same guard idiom as every other loader in this codebase (see
+        // IssuesTab/CommitsTab/ThreadView/CommitView/SourceTab): capture the
+        // inputs this request was made for, and drop a reply that no longer
+        // matches. reload() (triggered by the source toggle, setSeed(), and
+        // Enter in the search field) clears the model and calls fetch()
+        // again while a previous fetch() may still be in flight — without
+        // this, the old reply's items get appended into the new list.
+        var wantSource = app.source;
+        var wantQuery = page.query;
+        var wantPage = page_;
         app.call("ListRepos", args, function (data) {
+            if (app.source !== wantSource || page.query !== wantQuery || page_ !== wantPage)
+                return;
             page.loading = false;
             page.loadedOnce = true;
             var items = data.items || [];
@@ -59,6 +72,8 @@ Item {
                 repos.append({ repo: items[i] });
             page.hasMore = !!data.hasMore;
         }, function () {
+            if (app.source !== wantSource || page.query !== wantQuery || page_ !== wantPage)
+                return;
             page.loading = false;
             page.loadedOnce = true;
         });
