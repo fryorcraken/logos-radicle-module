@@ -65,18 +65,39 @@ import "Theme.js" as Theme
  * test structurally cannot see a clipped overlay, which is what CommitView's
  * back button taught this repo.
  *
- * ## Embedded is offered, and says what it will do
+ * ## Embedded is offered, and says what it will do — in two places, on purpose
  *
  * Embedded cannot start a node until Phase 2, and a segment that silently does
  * nothing is the exact bug review already caught in this PR. It is neither
  * hidden (which would misrepresent the module as never intending to support it)
- * nor silently inert: the caption states the consequence in words, always
- * visible, and it does so BEFORE the segment is chosen — because a user has to
- * be able to see the caveat while deciding, not discover it afterwards.
+ * nor silently inert.
  *
- * That is why the caveat is keyed on `startableModes` (a fact about the build)
- * rather than on `modeStartable` (a fact about the mode in force, which is true
- * in the default `local` state and says nothing whatever about Embedded).
+ * The first version said so in ONE place: the caption, shown unconditionally.
+ * That met the honesty requirement and failed a different one — the user asked
+ * for it gone (*"remove the text under the toggle when embeded is NOT
+ * selected"*), and rightly: a paragraph about a mode you have not chosen, on
+ * every screen, pushing the content down, is noise. But deleting it outright
+ * would have put the caveat back behind the choice, which is the original bug.
+ *
+ * So the one message is split by who needs it and when:
+ *
+ *  - **The segment carries a marker**, always, for any mode this build cannot
+ *    start. Small enough to be chrome, present while DECIDING, and not behind
+ *    a hover — the user rejected tooltips here, and this repo's last one
+ *    rendered as a clipped, unreadable sliver.
+ *  - **The caption carries the paragraph**, and only while that mode is
+ *    SELECTED. The consequence that actually matters — a separate identity —
+ *    needs a sentence, and the moment it is worth a sentence is the moment the
+ *    user has committed to the mode.
+ *
+ * The marker's styling is deliberately not the error colour: Embedded is not
+ * broken, it is not built yet, and this repo has already taken the complaint
+ * from the other direction (*"why the warning sign for local????"* on a feature
+ * that works).
+ *
+ * Both are keyed on `startableModes` (a fact about the build) rather than on
+ * `modeStartable` (a fact about the mode in force, which is true in the default
+ * `local` state and says nothing whatever about Embedded).
  *
  * ## One vocabulary, top to bottom
  *
@@ -168,14 +189,18 @@ Item {
         if (pathsProblem !== "")
             return pathsProblem + " — change it in Settings.";
 
-        // The caveat for a mode this build cannot start. Keyed on the mode a
-        // user is LOOKING AT choosing, not only on the one in force, so it is
-        // readable while deciding. Embedded is that mode today.
-        if (!isStartable("embedded"))
+        // The paragraph about Embedded, shown only while Embedded is SELECTED.
+        //
+        // It used to be unconditional, which put a caveat about a mode the user
+        // had not chosen on every screen. What replaces it in the other modes is
+        // the per-segment marker below — so the caveat is still visible BEFORE
+        // the choice, which is the requirement, without the paragraph being
+        // permanent chrome.
+        if (mode === "embedded" && !isStartable("embedded"))
             return "Embedded runs a node inside Basecamp with its own separate "
                  + "identity — it is not available in this version yet, so "
                  + "choosing it will not start a node. "
-                 + (isStartable(mode) || modeReason === "" ? "" : modeReason + " ")
+                 + (modeReason === "" ? "" : modeReason + " ")
                  + "Modes are explained in Settings.";
 
         if (!isStartable(mode))
@@ -213,9 +238,58 @@ Item {
     // Two children stacked vertically is arithmetic, so it is written as
     // arithmetic: every term below is a direct binding with no layout pass in
     // between, and the height is correct in the same frame the text changes.
+    //
+    // The caption is CONDITIONAL now — only the selected Embedded mode has one
+    // — but the space it occupies is not. That is deliberate, and it is the
+    // second half of that same fix rather than an oversight.
+    //
+    // A height that followed the caption's visibility made the header 44px
+    // taller in Embedded than in the other two modes, so every mode switch
+    // resized the bar and slid the entire body under the pointer that had just
+    // clicked. A test caught it (tst_layout.qml). Chrome occupying the same
+    // pixels on every screen is this view's stated layout rule; a caption that
+    // comes and goes is exactly the thing that rule exists to prevent.
+    //
+    // So the reservation is measured from `captionSizer` — a hidden Text
+    // carrying the LONGEST caption this control can produce, at the same width
+    // and font as the real one. Measured rather than hardcoded, because a
+    // constant would silently stop covering the text the day the wording
+    // changes, and the failure would be the clipping bug returning.
+    //
+    // Still pure arithmetic: every term is a direct binding with no layout pass
+    // between them, so the height is right in the same frame the mode changes.
+    // Only the HEIGHT is reserved unconditionally. The width is not, and the
+    // asymmetry is the point: the bar's height is what the body sits below, so
+    // a varying height moves the whole view, while the toggle's width only
+    // competes with a flexible spacer in the header row. Reserving 420px of
+    // width in every mode would squeeze the seed picker and the search field to
+    // pay for a caption that is not on screen.
     implicitWidth: Math.max(frame.width, noteText.visible ? noteText.width : 0)
-    implicitHeight: frame.height
-                    + (noteText.visible ? captionGap + noteText.height : 0)
+    implicitHeight: frame.height + captionGap
+                    + Math.max(captionSizer.height,
+                               noteText.visible ? noteText.height : 0)
+
+    /// The tallest caption this control can render, measured off-screen.
+    ///
+    /// The Embedded paragraph is the longest of the branches in `note` that
+    /// this component writes itself. The two it does not write — `pathsProblem`
+    /// and `reason` — are injected sentences of unbounded length, so they are
+    /// not measurable in advance; they are also the cases where a slightly
+    /// taller bar is the correct outcome, since the alternative is clipping a
+    /// message about something being broken. Hence Math.max below rather than
+    /// this alone.
+    Text {
+        id: captionSizer
+        visible: false
+        width: Theme.captionWidth
+        font.pixelSize: Theme.fontXs
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: "Embedded runs a node inside Basecamp with its own separate "
+            + "identity — it is not available in this version yet, so "
+            + "choosing it will not start a node. Modes are explained in "
+            + "Settings."
+    }
 
     // ---- the segmented control ----------------------------------------
     Rectangle {
@@ -265,10 +339,25 @@ Item {
                     // This is also the second reason the identity is not in
                     // here: a label carrying a DID would move the geometry
                     // every time capabilities changed.
-                    implicitWidth: sizer.implicitWidth + Theme.gap * 2
+                    // The marker is part of the measured width, not an overlay
+                    // on top of the label. An absolutely-positioned dot would
+                    // have been fewer lines and would have sat ON the text of
+                    // the longest label at small widths; including it in the
+                    // arithmetic is what keeps the segment readable.
+                    //
+                    // It depends on `startable` — a fact about the BUILD — and
+                    // never on `selected`, so it cannot reintroduce the
+                    // width-follows-selection defect the sizer exists to
+                    // prevent. Selecting a segment still changes nothing about
+                    // its geometry.
+                    implicitWidth: sizer.implicitWidth
+                                   + (startable ? 0 : markerGap + marker.width)
+                                   + Theme.gap * 2
                     implicitHeight: Theme.rowHeightSm - 6
                     radius: Theme.radiusSm - 1
                     color: selected ? Theme.accentSoft : "transparent"
+
+                    readonly property int markerGap: Theme.gapXs
 
                     Text {
                         id: sizer
@@ -278,21 +367,53 @@ Item {
                         font.bold: true
                     }
 
-                    Text {
-                        id: label
-                        objectName: "sourceToggleLabel_" + parent.modelData.key
+                    Row {
                         anchors.centerIn: parent
-                        text: parent.modelData.label
-                        // Dimmed for a mode this build cannot start, so the
-                        // caption below has something on screen to refer to —
-                        // but NOT amber, and NOT disabled: it is still a real,
-                        // persistable choice, and the caption says what
-                        // choosing it will and will not do.
-                        color: parent.selected ? Theme.text
-                             : parent.startable ? Theme.textDim
-                             : Theme.textFaint
-                        font.pixelSize: Theme.fontSm
-                        font.bold: parent.selected
+                        spacing: parent.markerGap
+
+                        Text {
+                            id: label
+                            objectName: "sourceToggleLabel_" + parent.parent.modelData.key
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: parent.parent.modelData.label
+                            // Dimmed for a mode this build cannot start, so the
+                            // marker beside it has something to qualify — but
+                            // NOT amber, and NOT disabled: it is still a real,
+                            // persistable choice.
+                            color: parent.parent.selected ? Theme.text
+                                 : parent.parent.startable ? Theme.textDim
+                                 : Theme.textFaint
+                            font.pixelSize: Theme.fontSm
+                            font.bold: parent.parent.selected
+                        }
+
+                        // "Not built yet", said on the segment itself so it is
+                        // legible while DECIDING — which is the requirement the
+                        // caption used to meet by being permanent, and the one
+                        // that would have been lost by simply deleting it.
+                        //
+                        // A hollow ring rather than a filled dot or a glyph: an
+                        // outline reads as "nothing here yet", where a filled
+                        // mark reads as a status light and a "!" reads as an
+                        // error. Embedded is not broken.
+                        //
+                        // `Theme.textFaint`, deliberately NOT `Theme.bad` and
+                        // not `Theme.warn`. The user's complaint from the other
+                        // direction — a warning colour on Local, a feature that
+                        // works — is the same mistake with the sign flipped.
+                        Rectangle {
+                            id: marker
+                            objectName: "sourceToggleUnavailable_"
+                                        + parent.parent.modelData.key
+                            visible: !parent.parent.startable
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 7
+                            height: 7
+                            radius: width / 2
+                            color: "transparent"
+                            border.width: 1
+                            border.color: Theme.textFaint
+                        }
                     }
 
                     MouseArea {

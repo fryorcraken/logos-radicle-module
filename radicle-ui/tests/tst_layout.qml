@@ -96,11 +96,16 @@ Item {
             objectName: "captionToggle"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            // The DEFAULT state a first-time user is in: `local` mode, which is
-            // startable, on a machine with a profile. It still has a caption —
-            // the Embedded caveat — which is the whole point of asserting it in
-            // this state rather than in a contrived broken one.
-            mode: "local"
+            // `embedded`, because that is now the only mode that HAS a caption
+            // — the paragraph was unconditional and the user asked for it gone
+            // from the modes it is not about. The clipping guarantee still has
+            // to hold wherever the caption does appear, so the fixture is the
+            // state where it appears.
+            //
+            // The default `local` state is not left uncovered: the test below
+            // switches to it and asserts the header does not jump, which is the
+            // NEW hazard a conditional caption introduces.
+            mode: "embedded"
             startableModes: ["explore", "local"]
             localAvailable: true
         }
@@ -205,6 +210,52 @@ Item {
             verify(top >= -1,
                    "the caption starts at " + top + ", above the header's top "
                    + "edge — also clipped");
+        }
+
+        // The caption is conditional now — visible only for Embedded — and a
+        // header whose height follows a caption that comes and going is a
+        // header that JUMPS every time the user changes mode. The content
+        // below it slides, and on the click that switched modes, which reads
+        // as the UI lurching under the pointer.
+        //
+        // So the bar reserves the caption's space unconditionally: the same
+        // pixels on every screen, which is the layout rule the whole file
+        // states at the top. Asserted across all three modes rather than
+        // between two, so a bar sized from "is this Embedded" would fail.
+        function test_the_header_does_not_jump_when_the_mode_changes() {
+            var modes = ["explore", "local", "embedded"];
+            var seen = [];
+            for (var i = 0; i < modes.length; i++) {
+                captionToggle.mode = modes[i];
+                // Measured with NO settle, deliberately. The caption's own
+                // history is a height that lagged its content by a layout
+                // pass; if this needs a wait to be true, the geometry is being
+                // settled over a frame rather than computed, and a user would
+                // see the frame it was wrong in.
+                seen.push(captionToggle.implicitHeight);
+            }
+            captionToggle.mode = "embedded";
+
+            for (var j = 1; j < seen.length; j++) {
+                compare(seen[j], seen[0],
+                        "the toggle is " + seen[j] + "px in " + modes[j]
+                        + " but " + seen[0] + "px in " + modes[0]
+                        + " — the header will jump when the mode changes, and "
+                        + "everything below it will slide");
+            }
+        }
+
+        // ...and the reserved space is real space, not zero. A bar that
+        // "does not jump" because the caption never gets any room is the
+        // clipping bug again, and the test above cannot tell the two apart.
+        function test_the_reserved_caption_space_is_actually_there() {
+            captionToggle.mode = "embedded";
+            var note = findChild(captionToggle, "sourceToggleNote");
+            verify(note.visible, "Embedded has a caption to place");
+            verify(captionToggle.implicitHeight >= note.height,
+                   "the toggle reports " + captionToggle.implicitHeight
+                   + "px but its caption alone is " + note.height
+                   + "px — the caption does not fit inside its own parent");
         }
 
         function test_rows_stack_instead_of_overlapping() {

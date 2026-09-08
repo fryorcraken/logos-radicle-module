@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../src/qml" as Ui
+import "../src/qml/Theme.js" as Theme
 
 /*
  * The header's mode control, the identity beside it, and the method routing
@@ -236,29 +237,29 @@ Item {
                    "an unusable socket path IS a problem and must show as one");
         }
 
-        /// The assertion the brief singles out: the Embedded caveat must be
-        /// present in the DEFAULT state — mode `local`, which IS startable —
-        /// because the user who has not chosen Embedded is exactly the one who
-        /// needs to know what choosing it would do.
+        /// The Embedded caveat belongs to Embedded, so it appears when Embedded
+        /// is the SELECTED mode and not otherwise.
         ///
-        /// This is why the caveat keys off `startableModes` (a fact about the
-        /// build) and not `modeStartable` (a fact about the mode in force,
-        /// which is true here and says nothing about Embedded). A previous
-        /// version derived one from the other and annotated nothing at all in
-        /// this state.
+        /// The first version of this caption was unconditional, and the user
+        /// asked for it gone: *"remove the text under the toggle when embeded
+        /// is NOT selected"*. It is a paragraph about a mode you have not
+        /// chosen, sitting on every screen, pushing the content down — noise
+        /// rather than chrome.
         ///
-        /// In WORDS, on screen, with no hover: the old design put this in a
-        /// tooltip clipped to an unreadable sliver.
-        function test_the_embedded_caveat_shows_in_the_default_state() {
-            compare(toggle.mode, "local", "the default state, on purpose");
-            verify(toggle.isStartable(toggle.mode),
-                   "the mode in force IS startable — which is exactly why "
-                   + "deriving the caveat from that boolean cannot work");
+        /// The caveat did not simply move, though; deleting it outright would
+        /// have restored the "control that silently does nothing" bug an
+        /// earlier review already caught in this PR. What replaces it is the
+        /// marker ON the segment, asserted in the DEFAULT state further down.
+        /// The two tests are a pair, and neither is complete alone.
+        function test_the_embedded_caveat_shows_when_embedded_is_selected() {
+            toggle.mode = "embedded";
+            verify(!toggle.isStartable("embedded"),
+                   "the fixture must describe a build that cannot start it");
 
             var note = root.findByName(toggle, "sourceToggleNote");
             verify(note !== null, "the caption line must exist");
             verify(note.visible,
-                   "Embedded must be explained BEFORE it is chosen");
+                   "the mode that cannot start must explain itself once chosen");
             verify(note.text.indexOf("Embedded") !== -1,
                    "the caption must name the mode it is about, got: " + note.text);
             verify(note.text.indexOf("not available") !== -1
@@ -269,10 +270,34 @@ Item {
                    + note.text);
         }
 
-        /// And the caveat goes when the build CAN start Embedded — otherwise
-        /// the caption is decoration that happens to be true today. Input
-        /// dependent on the field that decides it.
+        /// ...and is ABSENT for the two modes it is not about. This is the
+        /// user's request, asserted for both of the other modes rather than
+        /// only for the default one — a caption keyed on `mode !== "explore"`
+        /// would pass a single-mode check and still be wrong on Local.
+        function test_no_caption_when_embedded_is_not_selected() {
+            var note = root.findByName(toggle, "sourceToggleNote");
+
+            toggle.mode = "local";
+            verify(!note.visible,
+                   "Local carries no caption — the Embedded paragraph is not "
+                   + "about the mode the user is in, got: " + note.text);
+
+            toggle.mode = "explore";
+            verify(!note.visible,
+                   "nor does Explore, got: " + note.text);
+
+            // And back, so this cannot pass by never showing the caption at
+            // all — which would take the caveat away entirely.
+            toggle.mode = "embedded";
+            verify(note.visible,
+                   "the caption must still exist for the mode it is about");
+        }
+
+        /// The caveat still follows the startable SET, not just the selection:
+        /// on a build that CAN start Embedded, selecting it says nothing.
+        /// Otherwise the caption is decoration that happens to be true today.
         function test_the_caveat_follows_the_startable_set() {
+            toggle.mode = "embedded";
             var note = root.findByName(toggle, "sourceToggleNote");
             verify(note.visible, "shown for a build that cannot start Embedded");
 
@@ -284,6 +309,105 @@ Item {
             // And back, so this cannot pass by never showing it.
             toggle.startableModes = ["explore", "local"];
             verify(note.visible);
+        }
+
+        /// The blocker an earlier review caught in this PR, and the reason the
+        /// caption could not simply be deleted: **the caveat must be visible
+        /// BEFORE Embedded is chosen.** A segment that looks ordinary until you
+        /// pick it, and only then admits it does nothing, is precisely the
+        /// "control that silently does nothing" failure.
+        ///
+        /// So with the paragraph gone from the default state, the SEGMENT
+        /// itself has to carry the indication. Asserted in mode `local` — the
+        /// state every first-time user is in, and the one where the caption is
+        /// now absent — because that is exactly where the guarantee could be
+        /// lost without anything else going red.
+        ///
+        /// Not behind hover: the user rejected tooltips here, and this repo's
+        /// last one rendered as a clipped, unreadable sliver.
+        function test_the_embedded_segment_is_marked_unavailable_by_default() {
+            compare(toggle.mode, "local", "the default state, on purpose");
+            verify(toggle.isStartable(toggle.mode),
+                   "the mode in force IS startable — so nothing about the "
+                   + "current mode could be supplying this marker");
+
+            var note = root.findByName(toggle, "sourceToggleNote");
+            verify(!note.visible,
+                   "precondition: the caption is gone in this state, which is "
+                   + "why the segment has to speak for itself");
+
+            var mark = root.findByName(toggle, "sourceToggleUnavailable_embedded");
+            verify(mark !== null,
+                   "the Embedded segment carries no unavailability marker — "
+                   + "with the caption gone, nothing tells the user it will "
+                   + "not start a node until after they have chosen it");
+            verify(mark.visible,
+                   "the marker exists but is hidden, which is the same thing "
+                   + "as not having one");
+            verify(mark.width > 0 && mark.height > 0,
+                   "a zero-sized marker is invisible: "
+                   + mark.width + "x" + mark.height);
+        }
+
+        /// The marker reads as "not built yet", not as "broken".
+        ///
+        /// Embedded is not in an error state — it is a Phase 2 feature — and
+        /// this repo has already had the complaint from the other direction:
+        /// *"why the warning sign for local????"* on a feature that works. So
+        /// the marker must not borrow the error colour, and the control as a
+        /// whole must not claim a problem.
+        function test_the_marker_reads_as_unavailable_not_as_broken() {
+            var mark = root.findByName(toggle, "sourceToggleUnavailable_embedded");
+            verify(mark !== null);
+
+            // Both the fill and the outline, because a marker drawn either way
+            // would look like an error if it borrowed the error colour, and
+            // asserting only the one this implementation happens to use would
+            // let the other change silently.
+            verify(!Qt.colorEqual(mark.color, Theme.bad)
+                   && !Qt.colorEqual(mark.border.color, Theme.bad),
+                   "the marker uses the error colour — Embedded is not broken, "
+                   + "it is not built yet");
+            verify(!Qt.colorEqual(mark.color, Theme.warn)
+                   && !Qt.colorEqual(mark.border.color, Theme.warn),
+                   "nor the warning colour: this repo already had the complaint "
+                   + "from the other direction, a warning sign on a feature "
+                   + "that works");
+
+            verify(!toggle.hasProblem,
+                   "an unbuilt mode nobody selected is not a problem with the "
+                   + "mode in force, and must not flag the whole control");
+        }
+
+        /// The marker follows the startable SET, so it is an assertion about
+        /// the build rather than a decoration that is true today. Same
+        /// input-dependence rule as everything else here: one component, two
+        /// different answers.
+        function test_the_marker_goes_when_the_build_can_start_embedded() {
+            var mark = root.findByName(toggle, "sourceToggleUnavailable_embedded");
+            verify(mark.visible, "shown for a build that cannot start Embedded");
+
+            toggle.startableModes = ["explore", "local", "embedded"];
+            verify(!mark.visible,
+                   "a build that CAN start Embedded must not mark it");
+
+            toggle.startableModes = ["explore", "local"];
+            verify(mark.visible, "and back, so this cannot pass by never showing");
+        }
+
+        /// Only the unstartable segment is marked. If every segment carried one
+        /// the marker would say nothing — the same reason ModePicker asserts
+        /// its three rows give three answers from one fixture.
+        function test_only_the_unstartable_segment_is_marked() {
+            verify(root.findByName(toggle, "sourceToggleUnavailable_embedded").visible,
+                   "the unstartable one is marked");
+
+            var explore = root.findByName(toggle, "sourceToggleUnavailable_explore");
+            var local = root.findByName(toggle, "sourceToggleUnavailable_local");
+            verify(explore === null || !explore.visible,
+                   "Explore is startable and must not be marked");
+            verify(local === null || !local.visible,
+                   "Local is startable and must not be marked");
         }
 
         /// A missing profile is a different sentence from an unstartable mode,
@@ -341,8 +465,15 @@ Item {
         /// structurally cannot see a clipped overlay, which is what CommitView's
         /// back button taught this repo.
         function test_the_caption_is_inside_the_control_not_hanging_below_it() {
+            // `embedded`, because that is now the only mode with a caption —
+            // the paragraph used to be unconditional. The guarantee is
+            // unchanged: wherever a caption DOES appear it must be inside its
+            // parent. Asserting it in a state with nothing to place would be a
+            // test that cannot fail.
+            toggle.mode = "embedded";
+
             var note = root.findByName(toggle, "sourceToggleNote");
-            verify(note.visible, "the default state has a caption to place");
+            verify(note.visible, "Embedded has a caption to place");
 
             // Deliberately NOT preceded by a settle. The caption's width is a
             // Theme constant rather than a function of the control beneath it,
