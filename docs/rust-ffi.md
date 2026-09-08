@@ -180,16 +180,27 @@ the two `CMakeLists.txt` `find_library` calls just work. **Do not add a `cp`
 back on top**: the builder's copy arrives mode-444 from the store and a second
 one fails with "Permission denied".
 
-**One site the fix deliberately does not reach.** `tests.extraBuildInputs`
-still names an x86_64 zlib, because it is resolved outside `forAllSystems` and
-is not an `externalLibInputs` entry. So `checks.aarch64-linux.unit-tests` will
-not realise on an arm64 machine. Left alone on purpose: `checks` are not on the
-release path, and fixing it means either an upstream per-system `tests` hook or
-calling `mkLogosModule` once per system. Revisit only if the unit tests ever
-need to run on arm64.
+**The `extraBuildInputs` site, which used to be the gap.** It is resolved
+outside `forAllSystems` and is not an `externalLibInputs` entry, so one list is
+shared by every `checks.<system>.unit-tests`. Naming a single system's zlib
+therefore made every *other* system's check unrealisable — the same shape as
+the staticlib bug above, in the one place that fix does not reach. It now takes
+the zlib of every `ffiSystems` entry: on any given machine only that machine's
+check is ever realised, and the rest are inert store paths in a list Nix never
+builds. Do not "simplify" it back to one system.
 
-Darwin is excluded from `ffiSystems` deliberately — the crate links a native
-libgit2/openssl through the `*-sys` crates, so a Darwin arm would mean
-cross-compiling Rust for Darwin from Linux. A Darwin build fails with the
-builder's own "does not provide packages.aarch64-darwin.default", naming the
-platform instead of silently linking a Linux archive.
+**Darwin is in `ffiSystems`, and the reasoning that once excluded it was
+wrong.** The old argument was that a Darwin arm would mean cross-compiling Rust
+for Darwin from a Linux builder. Nothing cross-compiles: both release pipelines
+build each variant natively on its own runner — the catalog's action maps
+`darwin-arm64` to `macos-latest`, and `ci.yml`'s build matrix does the same.
+`buildInputs` resolves through `import nixpkgs { inherit system; }`, so a Darwin
+build links Darwin's own openssl and zlib, and there is no `target_os` gate or
+`cfg(unix)` branch anywhere in `rust-ffi/`.
+
+Excluding Darwin did not fail loudly — it made the catalog's `darwin-arm64` job
+fail, which that pipeline treats as an expected partial, so the release shipped
+anyway with a "Missing variants" line nobody reads. That is how radicle v0.2.0
+shipped linux-amd64 alone. Both modules have since built on all three platforms:
+the catalog's `sidecar.json` records `missingVariants: []` for v0.1.1 and again
+for v0.2.3.
