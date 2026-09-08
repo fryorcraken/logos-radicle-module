@@ -7,7 +7,7 @@ Radicle is peer-to-peer code collaboration: repositories, issues and patches
 live on a network of nodes rather than on a platform. This module gives
 Basecamp a view onto that network.
 
-**Two sources, with a toggle to switch between them:**
+**One control at the top picks where you are browsing:**
 
 - **Explore — any public repository, with nothing installed.** Search the
   repositories a public seed node replicates, walk the file tree, read files
@@ -17,6 +17,10 @@ Basecamp a view onto that network.
 - **Local — your own node.** If you already run Radicle on this machine, this
   reads `~/.radicle` directly: your private repositories included, and it
   works offline. Switch branches, including every peer's, not just your own.
+- **Embedded — a node Basecamp runs itself.** Offered, and marked in the
+  control as something this build cannot start yet: it is the next milestone,
+  not a working mode. Picking it explains what it will do rather than quietly
+  failing.
 
 **And two things beyond plain browsing:**
 
