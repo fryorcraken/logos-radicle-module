@@ -536,6 +536,13 @@ jobs:
           # amd64 package under an arm64 artifact name, and `lgx merge` would
           # reject the duplicate variant much later with a less obvious error.
           #
+          # The TRAILING SLASH is load-bearing, not punctuation. The dev
+          # variant directory is `<variant>-dev` — the builder's bundler
+          # appends the suffix — so a bare `variants/linux-amd64` would also
+          # prefix-match `variants/linux-amd64-dev/`, and the dev/portable
+          # transposition this assertion exists to catch would pass silently.
+          # With the slash it cannot.
+          #
           # `grep -c` rather than `grep -q`: `-q` exits at the first match and
           # closes the pipe, so `tar` dies of SIGPIPE and the pipeline reports
           # 141. That is invisible under a bare `set -eu` (which is why the
@@ -573,7 +580,16 @@ jobs:
       contents: write
     steps:
       # Each platform's packages land in their own subdirectory, named by the
-      # artifact — `_per-platform/radicle-lgx-<variant>/<file>.lgx`.
+      # artifact — `_per-platform/radicle-lgx-<variant>/<file>.lgx`. That
+      # per-artifact nesting is what `merge-multiple` would flatten, and the
+      # merge step below depends on it to tell the platforms apart, so do not
+      # add that input here.
+      #
+      # A pattern matching NOTHING is not an error: this step would succeed
+      # and leave `_per-platform` empty or absent. So the `[ -f "$f" ]` guard
+      # in the merge step is the only thing between a download that silently
+      # matched nothing and a release built from whatever happened to be
+      # lying around — it is load-bearing, not defensive tidiness.
       - uses: actions/download-artifact@v8
         with:
           path: _per-platform
