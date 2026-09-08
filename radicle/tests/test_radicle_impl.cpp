@@ -62,6 +62,52 @@ struct ScopedRadHome {
     void makeStorage() { ::mkdir((dir + "/storage").c_str(), 0755); }
 };
 
+/// Points XDG_DATA_HOME at a scratch directory, so `settingsPathFromEnv()` —
+/// and therefore the zero-argument `RadicleImpl()` production constructor —
+/// resolves to a settings file this test owns.
+///
+/// Every other test here injects a SettingsStore through
+/// setDependenciesForTest(), which is the right shape for almost everything.
+/// It cannot reach one thing: `storeForSettings()` runs in the CONSTRUCTOR's
+/// member init list, over the settings the constructor itself resolved. An
+/// injected store replaces the LocalStore wholesale, so the constructor's
+/// mode-to-store decision is exactly the code the injection paves over. A
+/// settings file already on disk before construction is the only way to drive
+/// it, and it is also the real-world shape of the bug: a file that was
+/// hand-edited, or half-written by an older build.
+struct ScopedXdgDataHome {
+    std::string dir;
+    std::string previous;
+    bool hadPrevious = false;
+
+    explicit ScopedXdgDataHome(const std::string& name)
+    {
+        const char* base = std::getenv("TMPDIR");
+        dir = std::string(base ? base : "/tmp") + "/radicle-impl-xdg-" + name;
+        ::mkdir(dir.c_str(), 0755);
+
+        if (const char* old = std::getenv("XDG_DATA_HOME")) {
+            previous = old;
+            hadPrevious = true;
+        }
+        ::setenv("XDG_DATA_HOME", dir.c_str(), 1);
+    }
+
+    ~ScopedXdgDataHome()
+    {
+        if (hadPrevious) ::setenv("XDG_DATA_HOME", previous.c_str(), 1);
+        else             ::unsetenv("XDG_DATA_HOME");
+    }
+
+    /// Write `contents` to exactly where settingsPathFromEnv() will look.
+    void writeSettings(const std::string& contents) const
+    {
+        ::mkdir((dir + "/radicle-module").c_str(), 0755);
+        std::ofstream out(dir + "/radicle-module/settings.json", std::ios::trunc);
+        out << contents;
+    }
+};
+
 /// A scripted fake transport for SeedClient, matching test_seed_client.cpp's
 /// FakeSeed. Kept local to this file (rather than shared) for the same reason
 /// test_local_writer.cpp duplicates `take()`: each file owning its own fixture
@@ -652,6 +698,56 @@ LOGOS_TEST(embedded_mode_does_not_alias_the_existing_local_profile)
     const auto caps = parse(impl.getCapabilities());
 
     LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
+    LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());
+}
+
+LOGOS_TEST(a_persisted_mode_this_build_does_not_know_does_not_alias_the_local_profile)
+{
+    // The same identity confusion as the test above, arriving through the one
+    // door that test cannot reach: a settings FILE naming a mode this build has
+    // never heard of.
+    //
+    // `set()` validates the mode; `load()` did not, so a hand-edited file, a
+    // half-written one, or a file written by a newer build was read back
+    // verbatim. `storeForSettings()` then named only `explore` and `embedded`
+    // and let everything else fall through to the environment — so an unknown
+    // mode inherited Local's behaviour exactly, and the module reported the
+    // attached profile's home, `localAvailable: true` and full read access
+    // under a mode the UI has no segment for.
+    //
+    // Both halves are asserted through the production constructor, because both
+    // halves live there: the file is read by `settingsPathFromEnv()` and the
+    // store is built in the member init list.
+    ScopedRadHome home("caps-unknown-mode");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("unknown-mode");
+
+    // `local` FIRST, from an equally real settings file, to prove this
+    // environment's profile IS visible. Without it every assertion below passes
+    // just as happily against a module that can never see any profile at all —
+    // the "a fixture that answers the same for every input" failure.
+    xdg.writeSettings("{\"mode\":\"local\"}");
+    {
+        RadicleImpl usingLocal;
+        const auto caps = parse(usingLocal.getCapabilities());
+        LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("local"));
+        LOGOS_ASSERT_EQ(caps["radHome"].get<std::string>(), home.dir);
+        LOGOS_ASSERT_TRUE(caps["localAvailable"].get<bool>());
+    }
+
+    xdg.writeSettings("{\"mode\":\"turbo\"}");
+    RadicleImpl impl;
+    const auto caps = parse(impl.getCapabilities());
+
+    // The unknown value never reaches a consumer. It resolves to Explore — the
+    // one mode that touches no local profile — rather than to the `local`
+    // default, because a file this build cannot interpret is no basis for
+    // claiming a node identity. See SettingsStore::load().
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("explore"));
+    // And no profile leaks through, which is the property that matters: home,
+    // availability and write access are all as if no node existed.
     LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
     LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
     LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());

@@ -56,7 +56,21 @@ Item {
         /// The derived method prefix. NOT settable, and identical for `local`
         /// and `embedded` — which is the whole reason this bug exists, so the
         /// fixture reproduces it rather than papering over it.
-        readonly property string source: mode === "explore" ? "remote" : "local"
+        readonly property string source: (mode === "local" || mode === "embedded")
+                                         ? "local" : "remote"
+
+        /// Which modes this build can start, exactly as capabilities report it.
+        /// Held as the SET rather than as a boolean per mode, so `modeStartable`
+        /// below is derived here the same way Main.qml derives it — a fixture
+        /// that hardcoded the boolean could not tell a RepoList reading the
+        /// capability from one still comparing against the word "embedded".
+        property var startableModes: ["explore", "local"]
+
+        readonly property bool modeStartable: {
+            for (var i = 0; i < startableModes.length; i++)
+                if (startableModes[i] === mode) return true;
+            return false;
+        }
 
         /// Every call this fake was asked to make, in order. Asserted on
         /// directly: "the list is empty" and "no request was issued" are
@@ -117,8 +131,68 @@ Item {
             // then wipe the call log, so the reset's own request does not
             // count against a test asserting on the log.
             app.mode = "local";
+            app.startableModes = ["explore", "local"];
             list.reload();
             app.reset();
+        }
+
+        /// **The not-implemented state is derived, not hardcoded.**
+        ///
+        /// This pins the Phase 2 handover. `notImplemented` used to read
+        /// `app.mode === "embedded"` — a third copy of "which mode cannot
+        /// start", beside the core module's `startableModes()` and
+        /// `modeIsStartable()`. Phase 2 makes Embedded startable by adding one
+        /// entry to that list, and against the hardcoded version this screen
+        /// would have kept saying "not implemented" for ever, with every gate
+        /// green.
+        ///
+        /// So the assertion is made by moving ONLY the capability — the same
+        /// mode, the same component, no edit to RepoList — and it is made in
+        /// BOTH directions, because a derivation that merely ignored the mode
+        /// would pass the "now startable" half on its own.
+        function test_a_mode_becoming_startable_clears_the_not_implemented_state() {
+            app.mode = "embedded";
+            list.reload();
+            verify(list.notImplemented,
+                   "precondition: Embedded is not startable in this build");
+            compare(app.callLog.length, 0, "precondition: and issues no request");
+
+            // Phase 2, simulated at the only place it should have to happen.
+            app.startableModes = ["explore", "local", "embedded"];
+            app.reset();
+            list.reload();
+
+            verify(!list.notImplemented,
+                   "a mode the backend now reports as startable must stop "
+                   + "rendering the not-implemented state — RepoList was not "
+                   + "touched, so this can only pass if it reads the capability");
+            compare(app.callLog.length, 1,
+                    "and it must actually list, rather than staying inert: "
+                    + JSON.stringify(app.callLog));
+            verify(app.deliver(), "the request must be answerable");
+            compare(list.count, 2, "with the repositories it fetched on screen");
+        }
+
+        /// The other direction: a mode that IS startable today must go inert if
+        /// the backend stops reporting it. Without this, a `notImplemented` that
+        /// was simply stuck at false would pass the test above.
+        function test_a_mode_ceasing_to_be_startable_shows_the_not_implemented_state() {
+            list.reload();
+            verify(!list.notImplemented, "precondition: Local is startable");
+            verify(app.deliver(), "precondition: and lists");
+            compare(list.count, 2, "precondition: with rows on screen");
+
+            app.startableModes = ["explore"];
+            app.reset();
+            list.reload();
+
+            verify(list.notImplemented,
+                   "Local dropping out of the startable set must render the "
+                   + "not-implemented state, on the mode name alone this "
+                   + "could never happen");
+            compare(list.count, 0, "and clear the rows it was showing");
+            compare(app.callLog.length, 0,
+                    "and issue nothing: " + JSON.stringify(app.callLog));
         }
 
         /// The baseline the other tests are read against: in Local the list

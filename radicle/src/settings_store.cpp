@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
@@ -137,6 +138,39 @@ nlohmann::json SettingsStore::load() const
     for (auto& [key, value] : parsed.items()) {
         if (defaults.contains(key) && value.is_string()) defaults[key] = value;
     }
+
+    // A mode this build does not know is replaced rather than passed through.
+    //
+    // `set()` validates, so nothing this module writes can be unknown — but the
+    // file lives on disk under the user's own data directory, and a hand edit, a
+    // torn write, or a settings file written by a NEWER build all produce one.
+    // Without this the unknown string reached every consumer verbatim, and both
+    // of them treated it as Local by falling through an else: `getCapabilities`
+    // reported the attached profile's home, `localAvailable: true` and full read
+    // access, all labelled with a mode string the UI has no segment for.
+    //
+    // **The fallback is Explore, not the `local` default, and that is the whole
+    // point of the fix rather than an incidental choice.** The default exists to
+    // answer "what should a NEW user get", and for that Local is right: it is
+    // what the module did before modes existed. This is a different question —
+    // "what should a user whose stored choice is uninterpretable get" — and the
+    // answers differ because the risk does. An unknown mode means the file is in
+    // a state this build cannot read; claiming a node identity on the strength
+    // of a file we have just admitted we cannot interpret is exactly the
+    // identity confusion this milestone exists to prevent, and falling back to
+    // `local` would do precisely that, silently, for every corrupt file.
+    //
+    // Explore is the only mode whose definition is "do not touch a local
+    // profile at all". It grants nothing, claims no identity, has a real segment
+    // in the UI, and leaves the file's other settings — the seed above all —
+    // intact and useful. The user can see which mode is in force and pick again.
+    //
+    // Nothing is REWRITTEN on disk here: this is a read. The stored string stays
+    // as the user (or the newer build) left it, so switching back to a build
+    // that understands it loses nothing.
+    if (!isKnownMode(defaults[kKeyMode].get<std::string>()))
+        defaults[kKeyMode] = kModeExplore;
+
     return defaults;
 }
 
@@ -171,6 +205,29 @@ bool SettingsStore::save(const nlohmann::json& settings) const
             return false;
         }
     } // closed here: the rename must not race the stream's own flush-on-close.
+
+    // Force the temp file's CONTENTS to disk before the rename makes it the
+    // settings file.
+    //
+    // `rename(2)` is atomic with respect to other processes, which is what the
+    // comment above is about — but it says nothing about power loss. The rename
+    // is a metadata operation and can reach the disk before the data blocks it
+    // points at, so a crash in that window leaves the settings file present,
+    // named correctly, and zero-length. `load()` then treats it as corrupt and
+    // silently reverts the user's mode, home and seed — the exact quiet failure
+    // the temp-and-rename dance exists to prevent, arriving through the half of
+    // it that was missing.
+    //
+    // Opened separately rather than through the ofstream because C++ streams
+    // expose no file descriptor. Failure is not fatal: the data is written and
+    // the rename below still produces a correct file on every path except a
+    // power loss in this window, so refusing the whole save would trade a rare
+    // durability gap for a common, certain failure.
+    const int fd = ::open(temp.c_str(), O_RDONLY);
+    if (fd >= 0) {
+        ::fsync(fd);
+        ::close(fd);
+    }
 
     if (::rename(temp.c_str(), m_path.c_str()) != 0) {
         ::unlink(temp.c_str());

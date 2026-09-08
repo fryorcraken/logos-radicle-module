@@ -53,6 +53,8 @@ Item {
     readonly property SourceState sourceState: SourceState {
         mode: root.caps.mode || "local"
         localAvailable: root.caps.localAvailable === true
+        startableModes: root.caps.startableModes !== undefined
+                        ? root.caps.startableModes : []
 
         // A repo id from one source is meaningless to the other, so the whole
         // navigation stack resets. `nav.reset()` clears state but does NOT
@@ -104,6 +106,12 @@ Item {
     readonly property string source: sourceState.current
     readonly property string mode: sourceState.mode
     readonly property bool localAvailable: sourceState.localAvailable
+
+    /// Whether this build can start the mode in force. Read by RepoList to
+    /// decide whether to fetch at all — see SourceState.modeStartable for why
+    /// that is derived from the startable SET rather than compared against a
+    /// mode name.
+    readonly property bool modeStartable: sourceState.modeStartable
 
     /// The capabilities reply confirming a mode change has taken effect. Until
     /// it arrives, `source` still names the OLD surface, so anything fetched is

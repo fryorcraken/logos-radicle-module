@@ -34,8 +34,8 @@ Item {
 
     /// Whether this mode has no node to list at all.
     ///
-    /// Keyed on the MODE, not on `app.source`, and that distinction is the
-    /// whole fix. `source` is the derived method prefix, and `local` and
+    /// Keyed on the MODE rather than on `app.source`, and that distinction is
+    /// the whole fix. `source` is the derived method prefix, and `local` and
     /// `embedded` both derive to `"local"` (see SourceState.qml) — so every
     /// staleness guard in this file, which compares `source`, is blind to the
     /// difference between them. A `localListRepos` reply issued in Local
@@ -45,9 +45,16 @@ Item {
     /// That is the identity confusion this milestone exists to prevent, and
     /// the backend was already fixed for the same lie once: `storeForSettings()`
     /// used to let `embedded` fall through to the attached profile's home.
-    /// This is that lie one layer up, so it is refused the same way — by
-    /// naming the mode explicitly rather than inheriting Local's behaviour.
-    readonly property bool notImplemented: !!app && app.mode === "embedded"
+    /// This is that lie one layer up.
+    ///
+    /// **But it is not `app.mode === "embedded"`, and that mattered.** Written
+    /// that way this was a THIRD place encoding "which mode cannot start",
+    /// beside `SettingsStore::startableModes()` and `modeIsStartable()`. Phase 2
+    /// makes Embedded startable by adding one entry to that list — and this
+    /// screen would have gone on saying "not implemented" afterwards, with no
+    /// gate failing and nothing to point at. Deriving it from the capability the
+    /// backend already reports means Phase 2 changes one list and this follows.
+    readonly property bool notImplemented: !!app && app.modeStartable === false
 
     ListModel { id: repos }
 

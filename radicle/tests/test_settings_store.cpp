@@ -176,6 +176,50 @@ LOGOS_TEST(unknown_keys_in_the_file_are_ignored_rather_than_surfaced)
     LOGOS_ASSERT_FALSE(store.all().contains("somethingElse"));
 }
 
+LOGOS_TEST(a_mode_in_the_file_that_this_build_does_not_know_is_not_handed_back)
+{
+    // `set()` validates, so this cannot come from the module — but the file is
+    // on disk, and a hand edit, a torn write, or a NEWER build all produce one.
+    // It used to be read back verbatim, and both consumers then treated it as
+    // Local by falling through an else: the module reported the attached
+    // profile's home and full read access under a mode name the UI cannot draw.
+    ScratchSettings s("unknown-mode-in-file");
+    s.write(R"({"mode":"turbo","remoteSeed":"https://kept.example.test"})");
+
+    SettingsStore store{s.path()};
+
+    // Explore, NOT the `local` default: a file this build cannot interpret is
+    // no basis for claiming a node identity, and Explore is the one mode that
+    // touches no local profile. Asserting the specific value rather than merely
+    // "known" is what pins that down — a fallback to `local` is a known mode
+    // too, and is exactly the leak this guards against.
+    LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
+                    std::string(SettingsStore::kModeExplore));
+
+    // The rest of the file survives. A corrupt mode is not a reason to discard
+    // settings that parsed perfectly well — and asserting it here is what stops
+    // a future "just return defaults" simplification from silently dropping the
+    // user's seed along with the bad mode.
+    LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyRemoteSeed),
+                    std::string("https://kept.example.test"));
+}
+
+LOGOS_TEST(a_known_mode_in_the_file_is_read_back_unchanged)
+{
+    // The other half, and the reason the test above means anything: the
+    // sanitising must be input-dependent. A load() that returned Explore for
+    // every stored mode would pass the assertion above and fail here.
+    ScratchSettings s("known-mode-in-file");
+
+    for (const char* mode : {SettingsStore::kModeLocal,
+                             SettingsStore::kModeEmbedded,
+                             SettingsStore::kModeExplore}) {
+        s.write(std::string(R"({"mode":")") + mode + R"("})");
+        SettingsStore store{s.path()};
+        LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode), std::string(mode));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Validation on write. Each case asserts the REFUSAL and that nothing changed
 // — a validator that reported an error and stored the value anyway would pass

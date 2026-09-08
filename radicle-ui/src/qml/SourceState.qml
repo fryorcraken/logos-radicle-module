@@ -77,6 +77,36 @@ QtObject {
     /// is the backend's answer about the mode in force.
     property bool localAvailable: false
 
+    /// Every mode this BUILD can actually start, from
+    /// `getCapabilities().startableModes`.
+    ///
+    /// A fact about the build, not about the mode in force — see
+    /// `SettingsStore::startableModes()` for why the boolean `modeStartable`
+    /// cannot substitute for it.
+    property var startableModes: []
+
+    /// Whether the mode in force is one this build can start.
+    ///
+    /// Derived from the set above rather than read from `caps.modeStartable`,
+    /// and derived here rather than recomputed by each consumer. `RepoList`
+    /// used to ask `app.mode === "embedded"` directly, which made it a THIRD
+    /// place encoding "which mode cannot start" alongside `startableModes()`
+    /// and `modeIsStartable()` in the core module. Phase 2 makes Embedded
+    /// startable by adding one entry to that list; a hardcoded comparison here
+    /// would have kept the not-implemented screen up afterwards with no gate
+    /// failing — the silent drift `startableModes` was introduced to end.
+    ///
+    /// Defaults to true when the set is empty, which is the pre-capabilities
+    /// state: an empty list means "we have not been told yet", not "nothing
+    /// works", and treating it as the latter would flash a not-implemented
+    /// screen on every start before the first capabilities reply lands.
+    readonly property bool modeStartable: {
+        if (!startableModes || startableModes.length === 0) return true;
+        for (var i = 0; i < startableModes.length; i++)
+            if (startableModes[i] === mode) return true;
+        return false;
+    }
+
     /// The backend METHOD PREFIX the current mode implies — "remote" or
     /// "local". NOT settable: it is derived, and that is the whole point of
     /// collapsing the two models.
@@ -84,7 +114,22 @@ QtObject {
     /// Note this is a prefix, not a mode, even though `local` is spelled the
     /// same in both vocabularies. `embedded` mapping to the `local` prefix is
     /// what shows they are separate things.
-    readonly property string current: mode === "explore" ? "remote" : "local"
+    ///
+    /// **Every mode that routes local is named; the fall-through routes
+    /// remote.** This was `mode === "explore" ? "remote" : "local"`, which made
+    /// `local` the else — so an unrecognised mode routed to the `local*`
+    /// methods, `RepoList` fetched, and the attached node's repositories
+    /// rendered under a mode with no segment. That is the same else-shape, and
+    /// the same failure, that `storeForSettings()` had in the core module.
+    ///
+    /// The backend's `load()` now refuses to hand out an unknown mode at all,
+    /// so this should be unreachable — it is kept because the cost is one
+    /// condition and the failure it prevents is a node identity being
+    /// misattributed. Defaulting to `remote` is the safe direction for the same
+    /// reason Explore is the backend's fallback: it asks a seed over HTTP and
+    /// touches no local profile.
+    readonly property string current: (mode === "local" || mode === "embedded")
+                                      ? "local" : "remote"
 
     /// Emitted when the mode actually changed. Main.qml responds by resetting
     /// navigation AND refetching the list — both, because NavState is a pure

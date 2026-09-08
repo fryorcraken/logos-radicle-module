@@ -900,6 +900,60 @@ Item {
             compare(sourceState.methodFor("ListRepos"), "localListRepos");
         }
 
+        /// A mode this UI does not know routes to the SEED, not to the node.
+        ///
+        /// `current` was `mode === "explore" ? "remote" : "local"`, which made
+        /// `local` the else — so an unrecognised mode reached the `local*`
+        /// methods and the attached node's repositories rendered under a mode
+        /// with no segment. The same else-shape, and the same failure, that
+        /// `storeForSettings()` had in the core module.
+        ///
+        /// The backend's `load()` now refuses to hand out an unknown mode, so
+        /// this should be unreachable in production; it is asserted because the
+        /// consequence if it ever is reachable is a node identity being
+        /// misattributed, and `remote` touches no local profile.
+        function test_an_unknown_mode_routes_to_the_seed_not_the_node() {
+            sourceState.mode = "turbo";
+            compare(sourceState.current, "remote",
+                    "an unrecognised mode must not reach the local* methods");
+            compare(sourceState.methodFor("ListRepos"), "remoteListRepos");
+        }
+
+        /// `modeStartable` follows the reported SET, in both directions.
+        ///
+        /// This is what makes RepoList's not-implemented state derived rather
+        /// than a third hardcoded copy of "which mode cannot start". Both
+        /// directions, because a property stuck at either value would pass one
+        /// of them on its own.
+        function test_mode_startable_follows_the_reported_set() {
+            sourceState.startableModes = ["explore", "local"];
+
+            sourceState.mode = "local";
+            verify(sourceState.modeStartable, "local is in the set");
+
+            sourceState.mode = "embedded";
+            verify(!sourceState.modeStartable, "embedded is not");
+
+            // Phase 2, simulated: one entry added to the set, nothing else.
+            sourceState.startableModes = ["explore", "local", "embedded"];
+            verify(sourceState.modeStartable,
+                   "the same mode must become startable when the build says so");
+
+            sourceState.startableModes = ["explore", "local"];
+        }
+
+        /// An empty set means "capabilities have not arrived", not "nothing
+        /// works" — otherwise every start would flash a not-implemented screen
+        /// before the first reply lands.
+        function test_an_empty_startable_set_is_not_read_as_nothing_works() {
+            sourceState.startableModes = [];
+            sourceState.mode = "local";
+            verify(sourceState.modeStartable,
+                   "before capabilities arrive the mode must not read as "
+                   + "unstartable");
+            sourceState.startableModes = ["explore", "local"];
+        }
+
         function test_every_method_follows_the_mode_not_just_listing() {
             sourceState.mode = "explore";
             compare(sourceState.methodFor("GetCommit"), "remoteGetCommit");

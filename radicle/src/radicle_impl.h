@@ -169,6 +169,16 @@ public:
      *     "remoteSeed":"..."}  // "" means the built-in default seed
      *
      * Source-neutral: these describe the module, not either data source.
+     *
+     * **`mode` is always one of the three named above**, whatever is actually
+     * on disk. `setSetting` validates, so this module never writes anything
+     * else — but the file is under the user's own data directory, and a hand
+     * edit, a torn write or a newer build can leave a value this build does not
+     * know. Such a value reads back as `explore`, the one mode that touches no
+     * local profile, rather than being passed through: a caller must never have
+     * to defend against a mode it has no UI for, and interpreting an
+     * uninterpretable file as "read the user's node" is the identity confusion
+     * this design exists to prevent. See `SettingsStore::load()`.
      */
     std::string getSettings();
 

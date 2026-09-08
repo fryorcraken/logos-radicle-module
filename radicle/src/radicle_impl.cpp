@@ -64,28 +64,52 @@ namespace {
 /// than one that does nothing, so this does nothing, visibly: `localAvailable`
 /// is false and `modeUnavailableReason` says why.
 ///
-/// Note this is NOT a switch with a default: every mode is named, so adding a
-/// fourth is a compile-time visit to this function rather than a silent
-/// inheritance of Local's behaviour. That inheritance is what went wrong here.
+/// **Every mode that resolves a home is named explicitly, and the fall-through
+/// is the INERT case.** This comment used to claim the opposite was already
+/// true — "every mode is named, so adding a fourth is a compile-time visit" —
+/// while the code named only Explore and Embedded and let everything else,
+/// Local included, reach the environment through a bare trailing `return`. So
+/// an unrecognised mode inherited Local's behaviour exactly: the attached
+/// profile's home, `localAvailable: true`, full read access, all under a mode
+/// name the UI has no segment for. That is the same identity confusion the
+/// Embedded paragraph above describes, reached through a corrupt settings file
+/// rather than through the picker, and the false comment is most of why it
+/// survived review.
+///
+/// The direction of the default is the whole fix. A trailing `return` that
+/// reads the environment makes "unhandled" mean "read the user's node"; one
+/// that yields empty paths makes it mean "do nothing". A mode this function has
+/// not been taught about is by definition one whose intended behaviour is
+/// unknown, and the only safe guess about a node identity is not to claim one.
+///
+/// `SettingsStore::load()` also refuses to hand out an unknown mode at all, so
+/// in practice this branch is reached only by a KNOWN mode that a future change
+/// adds to `settings_store.h` and forgets to add here. Both halves are wanted:
+/// the store stops the corrupt-file case, and this stops the forgetful-edit
+/// case. Neither subsumes the other.
 radicle::LocalStore storeForSettings(const radicle::SettingsStore& settings)
 {
     const auto mode = settings.get(radicle::SettingsStore::kKeyMode);
+
+    if (mode == radicle::SettingsStore::kModeLocal)
+        return radicle::LocalStore{radicle::resolvePathsFromEnv(
+            settings.get(radicle::SettingsStore::kKeyRadHome),
+            settings.get(radicle::SettingsStore::kKeyRadSocket),
+            // The Basecamp profile name would scope the socket per profile.
+            // This module is not told which profile it is in, so the socket
+            // falls back to $XDG_RUNTIME_DIR/radicle.sock — still short by
+            // construction, and still independent of the home, which is the
+            // property that matters. Two profiles sharing one runtime dir would
+            // collide here; setting radSocket explicitly is the escape hatch,
+            // and is why that setting exists rather than being derived.
+            "")};
 
     if (mode == radicle::SettingsStore::kModeExplore
         || mode == radicle::SettingsStore::kModeEmbedded)
         return radicle::LocalStore{radicle::NodePaths{}};
 
-    return radicle::LocalStore{radicle::resolvePathsFromEnv(
-        settings.get(radicle::SettingsStore::kKeyRadHome),
-        settings.get(radicle::SettingsStore::kKeyRadSocket),
-        // The Basecamp profile name would scope the socket per profile. This
-        // module is not told which profile it is in, so the socket falls back
-        // to $XDG_RUNTIME_DIR/radicle.sock — still short by construction, and
-        // still independent of the home, which is the property that matters.
-        // Two profiles sharing one runtime dir would collide here; setting
-        // radSocket explicitly is the escape hatch, and is why that setting
-        // exists rather than being derived.
-        "")};
+    // Unknown, or known-but-unmapped. Inert.
+    return radicle::LocalStore{radicle::NodePaths{}};
 }
 
 } // namespace
