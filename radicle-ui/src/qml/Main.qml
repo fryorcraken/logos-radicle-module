@@ -400,101 +400,128 @@ Item {
             anchors.fill: parent
             spacing: 0
 
-            // ---- top bar (fixed height) ----
+            // ---- top bar (grows to fit; see headerFlow) ----
             Rectangle {
                 Layout.fillWidth: true
                 // Normally the fixed chrome height — the layout rule above
-                // still holds, and nothing reflows as requests come and go.
+                // still holds for everything driven by REQUESTS, and nothing
+                // reflows as they come and go.
                 //
-                // The one thing allowed to grow it is the source toggle's
-                // caption, and that is the point rather than an exception: the
-                // caption exists BECAUSE the previous design put this text in
-                // an overlay anchored past the bottom of a fixed-height bar,
-                // where `z` cannot lift it over another parent's later sibling
-                // and it rendered as an unreadable sliver. A bar that clips its
-                // own explanation would reintroduce exactly that bug, so the
-                // bar yields to the text instead. It changes only when the
-                // capabilities change, which is not something a user watches
-                // happen.
+                // Two things are allowed to grow it, both of them properties of
+                // the WINDOW rather than of any request:
                 //
-                // `reservedHeight`, NOT `implicitHeight`, and the difference is
-                // load-bearing. The toggle's caption shows only in Embedded, so
-                // its `implicitHeight` varies by mode; budgeting from that made
-                // the bar 44px taller in Embedded and slid the whole body on the
-                // click that switched. `reservedHeight` is the caption's budget
-                // whether or not it is on screen, so THIS height is constant
-                // across modes while the toggle itself stays the size of what it
-                // draws — which is what keeps the identity beside it on one line
-                // instead of centred 22px lower. See SourceToggle.qml.
-                Layout.preferredHeight: Math.max(Theme.barHeight,
-                                                 sourceToggle.reservedHeight + Theme.gap)
+                //  - The source toggle's caption. That is the point rather than
+                //    an exception: the caption exists BECAUSE the previous
+                //    design put this text in an overlay anchored past the bottom
+                //    of a fixed-height bar, where `z` cannot lift it over another
+                //    parent's later sibling and it rendered as an unreadable
+                //    sliver. A bar that clips its own explanation reintroduces
+                //    exactly that bug, so the bar yields to the text instead.
+                //  - The header wrapping onto a second line at a narrow width.
+                //    See headerFlow for why it wraps at all; the consequence here
+                //    is that the bar can no longer be pinned to one control line,
+                //    because a bar that wrapped its content and kept its height
+                //    would paint the second line straight over the status strip.
+                //
+                // Neither changes while a user is doing anything except resizing
+                // the window or switching mode, so the no-reflow rule survives.
+                //
+                // `captionReserve`, NOT `reservedHeight` and NOT
+                // `implicitHeight`, and the distinction is load-bearing three
+                // ways. `implicitHeight` varies by mode (the caption shows only
+                // in Embedded), and budgeting from it made the bar 44px taller
+                // in Embedded and slid the whole body on the click that
+                // switched. `reservedHeight` fixed that but INCLUDES the segment
+                // strip, which `headerFlow.height` now already accounts for —
+                // adding it here would double-count the strip and leave the bar
+                // 28px too tall in every mode. `captionReserve` is exactly the
+                // overhang below the flow: constant across modes, counted once.
+                // See SourceToggle.qml.
+                Layout.preferredHeight: Math.max(
+                    Theme.barHeight,
+                    headerFlow.height + headerFlow.y + Theme.gap
+                    + sourceToggle.captionReserve)
                 color: Theme.surface
 
-                // Pinned to the TOP of the bar and given the control line's own
-                // height, rather than filling a bar that is taller than the line.
+                // A `Flow`, not a `RowLayout` — the header WRAPS rather than
+                // squeezing, and this is the whole of that change.
                 //
-                // The bar reserves room for the toggle's caption (see
-                // `reservedHeight` above), so it is taller than the row of
-                // controls in it. A row that filled the bar would centre every
-                // item in that larger box, and the caption — which hangs below
-                // the toggle — would then be pushed past the bar's bottom edge
-                // and clipped, which is the exact bug the caption replaced.
+                // The previous version was a RowLayout in which the Settings
+                // chip was incompressible and two items yielded: the identity
+                // elided its DID down to a 120px floor and the search field
+                // shrank 260→120. That kept Settings on screen and was rejected
+                // on sight — at ~630px the user got the whole header on one line
+                // with the DID cut in half, and asked for the opposite trade:
+                // *"can you instead make it go on the next line?"*. Nothing here
+                // is squeezed or truncated now; what does not fit moves down.
                 //
-                // Anchoring to the top keeps every control on one line at a
-                // fixed y, and leaves the reserved space where the caption
-                // actually renders: underneath.
-                RowLayout {
-                    id: headerRow
-                    anchors.top: parent.top
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    // Centred within the CHROME budget (Theme.barHeight), not
-                    // within the bar — the bar is taller than that whenever the
-                    // toggle's caption is budgeted for, and centring in it would
-                    // push the control line down as the reservation grew.
-                    anchors.topMargin: (Theme.barHeight - height) / 2
-                    anchors.leftMargin: Theme.gap
-                    anchors.rightMargin: Theme.gap
-                    // Exactly the control line. Every item in this row is
-                    // rowHeightSm or smaller, so a row of that height centres
-                    // them all on one baseline — and the toggle, which is top
-                    // aligned and may be taller in Embedded, starts on that same
-                    // line and grows downward past the row into the bar's
-                    // reserved space rather than displacing anything.
-                    height: Theme.rowHeightSm
+                // QtQuick.Layouts has no wrapping row, so the choice was Flow or
+                // a GridLayout with a computed column count. Flow, because the
+                // column count is not knowable: these items have wildly
+                // different and CONTENT-DEPENDENT widths — a DID is ~411px, the
+                // title 58px — so any column count is wrong for some mode, and
+                // computing one in script would mean re-deriving in JS what the
+                // layout already measures. Flow asks each child for its natural
+                // width and breaks where the next one does not fit, which is
+                // exactly "one line while it fits, a second line when it does
+                // not" and needs no arithmetic to stay true when a component's
+                // content changes.
+                //
+                // What Flow costs is `Layout.fillWidth`, so there is no flexible
+                // spacer and the Settings chip cannot be pinned to the right
+                // edge. It sits at the END OF THE FLOW instead, and that is
+                // better rather than merely acceptable: as the last item placed
+                // it is the one wrapping protects first — it either fits on the
+                // current line or starts a new one, and in neither case can it
+                // be pushed past an edge. The requirement was that Settings stay
+                // reachable at every width, not that it stay right-aligned.
+                //
+                // A second consequence, and it closes a trap rather than opening
+                // one: a Flow SKIPS invisible children outright, where a
+                // RowLayout reserves a declared `Layout.minimumWidth` even for a
+                // child that is not visible. That is what had the identity
+                // holding 120px in Explore and the search field holding 120px
+                // back in Local — ~240px permanently spoken for by two items
+                // never both on screen. There is nothing to gate on `visible`
+                // here because there is nothing being reserved.
+                Flow {
+                    id: headerFlow
+                    objectName: "headerFlow"
+                    x: Theme.gap
+                    // The control line's own offset within the CHROME budget
+                    // (Theme.barHeight), not within the bar — the bar is taller
+                    // than that whenever the caption is budgeted for or the flow
+                    // has wrapped, and centring in it would push the first line
+                    // down as either grew.
+                    y: (Theme.barHeight - Theme.rowHeightSm) / 2
+                    width: parent.width - Theme.gap * 2
                     spacing: Theme.gap
 
+                    // Always present now, at every width.
+                    //
+                    // It used to disappear below 520px — the row's minimums
+                    // genuinely exceeded a narrow window, so something had to
+                    // yield entirely or the Settings chip went off the edge, and
+                    // the title was the only element here whose loss costs the
+                    // user nothing (Basecamp's own chrome already says which
+                    // module this is). With a wrapping header that trade is
+                    // gone: a word that does not fit on the first line goes to
+                    // the second like everything else, and there is no width at
+                    // which dropping it buys anything.
+                    //
+                    // Given the control line's height explicitly so the Flow
+                    // aligns it with the chip and the toggle. A bare Text is
+                    // font-height tall — a few pixels shorter — and a Flow tops
+                    // its items rather than centring them, so without this the
+                    // word sits visibly high on its own line.
                     Text {
                         objectName: "headerTitle"
                         text: "Radicle"
                         color: Theme.text
                         font.pixelSize: Theme.fontXl
                         font.bold: true
-                        // The last thing to go, and the only element here that
-                        // may go COMPLETELY, because it is the only one that
-                        // costs the user nothing: Basecamp's own chrome already
-                        // says which module this is, so the word is a courtesy
-                        // rather than information. Everything else in this row
-                        // is either a control or the answer to a question the
-                        // user has.
-                        //
-                        // Needed because the row's minimums genuinely exceed a
-                        // narrow window: title 58 + toggle 226 + identity 120 +
-                        // chip 66, plus gaps and margins, is ~542px, so at 480
-                        // something has to yield entirely or the chip goes off
-                        // the edge — which is the defect this whole change is
-                        // about. The toggle cannot shrink (it is three labelled
-                        // segments), the chip must not (it is the only way into
-                        // Settings), and the identity is already eliding.
-                        //
-                        // Keyed on the bar's width rather than on a Layout
-                        // minimum so the disappearance is a decision with a
-                        // threshold, not an overflow — an element that vanishes
-                        // because a layout ran out of room is exactly the
-                        // silent failure being fixed here.
-                        visible: headerRow.width > 520
-                        Layout.preferredWidth: visible ? implicitWidth : 0
-                        Layout.maximumWidth: visible ? implicitWidth : 0
+                        height: Theme.rowHeightSm
+                        verticalAlignment: Text.AlignVCenter
                     }
 
                     // ONE control for "what am I browsing" — exactly three
@@ -509,32 +536,34 @@ Item {
                     SourceToggle {
                         id: sourceToggle
                         objectName: "sourceToggle"
-                        // The toggle occupies exactly the control line in the
-                        // ROW, and its caption hangs below that line into the
+                        // The toggle occupies exactly the control LINE in the
+                        // flow, and its caption hangs below that line into the
                         // space the bar reserves for it.
                         //
-                        // All three constraints are load-bearing together:
+                        // Pinned with a plain `height`, where the RowLayout
+                        // version used `Layout.preferredHeight` +
+                        // `Layout.maximumHeight` + `Layout.alignment` to say the
+                        // same thing. Attached `Layout.*` properties are INERT
+                        // inside a Flow — it positions children by their own
+                        // `width`/`height` — so leaving them here would have been
+                        // three lines of dead configuration guarding a real
+                        // constraint. Silent, and exactly the shape of defect
+                        // this file keeps being bitten by.
                         //
-                        //  - `AlignTop` so the item grows downward. A centred
-                        //    item that grows pushes its own segment strip
-                        //    upwards, off the line the title and identity are on
-                        //    — the same misalignment this change fixes, arriving
-                        //    in one mode instead of three.
-                        //  - `maximumHeight` so the ROW does not grow with it. A
-                        //    RowLayout takes its height from its tallest child,
-                        //    so without this the Embedded caption made the row
-                        //    72px and pushed every OTHER item down to centre in
-                        //    it — the misalignment again, with the sign flipped.
-                        //  - `preferredHeight` so it still gets the line it
-                        //    needs rather than collapsing to nothing.
+                        // The constraint itself is unchanged and still
+                        // load-bearing: without it the Embedded caption makes
+                        // this item ~72px tall, a Flow gives the whole line that
+                        // height, and every other item on it drops to centre in
+                        // a box four times too tall. The toggle draws from its
+                        // own top downward, so a fixed height keeps the segment
+                        // strip on the line and lets the caption overhang.
                         //
-                        // The caption drawing outside the row is deliberate and
+                        // The caption drawing outside the flow is deliberate and
                         // safe: nothing here sets `clip`, and the bar is sized to
-                        // contain it. tst_mode_switch.qml asserts that it lands
-                        // inside the bar rather than past its edge.
-                        Layout.alignment: Qt.AlignTop
-                        Layout.preferredHeight: Theme.rowHeightSm
-                        Layout.maximumHeight: Theme.rowHeightSm
+                        // contain it — see the bar's `captionReserve` term.
+                        // tst_mode_switch.qml asserts that it lands inside the
+                        // bar rather than past its edge.
+                        height: Theme.rowHeightSm
                         mode:           root.mode
                         // Passed straight through, `undefined` included, and
                         // that is the point rather than a shortcut. This used
@@ -611,52 +640,37 @@ Item {
                         // first.
                         visible: root.mode === "local" && nodeIdentity.nodeId !== ""
                         nodeId: root.caps.nodeId || ""
-                        // The identity is the element that YIELDS when the
-                        // window gets narrow, and it is the right one to pick:
-                        // it is the only thing in this row whose content can be
-                        // shortened without losing a destination. Clicking it
-                        // still copies the whole DID, and Settings shows it in
-                        // full — so the cost is legibility at a width where
-                        // nothing else would have fit anyway.
+                        // The WHOLE DID, at every width. This element used to be
+                        // the one that yielded — `ElideMiddle` down to a 120px
+                        // floor — and that is exactly what the user rejected:
+                        // at ~630px they got the entire header on one line with
+                        // the identity cut to `did:key:z6Mkowuny…EnhaDE8JH3MbLnDBe`,
+                        // and asked for the second line instead.
                         //
-                        // Everything else in the row is a fixed cost the row
-                        // must simply carry, so with no yielder the row could
-                        // not shrink below ~830px and the Settings chip — now
-                        // the ONLY way into Settings, since this element copies
-                        // instead of opening it — was pushed off the right edge
-                        // entirely. See NodeIdentity.qml.
+                        // So `minimumWidth` is left at its default 0, which
+                        // NodeIdentity documents as "do not yield at all", and
+                        // this asks the Flow for exactly the room its full text
+                        // needs. If that does not fit beside the toggle, the Flow
+                        // gives it its own line, where it always does fit — a
+                        // full DID is ~411px and the narrowest window worth
+                        // supporting is wider than that.
                         //
-                        // The floor is ~14 monospace characters plus the
-                        // ellipsis: enough to read `did:key:z6Mk…` and a few
-                        // characters of tail. Below that the element would be
-                        // saying nothing while still taking room, which is
-                        // worse than the honest alternative of it being cut off
-                        // — but it never gets there, because the chip's own
-                        // minimum stops the row shrinking that far.
+                        // The elide mechanism is still IN NodeIdentity, unused,
+                        // and deliberately so rather than ripped out: it is
+                        // opt-in, costs nothing while `minimumWidth` is 0, and
+                        // is the honest last resort for the one case wrapping
+                        // cannot help — a window narrower than the string
+                        // itself. What was removed is this caller opting in at a
+                        // width where a second line was available.
                         //
-                        // Every Layout constraint is gated on `visible`, and
-                        // that gate is not decoration: a RowLayout still
-                        // reserves an explicit `Layout.minimumWidth` for a
-                        // child that is NOT visible. Ungated, this element held
-                        // 120px in Explore — where it is hidden — and the
-                        // search field held its own 120px back in Local, so
-                        // ~240px of the row was permanently spoken for by two
-                        // items that were never both on screen. That alone put
-                        // the Settings chip off the edge at 900px in Explore.
-                        Layout.minimumWidth: visible ? 120 : 0
-                        Layout.preferredWidth: visible ? implicitWidth : 0
-                        Layout.maximumWidth: visible ? implicitWidth : 0
-                        Layout.fillWidth: visible
-                        minimumWidth: 120
-                        // Clicking copies; the component does that itself and
-                        // confirms it on screen. Nothing is wired here on
-                        // purpose — it used to open Settings, and the user
-                        // asked for copying instead. Settings is still reached
-                        // through the chip at the right of this row, so no
-                        // destination was lost.
+                        // No `Layout.*` here, and none needed: a Flow reads
+                        // `implicitWidth` directly, and it SKIPS invisible
+                        // children rather than reserving their declared minimums
+                        // the way a RowLayout does. The `visible ? … : 0` gates
+                        // that used to be on every constraint existed only to
+                        // work around that, and there is nothing left for them
+                        // to guard.
                     }
-
-                    Item { Layout.fillWidth: true }
 
                     FilterField {
                         id: searchField
@@ -667,47 +681,50 @@ Item {
                         // because it is the SURFACE that lacks search:
                         // `embedded` would have the same limitation.
                         visible: nav.view === "repos" && root.source === "remote"
-                        // The other yielder, for the same reason and with the
-                        // same shape as the identity above. In Explore this
-                        // 260px field is what runs the row out of width, so a
-                        // fix that only budgeted for Local's identity would
-                        // leave the Settings chip off screen at ~640px here.
+                        // Its full width, always. This was the other yielder,
+                        // shrinking 260→120 to keep the row on one line in
+                        // Explore, and it goes for the same reason the
+                        // identity's elide does: a field squeezed to half its
+                        // width shows half a placeholder, and the second line it
+                        // would otherwise wrap onto was there the whole time.
                         //
-                        // A text field shrinks gracefully in a way a DID cannot:
-                        // it scrolls its own content, so a narrow one still
-                        // accepts and displays a query. 120px holds the
-                        // placeholder's first words and a typed term.
-                        //
-                        // Gated on `visible` for the same reason as the
-                        // identity: an invisible child still holds its declared
-                        // minimum, so an ungated 120px here was being reserved
-                        // in Local, where this field is hidden.
-                        Layout.preferredWidth: visible ? 260 : 0
-                        Layout.minimumWidth: visible ? 120 : 0
-                        Layout.maximumWidth: visible ? 260 : 0
-                        Layout.fillWidth: visible
+                        // A plain `width` rather than an implicit one, because
+                        // FilterField is a TextField and its natural width is
+                        // its content's — an empty field would collapse to a few
+                        // pixels and grow as the user typed, which is a control
+                        // that moves the layout under the pointer.
+                        width: 260
                         placeholder: "Search repositories"
                         onAccepted: repoList.reload()
                     }
 
+                    // Settings, LAST in the flow, and its position is the one
+                    // deliberate compromise in this change.
+                    //
+                    // It used to be pinned to the right edge by a flexible
+                    // spacer (`Item { Layout.fillWidth: true }`), which a Flow
+                    // has no equivalent of — a Flow packs its children and stops.
+                    // The spacer is gone rather than replaced, so the chip now
+                    // sits immediately after the mode detail instead of against
+                    // the right edge.
+                    //
+                    // That is a real change in appearance, and it is the right
+                    // trade: the requirement is that Settings stay REACHABLE at
+                    // every width, not that it stay right-aligned. As the last
+                    // item placed it is the one wrapping protects best — it
+                    // either fits on the current line or starts a new one, and
+                    // in neither case can it be pushed past an edge, which is
+                    // precisely how it became unreachable below ~750px before.
+                    //
+                    // Nothing here is incompressible any more, because nothing
+                    // needs to be: the previous version made this chip
+                    // unshrinkable so the row would squeeze its neighbours
+                    // instead of overflowing. With wrapping there is no
+                    // overflow to protect against.
                     Rectangle {
-                        Layout.preferredHeight: Theme.rowHeightSm
-                        Layout.preferredWidth: settingsLabel.implicitWidth + Theme.gap * 2
-                        // Never yields, and that is the whole point of this
-                        // change. `Layout.minimumWidth` equal to the preferred
-                        // width makes the chip incompressible, so the row
-                        // shrinks its two flexible items instead of pushing
-                        // this one past the right edge.
-                        //
-                        // A RowLayout that cannot fit its minimums OVERFLOWS —
-                        // it does not scroll or wrap — and the item that goes
-                        // is the last one, which is this. That is how Settings
-                        // became unreachable below ~750px: the chip is the only
-                        // way in now that the identity copies instead of
-                        // opening it, so it is the one element here that must
-                        // survive at any width. tst_header_width.qml drives the
-                        // width down and asserts exactly that.
-                        Layout.minimumWidth: settingsLabel.implicitWidth + Theme.gap * 2
+                        objectName: "settingsChip"
+                        height: Theme.rowHeightSm
+                        width: settingsLabel.implicitWidth + Theme.gap * 2
                         radius: Theme.radiusSm
                         color: root.settingsOpen ? Theme.accentSoft : Theme.bg
                         border.width: 1

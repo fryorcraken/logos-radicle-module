@@ -300,16 +300,32 @@ Item {
     /// `implicitHeight`: the BAR must be the same height in every mode, or the
     /// body below it slides on the very click that switched modes (a 44px jump
     /// that tst_layout.qml catches). The CONTROL must be the height of what it
-    /// draws, or the row centres it against its empty half and the items beside
-    /// it fall off its line.
+    /// draws, or the container centres it against its empty half and the items
+    /// beside it fall off its line.
     ///
     /// One number, consumed by whichever item the constraint actually belongs
     /// to. Putting both on `implicitHeight` is what made the two requirements
     /// look like one and traded a real jump for a real misalignment.
     readonly property int reservedHeight:
-        frame.height + captionGap
-        + Math.max(captionSizer.height,
-                   noteText.visible ? noteText.height : 0)
+        frame.height + captionGap + captionReserve
+
+    /// Just the caption's share of `reservedHeight` — the budget WITHOUT the
+    /// segment strip.
+    ///
+    /// Exists because the header bar stopped being one control line tall. It
+    /// wraps now, so the bar is sized from its container's own height plus
+    /// whatever this control needs BELOW that container — and the segment strip
+    /// is already inside the container's height, so adding `reservedHeight`
+    /// would double-count it and leave the bar `frame.height` too tall in every
+    /// mode.
+    ///
+    /// Same split, one level finer: `reservedHeight` answers "how tall is this
+    /// control at its largest", this answers "how much does it overhang". A
+    /// caller that positions the control itself wants the first; a caller
+    /// letting a layout position it and only needing room underneath wants this.
+    readonly property int captionReserve:
+        Math.max(captionSizer.height,
+                 noteText.visible ? noteText.height : 0)
 
     /// The tallest caption this control can render, measured off-screen.
     ///
