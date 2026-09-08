@@ -65,40 +65,32 @@ Item {
                         ? root.caps.startableModes : []
 
         // A repo id from one source is meaningless to the other, so the whole
-        // navigation stack resets. `nav.reset()` clears state but does NOT
-        // refetch — NavState is a pure holder and the caller owns reloading,
-        // which is why onBackendReady and setSeed both call reload() alongside
-        // it. Omitting the reload here shipped once: the toggle flipped, the
-        // screen cleared, and no request was ever issued.
+        // navigation stack resets on the click — immediately, because the
+        // screen must stop showing the previous mode's data the moment the
+        // user asks for a different one.
         //
-        // The reload is deferred by one event-loop turn, and that is
-        // load-bearing rather than defensive. `changed()` fires while the mode
-        // write is still in flight, so `root.source` — a binding through
-        // `caps.mode` — has NOT settled on the new value yet. A synchronous
-        // reload would issue `remoteListRepos` for a switch TO local: the user
-        // clicked Local, saw Explore's repositories, and had to toggle away and
-        // back before a second reload picked up the source the binding had by
-        // then settled on.
+        // It does NOT reload here. `nav.reset()` clears state but does not
+        // refetch (NavState is a pure holder and the caller owns reloading),
+        // and the reload belongs on `settled()` instead — the click happens
+        // while the write is still in flight, so nothing derived from the mode
+        // describes the mode being switched TO yet. SourceState.settled()
+        // carries the full reasoning and the three defects it fixed.
+        onChanged: nav.reset()
+
+        // The mode the module is actually in has changed. Reset again — an
+        // in-flight reply from the previous mode may have latched an error
+        // after the click's reset — and then reload.
         //
-        // Same class as the branch-switch bug CLAUDE.md documents ("A binding
-        // does not update inside the handler that changed its source"), and
-        // the same remedy. Note the deferral now spans a backend round trip
-        // rather than one binding evaluation, which makes it MORE necessary
-        // rather than less — see reloadWhenModeSettles below.
-        onChanged: {
+        // Deferred by one turn because `repoList.reload()` reads `app.source`
+        // and `app.modeStartable`, bindings derived from `mode` that have NOT
+        // been re-evaluated inside this handler. That is the branch-switch trap
+        // CLAUDE.md documents, and the same remedy.
+        onSettled: {
             nav.reset();
             sourceReload.restart();
         }
     }
 
-    /// Runs `repoList.reload()` one turn after the mode actually changes.
-    ///
-    /// Restarted from two places on purpose. `sourceState.onChanged` covers the
-    /// click, and `onSourceChanged` below covers the capabilities reply that
-    /// makes the change real — because a mode write is a backend round trip and
-    /// the click alone does not tell us the new mode is in force. Restarting a
-    /// zero-interval Timer twice costs one extra reload at worst; missing the
-    /// second is the empty-list bug that has shipped here before.
     readonly property Timer sourceReload: Timer {
         interval: 0
         repeat: false
@@ -120,14 +112,6 @@ Item {
     /// that is derived from the startable SET rather than compared against a
     /// mode name.
     readonly property bool modeStartable: sourceState.modeStartable
-
-    /// The capabilities reply confirming a mode change has taken effect. Until
-    /// it arrives, `source` still names the OLD surface, so anything fetched is
-    /// fetched from the mode the user just left.
-    onSourceChanged: {
-        nav.reset();
-        sourceReload.restart();
-    }
 
     /// Whether a write could actually succeed, and why not when it could not.
     ///
@@ -228,18 +212,46 @@ Item {
         // Deliberately does NOT clear nav.error on the way in — see
         // NavState.begin()'s doc comment.
         nav.begin();
+
+        // The mode this request was issued FOR. A failure is only news if the
+        // module is still in it.
+        //
+        // Without this, a request that was perfectly legitimate when it was
+        // made paints an error over whatever the user switched to. The case
+        // that shipped: a `localListRepos` in flight when the user clicks
+        // Embedded is refused by the backend (Embedded resolves no home), and
+        // the refusal latched into `nav.error` beneath a screen explaining that
+        // Embedded is not implemented — an error about something nothing had
+        // asked for. `tests/ui/local.yaml` asserts exactly that it does not.
+        //
+        // The MODE, not `source`: `local` and `embedded` share a method prefix
+        // (see SourceState.qml), so a `source` comparison is blind to the one
+        // switch this needs to catch. That is the same blindness that made the
+        // reload trigger wrong, arriving here from the other direction.
+        //
+        // The counter is still decremented either way — the request really did
+        // finish, and leaking `inflight` would leave the busy strip up for ever.
+        // Only the user-visible message is suppressed, and only for a mode that
+        // is no longer in force. `succeed()` needs no such guard: clearing a
+        // stale error is never wrong, and the per-view staleness guards already
+        // drop the DATA (see RepoList.fetch()).
+        var wantMode = root.mode;
+        function reportFailure(message) {
+            if (root.mode === wantMode) nav.fail(message);
+            else nav.settle();
+            if (onFail) onFail();
+        }
+
         logos.watch(backend[name].apply(backend, args), function (text) {
             var r = R.parse(text);
             if (r.ok) {
                 nav.succeed();
                 onOk(r.data);
             } else {
-                nav.fail(r.error);
-                if (onFail) onFail();
+                reportFailure(r.error);
             }
         }, function (err) {
-            nav.fail(String(err));
-            if (onFail) onFail();
+            reportFailure(String(err));
         });
     }
 

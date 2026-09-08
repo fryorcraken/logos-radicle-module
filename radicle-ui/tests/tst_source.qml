@@ -961,14 +961,21 @@ Item {
 
     property int reloads: 0
 
+    /// How many times `settled()` has fired — the signal a reload hangs off.
+    /// Counted separately from `reloads` (which counts `changed()`, the click)
+    /// because the whole point of the split is that the two do not coincide.
+    property int settles: 0
+
     // The reload a mode switch triggers must go to the NEW surface.
     //
     // `changed()` fires while the mode write is still in flight, so anything
-    // reading a BINDING derived from the mode still sees the old value — which
-    // is why Main.qml defers the fetch. `switchMode()` below mirrors that
-    // wiring: a binding to `current` (not a live read), a handler on `changed`,
-    // and a zero-interval Timer. Drop the Timer and call `doReload()` straight
-    // from the handler and this goes red.
+    // reading a BINDING derived from the mode still sees the old value. That is
+    // why a reload hangs off `settled()` — which fires when `mode` itself moves,
+    // i.e. when the capabilities reply lands — rather than off `changed()`.
+    // Main.qml's wiring is mirrored here: a binding to `current` (not a live
+    // read), a handler on `settled`, and a zero-interval Timer for the one
+    // remaining binding hop. Drop the Timer and call `doReload()` straight from
+    // the handler and this goes red.
     readonly property string boundSource: sourceState.current
     property string fetchedWith: ""
 
@@ -989,7 +996,7 @@ Item {
 
     Connections {
         target: sourceState
-        function onChanged() { deferredReload.restart(); }
+        function onSettled() { settles++; deferredReload.restart(); }
     }
 
     TestCase {
@@ -999,6 +1006,8 @@ Item {
             sourceState.mode = "local";
             sourceState.localAvailable = true;
             reloads = 0;
+            settles = 0;
+            fetchedWith = "";
         }
 
         /// The derivation, asserted for every mode. This is the single source
@@ -1120,17 +1129,20 @@ Item {
         function test_the_reload_after_a_switch_uses_the_new_surface() {
             fetchedWith = "";
             sourceState.mode = "explore";
+            // The line above is setup, and it settles — count only what the
+            // click below does.
+            settles = 0;
             sourceState.select("local");
 
-            // Nothing fetches synchronously — the deferral is what guarantees
-            // the fetch happens after the mode has actually settled. (This test
-            // cannot reproduce the stale-binding window itself: a `Connections`
-            // handler runs later than Main.qml's inline `onChanged`, so the
-            // binding has already updated by the time it fires. What is pinned
-            // is the observable contract — the fetch is deferred, and it
-            // targets the new surface — which is what the user-visible bug
-            // violated.)
+            // Nothing fetches on the click at all. `select()` fires only
+            // `changed()`, and nothing reloads on that — the reload waits for
+            // `settled()`, which fires when `mode` itself moves. In the real
+            // app that is a backend round trip away, which is the whole window
+            // the old wiring fetched inside.
             compare(fetchedWith, "", "nothing should have been fetched yet");
+            compare(settles, 0,
+                    "the click alone must not settle anything — the write is "
+                    + "still in flight and the mode has not moved");
 
             // The mode is applied by the caller persisting it; here that is
             // simulated by the same assignment Main.qml's capabilities binding
@@ -1148,6 +1160,68 @@ Item {
             sourceState.mode = "explore";
             tryCompare(root, "fetchedWith", "remoteListRepos", 1000,
                        "switching back must refetch from the seed");
+        }
+
+        /// **`settled()` must fire for `local <-> embedded`.**
+        ///
+        /// This is the leg the derived METHOD PREFIX cannot see: both modes
+        /// route to `"local"`, so `current` does not change and anything keyed
+        /// on it stays silent. A reload keyed on the prefix therefore never
+        /// happened for either direction of this switch — which shipped as
+        /// Embedded fetching from the attached node it was leaving, and as
+        /// Local listing nothing at all on the way back.
+        ///
+        /// Asserted in BOTH directions, and with the prefix's own stillness
+        /// asserted alongside, so the test says WHY a prefix-keyed
+        /// implementation cannot pass it.
+        function test_the_mode_settling_is_noticed_even_when_the_prefix_does_not_move() {
+            sourceState.mode = "local";
+            settles = 0;
+            var prefixBefore = sourceState.current;
+
+            sourceState.mode = "embedded";
+            compare(sourceState.current, prefixBefore,
+                    "precondition: local and embedded share a method prefix, "
+                    + "which is why nothing keyed on it can see this switch");
+            compare(settles, 1,
+                    "local -> embedded must settle: it is a different NODE, "
+                    + "even though it is the same backend surface");
+
+            sourceState.mode = "local";
+            compare(settles, 2,
+                    "and embedded -> local must settle too — without it the "
+                    + "user's own node renders as an empty one");
+        }
+
+        /// The complement: a settle is the mode MOVING, not merely being
+        /// reassigned. Without this, a `settled()` that fired on every write
+        /// would pass the test above and reload continuously.
+        function test_reassigning_the_same_mode_settles_nothing() {
+            sourceState.mode = "local";
+            settles = 0;
+            sourceState.mode = "local";
+            compare(settles, 0,
+                    "assigning the mode it is already in must not settle");
+        }
+
+        /// And the two signals are genuinely distinct: the click notifies, the
+        /// settle reloads, and neither stands in for the other. A `settled()`
+        /// wired to `changed()` would fetch from the surface being LEFT.
+        function test_the_click_and_the_settle_are_separate_events() {
+            sourceState.mode = "local";
+            reloads = 0;
+            settles = 0;
+
+            verify(sourceState.select("embedded"), "the switch is accepted");
+            compare(reloads, 1, "the click notifies once");
+            compare(settles, 0,
+                    "but nothing has settled — select() does not persist, and "
+                    + "the mode is still the one the user is leaving");
+
+            // What the capabilities reply does.
+            sourceState.mode = "embedded";
+            compare(settles, 1, "the reply is what settles it");
+            compare(reloads, 1, "and it is not a second click");
         }
     }
 

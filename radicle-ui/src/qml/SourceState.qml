@@ -146,12 +146,62 @@ QtObject {
     readonly property string current: (mode === "local" || mode === "embedded")
                                       ? "local" : "remote"
 
-    /// Emitted when the mode actually changed. Main.qml responds by resetting
-    /// navigation AND refetching the list — both, because NavState is a pure
-    /// state holder that does not reload on reset. Omitting the refetch is a
-    /// bug that shipped once: the toggle flipped, the screen cleared, and no
-    /// request was ever issued, which reads as "your node has no repositories".
+    /// Emitted when the user PICKS a different mode — on the click, while the
+    /// `setSetting` write is still in flight. Main.qml responds by resetting
+    /// navigation, so the screen stops showing the previous mode's data
+    /// immediately.
+    ///
+    /// It must NOT be used to refetch. See `settled()`.
     signal changed()
+
+    /// Emitted when the mode the module is ACTUALLY IN has changed — i.e. when
+    /// `mode`, a binding to `getCapabilities().mode`, moves. This is the signal
+    /// to reload on.
+    ///
+    /// ## Why this exists rather than reloading on `changed()` or on `current`
+    ///
+    /// Both of those were tried, together, and both are wrong:
+    ///
+    ///  - **On `changed()`** — the click. The write is still in flight, so
+    ///    `mode` is still the mode the user just LEFT, and everything derived
+    ///    from it (`current`, `modeStartable`) still describes that mode. A
+    ///    reload here fetches from the old surface. Deferring by an event-loop
+    ///    turn does not help: the turn elapses long before a backend round trip.
+    ///  - **On `current`** — the derived METHOD PREFIX. `local` and `embedded`
+    ///    both derive to `"local"`, deliberately, so this does not move at all
+    ///    on a `local <-> embedded` switch. Keying a reload on it treats the
+    ///    prefix as a proxy for the mode, which it was only ever a faithful
+    ///    proxy for while there were two modes.
+    ///
+    /// Between them those two shipped three defects with one root cause — a
+    /// fetch issued against a mode not yet in force, and no second fetch once
+    /// it was:
+    ///
+    ///  - **Switching to Embedded issued `localListRepos`** for a node that
+    ///    does not exist. The backend refused it, `nav.fail()` latched the
+    ///    refusal, and the user got an error banner beneath a screen explaining
+    ///    that Embedded is not implemented — an error about something nothing
+    ///    had asked for. (tests/ui/local.yaml, step "and nothing errored,
+    ///    because nothing was asked".)
+    ///  - **Switching Embedded -> Local listed nothing.** The click's reload
+    ///    found Embedded still in force and correctly declined to fetch; the
+    ///    prefix then did not change, so no reload followed, and this machine's
+    ///    node rendered as an empty one.
+    ///  - **Switching Explore -> Embedded** issued `remoteListRepos`, whose
+    ///    reply landed after the reset and latched an error the same way.
+    ///
+    /// One trigger, on the one value that decides both WHAT to fetch and
+    /// WHETHER to fetch at all.
+    signal settled()
+
+    /// Fires `settled()` when the mode in force changes.
+    ///
+    /// A handler on the property rather than a `Connections` block, and inside
+    /// this component rather than in Main.qml, so that the rule and its reason
+    /// live with the state they are about — and so a fixture can drive the real
+    /// thing. Main.qml's copy could only ever be reproduced by a test, which is
+    /// a copy asserted against itself.
+    onModeChanged: settled()
 
     /// The backend method to invoke for `suffix` under the current mode —
     /// e.g. ("ListRepos") -> "localListRepos". `override` forces one call to a

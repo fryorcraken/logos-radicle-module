@@ -124,16 +124,18 @@ Item {
     readonly property Ui.SourceState sourceState: Ui.SourceState {
         mode: harness.caps.mode || "local"
         localAvailable: harness.caps.localAvailable === true
-        onChanged: {
-            harness.reloads++;
-            sourceReload.restart();
-        }
+        // Main.qml's handlers, on SourceState's real signals. `changed()` is
+        // the click and does NOT reload; `settled()` is the mode actually
+        // taking effect, and is what reloads. Keeping this fixture aligned with
+        // Main.qml matters more than usual here — `test_each_switch_reloads_
+        // from_the_new_surface` below asserts on which surface a reload hit,
+        // which is exactly the thing the split fixed.
+        onChanged: harness.reloads++
+        onSettled: sourceReload.restart()
     }
 
     readonly property string source: sourceState.current
     readonly property string mode: sourceState.mode
-
-    onSourceChanged: sourceReload.restart()
 
     property int reloads: 0
     property int fetches: 0
