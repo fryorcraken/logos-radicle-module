@@ -1,6 +1,11 @@
 # M3 — An embedded Radicle node, set up from inside Basecamp
 
-Status: **plan. Phase 0 (the spike) has run; Phases 1-3 are not started.**
+Status: **plan.** Which phases have landed is a `git log` question, not a
+sentence to maintain here — this line used to claim "Phases 1-3 are not
+started" while Phase 1 had shipped, which is the failure mode CLAUDE.md's
+"Keeping this file true" section is about. Each phase heading below carries its
+own state, and those headings are edited when the phase merges.
+
 Every technical claim below was checked against the `radicle 0.25.1` source
 vendored in `~/.cargo/registry`, the crates.io API, and the local docs
 checkout at `~/src/rad/radicle.xyz` — the places each claim came from are
@@ -412,7 +417,55 @@ actually binds the socket, should revisit whether the profile name can be
 plumbed through.
 
 **Phase 2 — embedded lifecycle.** Wizard, `Profile::init`, start/stop, the
-config panel's read-only half.
+config panel's read-only half. **In progress; step 1 below has landed.**
+
+The three are separable, and the order below is chosen by what it costs the
+*build* rather than by what reads best as a feature. The dividing line is
+`radicle-node`:
+
+| Step | Needs `radicle-node`? | What it costs |
+|---|---|---|
+| 1. `Profile::init` behind the FFI | **No** — `Profile::init` is in `radicle`, already a dependency | nothing: no manifest, lock or vendor-hash change |
+| 2. The embedded home, and making the mode startable | No | nothing |
+| 3. Node start/stop | **Yes** | `Cargo.lock` +111 crates, a new `flake.nix` vendor hash, +7 MB link |
+| 4. Wizard and config panel | No | QML only |
+
+**Step 3 is the whole of the dependency cost, and it is why it is its own
+commit.** Phase 0 recorded that adding two optional dependencies took the lock
+from 208 packages to 319, none of which the default build compiles, and that
+the stale vendor hash broke the Nix build while `cargo build`, `cargo clippy`
+and `cargo test` all stayed green ([findings](M3-phase0-findings.md) §4).
+Folding that into a commit that also creates identities would put a +111-crate
+dependency review and a keygen review in one diff, where neither can be read
+for itself — and would make the *identity* work hostage to the vendoring work.
+
+**Step 1 is the feature, not the refactor.** There is no refactor commit ahead
+of it, and that is a finding rather than an omission: Phase 1 already made the
+room. `resolvePaths()` split home and socket resolution into pure functions,
+`storeForSettings()` named every mode explicitly with an inert default, and
+`startableModes()` was deliberately left as the single line Phase 2 changes.
+The awkwardness CLAUDE.md's "make the change easy" rule looks for is not
+present, because the previous phase removed it on purpose.
+
+**Step 2 is where the ordering constraint bites.** `startableModes()` is the
+one line that turns Embedded on, and `tst_embedded.qml` pins that the whole UI
+derives from it — the not-implemented state, the list request, the paging.
+Adding `kModeEmbedded` there before there is a home to point at would make
+every one of those derive to "startable" against a mode that still has no
+profile, which is the identity-confusion failure `storeForSettings()`'s
+Embedded paragraph exists to prevent. So the home comes first and the flag
+comes with it, in one commit.
+
+Two things step 1 deliberately does **not** do, both waiting on step 2:
+
+- **No module method.** `radicle_impl.h` gains nothing yet, because a wizard
+  cannot call this until there is an embedded home to create *into*, and that
+  path is step 2's to define. Exposing an RPC method whose only sensible
+  argument does not exist yet would be API written against a caller nobody can
+  write.
+- **Embedded stays unstartable.** Creating an identity is not running a node,
+  and reporting the mode as startable before step 3 would be the same lie one
+  layer down.
 
 **Phase 3 — writes.** Folds in M2.2a (issues, comments, labels) now that a
 signer and passphrase flow exist. M2.2's own open question — "does this
@@ -476,9 +529,13 @@ one-line answers are here so this list stays readable.
   proposal fails** — 192 bytes in the dev-profile layout, ~20 bytes of slack
   in the installed one — so `RAD_SOCKET` is a Phase 1 requirement, not an
   escape hatch, and the socket wants a short home of its own
-  (`$XDG_RUNTIME_DIR` is the obvious candidate). Phase 1 still owes a length
+  (`$XDG_RUNTIME_DIR` is the obvious candidate). ~~Phase 1 still owes a length
   check with a real error message, since the crate's names neither the path
-  nor the limit.
+  nor the limit.~~ **That landed.** `resolvePaths()` performs it and its
+  message names the path, its length *and* the limit; `SettingsStore::set()`
+  checks the `radSocket` setting again at set time, which is not redundant —
+  a socket can also arrive from the environment, which the store never sees.
+  Both read `kSunPathMax`, so the two cannot come to disagree about the number.
 - **`git` availability inside a shipped Basecamp bundle.** Still open.
   Testable now, and worth testing early since it constrains all write
   features — now with six spawn sites behind it rather than one.
@@ -487,7 +544,18 @@ one-line answers are here so this list stays readable.
   only exercised an *unencrypted* key, which starts with no prompt.
   `main.rs:291-325` reads the secret key up front and fails if it cannot,
   which suggests "at start" — but that is inference from the binary's flow,
-  not a measurement, so this stays open.
+  not a measurement, so **the question about starting stays open** until step 3
+  links the runtime and tries it.
+
+  What Phase 2 step 1 *did* settle is the neighbouring half, which was being
+  assumed rather than measured: an encrypted profile really is unusable for
+  **writes** without its passphrase, and an unencrypted one really is
+  immediately signable. `profile_init.rs` asserts both directions through
+  `can_write` — the only observation that distinguishes the two from outside,
+  since it needs the private half. That matters for the wizard because it makes
+  "offer a passphrase, default to setting one" a choice with a stated
+  consequence the module can actually demonstrate, rather than a claim about
+  behaviour nobody had run.
 - Windows/macOS: `radicle-node` has `uds_windows` and `radicle-windows`
   deps, so it is not Linux-only, but this repo has only ever built and
   tested Linux. Out of scope to support; worth not accidentally

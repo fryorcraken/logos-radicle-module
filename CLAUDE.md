@@ -14,8 +14,12 @@ them when the trigger applies, not otherwise:**
 | [`docs/e2e.md`](docs/e2e.md) | Running, adding to, or debugging a sitometres spec (`radicle-ui/tests/ui/*.yaml`) |
 
 `docs/` also holds the design and planning documents those link to:
-`M2.2-write-actions-design.md` (shipped), `M2.2-write-features-proposal.md`
-and `M3-embedded-node-plan.md` (not started).
+`M2.2-write-actions-design.md` (shipped), `M2.2-write-features-proposal.md`,
+and `M3-embedded-node-plan.md` with `M3-phase0-findings.md` beside it. **M3 is
+under way, and which of its phases have landed is a `git log` question** — the
+plan document's own phase headings carry that, and this line deliberately does
+not repeat them. It used to say "not started", which was true when written and
+false two merges later.
 
 ### Keeping this file true
 

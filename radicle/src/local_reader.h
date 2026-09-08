@@ -76,6 +76,65 @@ public:
     /// -> {"applied":true,"path":"…"} or {"error":"…"}
     static std::string applyGitPath(const std::string& configured);
 
+    // -----------------------------------------------------------------------
+    // Identity creation.
+    //
+    // These CREATE state, which makes their presence on a class called
+    // `LocalReader` worth justifying rather than assuming.
+    //
+    // The alternative was `LocalWriter`, and it does not fit: that class is
+    // constructed with one home and one socket and answers about *that*
+    // profile — `canWrite()`, `commentOnIssue()` — because a write needs a
+    // signing key from a keystore that already exists. Creating an identity is
+    // the opposite situation. It takes the home as an argument precisely
+    // BECAUSE no profile is there yet, so there is nothing for an instance to
+    // be bound to, and binding one to a home it is about to create would invert
+    // the dependency this whole layer is built on: `LocalStore` resolves a
+    // home, then a reader/writer is built from it.
+    //
+    // So these are static for the same reason `gitProbe` is: they answer a
+    // question about a *path*, not about the profile this instance holds. The
+    // grouping is by "needs no existing profile", which is the property a
+    // caller actually has to know.
+    // -----------------------------------------------------------------------
+
+    /// Whether `home` already holds a Radicle identity.
+    ///
+    /// Asked separately from creating one so a wizard can tell a user what it
+    /// is about to do before it does it. `initProfile` refuses an occupied home
+    /// regardless — this is not the safety check, it is what stops the safety
+    /// check from being the first thing a user hears about.
+    ///
+    /// Deliberately a different question from `LocalStore::available()`: that
+    /// looks for `storage/` and means "can I browse this", while this looks for
+    /// `keys/radicle.pub` and means "would creating here destroy a key".
+    ///
+    /// -> {"exists":bool}
+    static std::string profileExists(const std::string& home);
+
+    /// Create a Radicle identity at `home`, the way `rad auth` does.
+    ///
+    /// **Refuses an existing profile rather than overwriting it.** The signing
+    /// key is the identity; replacing it is not recoverable and makes every
+    /// repository delegating to it unreachable.
+    ///
+    /// The `radicle` crate refuses a second init too, so this is a second line
+    /// of defence, not the only one — it fires before the home directory is
+    /// created, and its message names the consequence rather than a keystore
+    /// file. Worth stating because the opposite was once claimed here.
+    ///
+    /// `home` must be absolute; a relative path is refused, not resolved.
+    ///
+    /// An empty `passphrase` means an unencrypted key on disk — the same
+    /// convention `ssh-keygen` and the crate's own `env::passphrase()` use. The
+    /// reply reports `encrypted` so a caller states the outcome rather than
+    /// assuming it matched the input.
+    ///
+    /// -> {"created":true,"nodeId":"…","home":"…","alias":"…","encrypted":bool}
+    /// -> {"error":"…"}
+    static std::string initProfile(const std::string& home, const std::string& alias,
+                                   const std::string& passphrase);
+
 private:
     std::string m_home;
 };
