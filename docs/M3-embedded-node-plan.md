@@ -219,9 +219,24 @@ Hence the three modes below.
 
 | Mode | `RAD_HOME` | Node lifecycle | Who it's for |
 |---|---|---|---|
-| **Attach** | existing `~/.radicle` | Not ours — we detect and use whatever is running | Already has `rad`; M2.1's current behaviour |
-| **Embedded** | Basecamp-owned dir | Started/stopped by the module | Has no `rad`, wants it to just work |
-| **Seed-only** | none | none | Browse public repos; today's `remote*` path |
+| **`explore`** | none | none | Browse public repos; the `remote*` path |
+| **`local`** | existing `~/.radicle` | Not ours — we detect and use whatever is running | Already has `rad`; M2.1's behaviour |
+| **`embedded`** | Basecamp-owned dir | Started/stopped by the module | Has no `rad`, wants it to just work |
+
+**These names are also the UI's.** This document originally called them
+Attach / Embedded / Seed-only while the view spoke a second vocabulary — a
+`source` of `remote`/`local` — for the same question. The two ended up side
+by side in one header bar, which a user reported as unintelligible; the
+identity badge in particular was mode vocabulary leaking onto a screen that
+otherwise spoke source. Phase 1's UI pass unified them: the stored constant,
+the settings-file value, the `getCapabilities()` string, the QML property and
+the segment label are all one word. A rename on either side is a rename on
+both.
+
+One near-collision to keep in mind rather than tidy away: `local` is both a
+mode and the prefix of the `local*` backend methods. They are separate things
+that share a word — the method prefix is *derived* from the mode, and
+`embedded` also routing to `local*` is what makes that visible.
 
 `getCapabilities()` already reports `localAvailable` / `localNodeRunning` /
 `canWriteLocal`; M3 extends it with the active mode, the NID, the resolved
@@ -236,7 +251,7 @@ A deliberate non-goal: **do not offer to copy or move an existing
 existing secret key.** Both are plausible-sounding features that risk
 corrupting the user's real identity or duplicating a key across two running
 nodes writing the same storage. If a user wants their existing identity,
-that is Attach mode, which is exactly what Attach is for.
+that is `local` mode, which is exactly what `local` is for.
 
 ## The wizard
 
@@ -245,9 +260,9 @@ Six steps, each of which fails loudly rather than proceeding on a guess.
 0. **Preflight.** Is `git` on PATH (see the caveat above)? Is there an
    existing `~/.radicle`, and is a node already running on its socket? Can
    we write our own home? Report all of it before offering a choice — a
-   user with an existing profile should be *told* so, and offered Attach,
+   user with an existing profile should be *told* so, and offered `local`,
    not silently given a second identity.
-1. **Mode.** Attach / Embedded / Seed-only, with the identity consequence
+1. **Mode.** Explore / Local / Embedded, with the identity consequence
    stated in one sentence each.
 2. **Identity.** Alias + passphrase. `Profile::init` takes
    `Option<Passphrase>`; `keystore.rs:92` confirms `None` means an
@@ -333,16 +348,68 @@ per-spawn wrapper), and the control socket's 108-byte `sun_path` cap
 constrains where `RAD_HOME` may live. Both are in the "still needs
 verifying" list below, marked resolved.
 
-**Phase 1 — isolation, detection and settings, no daemon yet.** Note before
-designing the `RAD_HOME` layout: [findings](M3-phase0-findings.md) §6 measured
-this document's "socket follows the home" proposal against Basecamp's real
-per-profile paths and it does not fit, so `RAD_SOCKET` is a requirement rather
-than a knob. The settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing,
-mode selection,
-extended `getCapabilities`, and the `git` preflight plus its configurable
-path. Attach mode works end to end. This alone is shippable and useful: it
-makes today's M2.1 honest about *which* node it is reading, and makes the
-chosen seed survive a restart.
+**Phase 1 — isolation, detection and settings, no daemon yet. SHIPPED.** The
+settings store (above), `RAD_HOME`/`RAD_SOCKET` plumbing, mode selection,
+extended `getCapabilities`, and the `git` preflight plus its configurable path.
+`local` mode works end to end. This alone is shippable and useful: it makes
+M2.1 honest about *which* node it is reading, and makes the chosen seed survive
+a restart.
+
+Six things Phase 1 settled that this document had left open or got wrong.
+Recorded so Phase 2 does not re-litigate them:
+
+- **The socket is chosen independently of the home**, as
+  [findings](M3-phase0-findings.md) §6 required — this document's "socket
+  follows the home" proposal was measured against Basecamp's real per-profile
+  paths and does not fit. `resolveSocket()` prefers
+  `$XDG_RUNTIME_DIR/radicle-*.sock` and falls back to
+  `<home>/node/control.sock` only when there is no runtime dir, because that is
+  where a hand-run `rad` node puts its socket and `local` mode must still find
+  it. The resolved path is length-checked, and the message names the path, its
+  length **and** the limit — the kernel's own error names none of the three.
+- **`cobwrite.rs`'s announce step honoured neither `RAD_SOCKET` nor the
+  setting.** It hardcoded `<home>/node/control.sock`, so against any node with
+  a relocated socket the announce silently went nowhere. That failure was
+  invisible by construction: an unannounced write is legitimately *not* an
+  error (the node announces on next start), so nothing surfaced. Fixed, with a
+  regression test watched failing first.
+- **The git path is restart-to-apply**, not live — see
+  [`rust-ffi.md`](rust-ffi.md). `PATH` is the only channel reaching all six
+  spawn sites and writing it is process-global, so it happens once at init. The
+  settings UI states this rather than implying the change is immediate.
+- **Embedded is selectable and persisted, but reported as not startable.**
+  `getCapabilities().modeStartable` is false for it with a reason naming the
+  milestone, and the mode row says so. Hiding it would misrepresent the module
+  as never intending to support it; offering it silently would be a control
+  that does nothing. When Phase 2 lands the daemon,
+  `SettingsStore::modeIsStartable()` is the one line that changes — the UI
+  derives its state from capabilities and needs no edit.
+- **`explore` means no local home at all**, not "`local` with the local parts
+  hidden". A user who chose it has said they do not want this module touching a
+  local profile, so `LocalStore` is built with empty paths and
+  `localAvailable` is false even when a perfectly good profile exists.
+- **Mode and source were the same question asked twice, and collapsing them was
+  the fix for a header nobody could read.** The view carried its own
+  `source` (`remote`/`local`) picked with a toggle while the mode was picked in
+  Settings, so the header showed a two-segment source control, a
+  `Attached · z6Mko…` identity badge in mode vocabulary, and a seed picker, in a
+  row with no separation. The user read the run of them as one control with a
+  dead third segment. Now: **one three-valued setting, and the segment IS the
+  mode**; the `remote*`/`local*` method prefix is derived from it in
+  `SourceState.qml` so the two cannot drift, and the thing beside the toggle is
+  the *detail of whichever mode is selected* — the seed for `explore`, the
+  identity for `local`, nothing for `embedded`, which has no node yet. Whatever
+  cannot be said in a segment is said in a caption line under the control,
+  always visible: the tooltip it replaces was anchored past the bottom of a
+  fixed-height bar, where `z` cannot lift an item over another parent's later
+  sibling, so it rendered as an unreadable sliver.
+
+**Still open, deliberately:** the module is not told which Basecamp profile it
+runs under, so the socket falls back to an unscoped `radicle.sock` and two
+profiles sharing a runtime dir would collide. `radSocket` is the escape hatch,
+and is why that setting exists rather than being derived — but Phase 2, which
+actually binds the socket, should revisit whether the profile name can be
+plumbed through.
 
 **Phase 2 — embedded lifecycle.** Wizard, `Profile::init`, start/stop, the
 config panel's read-only half.

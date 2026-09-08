@@ -30,12 +30,25 @@ namespace radicle {
  */
 class LocalWriter {
 public:
-    /// `home` is the Radicle home — normally `LocalStore::home()`, which owns
-    /// the RAD_HOME/HOME resolution. An empty home yields a refusal from
+    /// `home` is the Radicle home and `socket` the node control socket —
+    /// normally `LocalStore::home()` and `LocalStore::socket()`, which own the
+    /// whole of that resolution. An empty home yields a refusal from
     /// `canWrite()` and an error object from every write, never a crash.
-    explicit LocalWriter(std::string home);
+    ///
+    /// **The socket is carried here, not re-derived downstream.** A write's
+    /// announce step needs it, and the Rust side used to pick its own
+    /// (`<home>/node/control.sock`, later `RAD_SOCKET`) — neither of which sees
+    /// `LocalStore`'s actual preference of `$XDG_RUNTIME_DIR/radicle-*.sock`
+    /// nor the module's own `radSocket` setting. So on any machine with a
+    /// runtime dir the two disagreed by default, and nothing said so: an
+    /// unannounced write is legitimately not an error, so the comment saved
+    /// fine and the network simply never heard. One resolver, passed down.
+    LocalWriter(std::string home, std::string socket);
 
     const std::string& home() const { return m_home; }
+
+    /// The control socket a write's announce step will use.
+    const std::string& socket() const { return m_socket; }
 
     /// -> {"canWrite":bool, "nodeId":"did:key:…" | "reason":"…"}
     ///
@@ -55,6 +68,7 @@ public:
 
 private:
     std::string m_home;
+    std::string m_socket;
 };
 
 } // namespace radicle

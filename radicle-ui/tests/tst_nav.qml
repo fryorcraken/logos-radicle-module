@@ -92,6 +92,51 @@ Item {
             compare(nav.error, "second failure");
         }
 
+        /// `settle()` is for a request that finished but whose outcome is no
+        /// longer worth reporting — a reply for a mode the module has left.
+        ///
+        /// The counter must still come down. Leaking it would leave the busy
+        /// strip up for ever, which is the exact failure that made `busy` a
+        /// counter rather than a flag in the first place.
+        function test_settle_decrements_the_counter_like_any_other_reply() {
+            nav.begin();
+            nav.begin();
+            nav.settle();
+            compare(nav.busy, true, "one request is still in flight");
+            nav.settle();
+            compare(nav.busy, false,
+                    "a settled request must clear the strip like any other — "
+                    + "it really did finish");
+        }
+
+        /// It must not report an error...
+        function test_settle_reports_nothing() {
+            nav.begin();
+            nav.settle();
+            compare(nav.error, "",
+                    "a reply the user has navigated away from must not paint "
+                    + "an error over the screen they are now on");
+        }
+
+        /// ...and, the half that makes it a THIRD function rather than a call
+        /// to `succeed()`, it must not CLEAR one either.
+        ///
+        /// `succeed()` clears `error` because a request that worked proves the
+        /// condition is over. A stale reply proves nothing in either direction,
+        /// so an error belonging to the screen the user is actually on has to
+        /// survive it. Route `settle()` to `succeed()` and this goes red.
+        function test_settle_does_not_clear_a_live_error() {
+            nav.begin();
+            nav.fail("the screen you are on is broken");
+            compare(nav.error, "the screen you are on is broken");
+
+            nav.begin();
+            nav.settle();
+            compare(nav.error, "the screen you are on is broken",
+                    "a stale reply erased a live error belonging to the "
+                    + "current screen");
+        }
+
         function test_open_repo_switches_view_and_carries_the_repo() {
             var repo = { rid: "rad:zTEST", name: "test" };
             nav.openRepo(repo);

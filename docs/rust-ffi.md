@@ -86,6 +86,41 @@ with `None` for the passphrase and the read path works against it.
 `radicle = "0.24"` failing until `radicle-oid` was pinned to `0.2.0`; that does
 not apply to this version line.
 
+## `git` reaches Radicle only through the process's own `PATH`
+
+`env.rs` owns the git preflight, and the shape it has is forced rather than
+chosen. Radicle's local git transport does not implement pack protocol
+in-process — `storage/git/transport/local.rs:53` spawns the binary — so any
+push into storage needs a `git`, and in a sandboxed Basecamp bundle that is the
+most likely failure of all.
+
+Three findings that determine the design, measured in Phase 0 rather than
+assumed (`docs/M3-phase0-findings.md` §5):
+
+- **There are six bare-name spawn sites**, not one, across `radicle` and
+  `radicle-node`. So there is no single spawn path to wrap: a resolver injected
+  at one call site would leave five uncovered.
+- **`GIT_EXEC_PATH` is wrong on two counts.** Two of those sites `env_clear()`
+  and re-admit only `PATH` and `GIT_TRACE*`, so it is stripped; and it names
+  git's *helper* directory, not the `git` binary. It is the wrong variable even
+  where it survives.
+- **`PATH` is the only channel that reaches every site**, and writing it is
+  **process-global**. `apply_git_path` must therefore be called once at module
+  init, before any thread starts — not lazily when a setting changes.
+
+That last point is why the git path setting has **restart-to-apply** semantics
+and why `SettingsPanel.qml` says so on screen. The alternative — writing `PATH`
+mid-run — races concurrent `getenv` (which is why `set_var` is `unsafe` from
+Rust 2024 onward), and the failure would be silent and rare rather than loud.
+
+**An explicit path overrides detection entirely, with no fallback to `PATH`.**
+That is deliberate: a silent fallback makes a typo in the setting look like a
+Radicle bug. Validation runs the candidate's own `git --version`, so a path
+that exists but is not git is refused at set time rather than at first push.
+Note this does *not* go through `radicle::git::version()` — that helper
+validates whatever `PATH` currently resolves, not the candidate handed to it,
+so it cannot answer the question being asked.
+
 ## `cargo clippy -- -D warnings` is load-bearing here, not style policing
 
 CI runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.

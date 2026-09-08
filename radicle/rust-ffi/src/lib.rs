@@ -10,6 +10,7 @@
 
 pub mod cobs;
 pub mod cobwrite;
+pub mod env;
 pub mod gitread;
 pub mod local;
 
@@ -276,39 +277,115 @@ pub unsafe extern "C" fn radicle_local_can_write(home: *const c_char) -> *mut c_
 
 /// Post a comment on an issue's discussion thread.
 ///
+/// `socket` is the node control socket the caller resolved, used only for the
+/// announce step. It is a parameter for the same reason `home` is: exactly one
+/// place — `LocalStore` on the C++ side — decides where the node lives, and a
+/// second opinion here is how the read and write paths came to probe two
+/// different sockets. Empty means "fall back to `<home>/node/control.sock`".
+///
 /// # Safety
-/// `home`, `rid`, `id`, `body` must each be NULL or a valid NUL-terminated
-/// UTF-8 C string.
+/// `home`, `socket`, `rid`, `id`, `body` must each be NULL or a valid
+/// NUL-terminated UTF-8 C string.
 #[no_mangle]
 pub unsafe extern "C" fn radicle_local_comment_on_issue(
     home: *const c_char,
+    socket: *const c_char,
     rid: *const c_char,
     id: *const c_char,
     body: *const c_char,
 ) -> *mut c_char {
-    let (home, rid, id, body) = (read_str(home), read_str(rid), read_str(id), read_str(body));
-    guarded(move || cobwrite::comment_on_issue(&home, &rid, &id, &body))
+    let (home, socket, rid, id, body) = (
+        read_str(home),
+        read_str(socket),
+        read_str(rid),
+        read_str(id),
+        read_str(body),
+    );
+    guarded(move || cobwrite::comment_on_issue(&home, &socket, &rid, &id, &body))
 }
 
 /// Open a new issue. `description` becomes its root comment.
 ///
+/// `socket` is the node control socket the caller resolved; see
+/// `radicle_local_comment_on_issue`.
+///
 /// # Safety
-/// `home`, `rid`, `title`, `description` must each be NULL or a valid
+/// `home`, `socket`, `rid`, `title`, `description` must each be NULL or a valid
 /// NUL-terminated UTF-8 C string.
 #[no_mangle]
 pub unsafe extern "C" fn radicle_local_create_issue(
     home: *const c_char,
+    socket: *const c_char,
     rid: *const c_char,
     title: *const c_char,
     description: *const c_char,
 ) -> *mut c_char {
-    let (home, rid, title, description) = (
+    let (home, socket, rid, title, description) = (
         read_str(home),
+        read_str(socket),
         read_str(rid),
         read_str(title),
         read_str(description),
     );
-    guarded(move || cobwrite::create_issue(&home, &rid, &title, &description))
+    guarded(move || cobwrite::create_issue(&home, &socket, &rid, &title, &description))
+}
+
+// ---------------------------------------------------------------------------
+// Environment: where git is, and which identity the node holds.
+//
+// Neither reads repository storage, so neither takes the usual `home`-first
+// shape. Both still go through `guarded` — the panic boundary is about the ABI,
+// not about what the function does behind it.
+// ---------------------------------------------------------------------------
+
+/// Resolve and validate a git binary.
+///
+/// An empty `candidate` means "find it on PATH"; a non-empty one overrides
+/// detection entirely, with no silent fallback. See `env::git_probe`.
+///
+/// -> {"found":bool,"path":"…","version":"…","configured":bool[,"reason":"…"]}
+///
+/// # Safety
+/// `candidate` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_git_probe(candidate: *const c_char) -> *mut c_char {
+    let candidate = read_str(candidate);
+    guarded(move || env::git_probe(&candidate))
+}
+
+/// Put a configured git's directory at the front of this process's `PATH`.
+///
+/// **Process-global, and init-time only.** The six bare-name `git` spawn sites
+/// across `radicle` and `radicle-node` read the process environment at spawn
+/// time, so this is the only channel that reaches all of them — and it must
+/// happen before any thread starts. See `env::prepend_to_path`.
+///
+/// -> {"applied":bool,"path":"…"} or {"error":"…"}
+///
+/// # Safety
+/// `configured` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_apply_git_path(configured: *const c_char) -> *mut c_char {
+    let configured = read_str(configured);
+    guarded(move || match env::apply_git_path(&configured) {
+        Ok(path) => serde_json::json!({ "applied": true, "path": path }).to_string(),
+        Err(reason) => serde_json::json!({ "error": reason }).to_string(),
+    })
+}
+
+/// The local node's ID, from the public half of the keystore only.
+///
+/// Independent of signing on purpose: the identity must be visible even when
+/// the key is encrypted and locked. See `env::node_id`.
+///
+/// -> {"nodeId":"did:key:z6Mk…"} or {"nodeId":"","reason":"…"}
+///
+/// # Safety
+/// `home` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_node_id(home: *const c_char) -> *mut c_char {
+    let home = read_str(home);
+    guarded(move || env::node_id(&home))
 }
 
 /// Frees a string previously returned by one of the `radicle_local_*`

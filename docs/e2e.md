@@ -56,11 +56,90 @@ Give anything a spec needs to click a stable `objectName`. Specs select by
 `objectName`, not by label, so renaming a button must not break a test — and
 changing an `objectName` is an interface change.
 
-**Add new specs to the `ui-tests.yml` matrix.** It runs one job per spec
-(`browse`, `branches`, `source`, `sync`, `write`); `SPEC` was once hardcoded to
-`browse.yaml` and three specs sat in the tree running nowhere. A spec outside
-the matrix is decoration. `ci.yml`'s schema check already globs
-`tests/ui/*.yaml` and needs no change.
+**Add new specs to the `ui-tests.yml` matrix.** It runs one job per spec;
+`SPEC` was once hardcoded to `browse.yaml` and three specs sat in the tree
+running nowhere. A spec outside the matrix is decoration. `ci.yml`'s schema
+check already globs `tests/ui/*.yaml` and needs no change.
+
+## What this layer structurally cannot see
+
+Worth knowing before you try to cover something here and quietly fail to.
+
+**Window geometry — there is no way to drive it.** The step vocabulary is
+closed and validated (`open`, `click`, `type`, `eval`, `set`, `wait_for`,
+`sleep`, `screenshot`, `expect`; an unknown key throws), and none of it takes a
+size. Neither does any CLI flag — `--headed` shows the window but does not size
+it. `geometry` exists in sitometres' inspector protocol only as a **read-only**
+field it never writes.
+
+`eval:` is unvalidated passthrough, so `root.Window.window.width = 1400` *would*
+be forwarded — but the run is on the `offscreen` platform plugin where resizing
+is meaningless, the app's root is docked inside Basecamp's own layout which
+would override it on the next relayout, and `eval:` is a side-effect step whose
+result is never asserted on. Do not reach for it: what you would add is a step
+that cannot see the thing it claims to cover.
+
+This matters because a whole class of real defects lives there — the Settings
+chip pushed off the right edge below ~750px, the header drawn twice in a very
+tall window. Both were found by dragging a window edge and both passed CI.
+**They belong at the component layer**, where a fixture owns the geometry:
+`tst_header_width.qml` drives the width down across a range and asserts the
+Settings chip keeps pixels on screen *and* stays clickable; `tst_layout.qml`
+asserts the header is drawn once. Measure against the container's bounds, not
+against `item.width` — an overflowing `RowLayout` child keeps its full width and
+its `visible` stays true, so every property-based check passes while the user
+sees nothing.
+
+**The system clipboard does not work.** sitometres forces
+`QT_QPA_PLATFORM=offscreen`, and the clipboard round-trip inside the Basecamp
+bundle fails there. Measured, not assumed: `local.yaml`'s identity click lands
+and `NodeIdentity`'s copy confirmation correctly declines to appear, because
+that confirmation is *earned* — the element pastes the clipboard back and
+compares before claiming success.
+
+Note `tst_source.qml` carries a comment asserting the opposite ("an offscreen Qt
+platform plugin always provides one"). That is true of `qmltestrunner` against
+the host session and **not** of the bundle, so neither layer can prove the copy
+happy path end to end: the component layer has a clipboard but not the bundle,
+and the bundle has no clipboard. What `local.yaml` asserts instead is that the
+control is wired and inert-safe — the click reaches a handler, no QML error is
+raised, and the view is intact afterwards.
+
+**What to assert when the interesting thing is unreachable.** Prefer a state
+that is *never correct in any configuration*, so it needs no known-good
+baseline. `RepoList.sayingNothing` is the worked example: no rows, and no
+rendered explanation of why. `repoCount === 0` cannot catch a blank pane —
+it is exactly what a working empty node reports — but "nothing on screen and
+nothing saying why" is wrong at any window size, in any mode, on any profile.
+Read such a property off the placeholder items' own `visible` rather than
+recomputing their conditions, or it will agree with them while they render
+nothing.
+
+## `setup --inspector` and `lgs basecamp launch` cannot coexist
+
+`--inspector` does not only pick a different Basecamp: it moves
+`[repos.basecamp].attr` **and** `[repos.lgpm].attr` to the portable stack
+(`bin-bundle-dir-inspector` / `cli-portable`), and it persists both to
+`scaffold.toml`. That is exactly what the specs need and exactly what an
+interactive `lgs basecamp launch` cannot use — the dev profiles are seeded for
+the dev stack, so a launch afterwards fails with **"no variant for this
+stack"** and the app opens to nothing.
+
+The two states are mutually exclusive, and the switch is a whole-project one
+even from a worktree, because `scaffold.toml` is tracked and shared. So:
+
+- **Before running `setup --inspector`, check nobody is driving Basecamp by
+  hand.** Flipping it under someone doing manual testing breaks their session
+  with a message that does not name the cause.
+- **`lgs basecamp setup --no-inspector` reverts it**, and is what to run when
+  handing the machine back for interactive use.
+- Leaving the two `attr` lines flipped in your working tree is what a spec run
+  needs, but **do not commit them** — they are local machine state, not a
+  project decision. `git diff scaffold.toml` after any `setup` shows both them
+  and the comment stripping described above; restore the comments, keep the
+  attrs, commit neither.
+
+CI is unaffected: each runner does one or the other and is destroyed.
 
 ## Why step 1 is `lgs` and not `nix`
 
@@ -161,14 +240,20 @@ needed: the portable build *and* `--variant`.
 sitometres gives every run a **throwaway `$HOME`** so a test cannot touch your
 real wallets and keys. `LocalStore` resolves the Radicle home from `RAD_HOME`,
 else `$HOME/.radicle` — so under that throwaway HOME there is no profile,
-`getCapabilities` reports `localAvailable=false`, the toggle hides its "Local"
-segment, and `local.yaml` fails at step 3 with
+`getCapabilities` reports `localAvailable=false`, and `local.yaml` fails with
 
 ```
 state "root.localAvailable === true" — evaluated to false
 ```
 
 on **every** machine, including one with a perfectly good profile.
+
+Two details of that sentence have since changed. The toggle does **not** hide
+its "Local" segment — the three-segment control draws all three and annotates
+the ones that cannot work, so the click target is always there. And that
+assertion now runs **after** the click rather than before it, because
+`localAvailable` is reported for the mode in force and the app starts in
+`explore`; see "The app starts in Explore" below.
 
 That spec's header used to claim the failure meant "this machine has no Radicle
 profile". It did not, and the mistake was expensive: the one automated check
@@ -183,9 +268,19 @@ it rather than invoking sitometres by hand. `--real-home` would also work and
 is deliberately not used: it hands the app every credential in `$HOME` to make
 one directory readable.
 
-It is **not** in CI — a CI runner has no Radicle profile, and seeding one is
-its own piece of work. It is the only spec covering `local*`, so run it locally
-after touching that path.
+**It IS in CI**, and this section used to say the opposite. The exclusion was
+justified by "a CI runner has no Radicle profile, and seeding one is its own
+piece of work" — which stopped being true the moment
+`examples/seed_write_profile.rs` was written for `write.yaml`. That seeder
+builds a profile with a signable key, a repository, an issue and branches
+belonging to two peers, and `ui-tests.yml` now runs it for both `write` and
+`local`, handing each the result as `RAD_HOME`. The reason outlived itself by
+long enough that half the module — everything reading `~/.radicle` — had no
+end-to-end coverage anywhere.
+
+`run-local-e2e.sh` is the *local* route to the same spec, pointed at your own
+node rather than a seeded fixture. Almost every assertion holds either way;
+`local.yaml` names the one step that does not and says why.
 
 One caveat before you chase a ghost: step 9 (`treeCount > 0`) can fail
 spuriously when **another Basecamp is running against the same `~/.radicle`** —
@@ -193,6 +288,43 @@ two processes contending on the same git storage. Five consecutive clean runs
 with no other instance up; two failures while an interactive `lgs basecamp
 launch alice` was being driven by hand. Close the interactive instance first,
 and do not read a lone step-9 failure as a code defect until you have.
+
+## The app starts in Explore, and every spec depends on that
+
+A run under sitometres has a throwaway `$HOME` and therefore no settings file,
+so what the app opens in is `SettingsStore::load()`'s **default mode**. That
+default is `explore`, and the reason is the one this layer proves: `explore` is
+the only mode that can show anything without a local profile, which is exactly
+what a throwaway `$HOME` — and a first-run user — has.
+
+It was `local` for one milestone, defended by a comment about not changing
+behaviour for existing users. Every seed-browsing spec (`browse`, `branches`,
+`source`, `sync`) went red at once, all at the step where repositories were
+supposed to arrive, because the app issued `localListRepos` against a home that
+did not exist and never asked the seed. `write` survived only because it clicks
+`sourceToggle_local` explicitly rather than relying on the default — which is
+the useful signal, not luck: **a spec that names the mode it needs is immune to
+the default moving.**
+
+Two consequences for writing specs here:
+
+- **Do not assert `localAvailable`, `canWrite`, `nodeIdentity` or anything else
+  mode-scoped before switching modes.** `storeForSettings()` hands Explore a
+  store with no home *by design* — Explore means "do not touch a local profile"
+  — so all of them are false in Explore however good the profile is. `local`
+  and `write` both had such assertions ahead of their click, passing only
+  because the default happened to be `local`; both now click first.
+- **Prefer `wait_for` over `expect` for anything downstream of a mode click.**
+  Switching mode is a backend round trip (`setSetting`, then a fresh
+  `getCapabilities`), so a synchronous `expect` immediately after the click
+  races the reply.
+
+The QML side has a matching default: `SourceState.mode` starts at `explore` and
+`Main.qml` binds `caps.mode || "explore"`. That fallback covers the window
+between `Component.onCompleted` and the first capabilities reply — and it is a
+real window, because `onBackendReady()` calls `repoList.reload()` without
+waiting for one. `tst_source.qml` pins it on a `SourceState` nothing has
+assigned to, which is the only way to observe it.
 
 ## If `open` hangs on step 1
 

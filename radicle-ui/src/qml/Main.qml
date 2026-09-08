@@ -41,41 +41,56 @@ Item {
     readonly property string capsJson: backend ? backend.capabilities : ""
     property var caps: ({})
 
-    // Which source every browsing call goes to. The state and the routing it
-    // implies live in SourceState so they can be tested as a unit — inside
-    // this file they could only be covered by a stub reproducing them, which
-    // is a copy asserted against itself. See SourceState.qml.
+    // Which mode the module is in, and the method routing that follows from it.
+    // Both live in SourceState so they can be tested as a unit — inside this
+    // file they could only be covered by a stub reproducing them, which is a
+    // copy asserted against itself. See SourceState.qml.
+    //
+    // `mode` is BOUND to capabilities rather than owned here: the backend is
+    // the authority on what is in force, and a UI holding its own copy could
+    // show a mode the module is not actually in. That is the identity confusion
+    // this milestone exists to prevent, one level up.
+    // The `|| "explore"` is the pre-capabilities guess. It matters because
+    // `onBackendReady()` calls `repoList.reload()` without waiting for the
+    // first `getCapabilities` reply, so whatever this evaluates to in that
+    // window decides which backend surface the very first list call reaches.
+    // It was `|| "local"`, and on a machine with no Radicle profile that
+    // issued `localListRepos`, got the "no local profile" error, and left the
+    // list empty with the seed never asked. `explore` is the inert guess and
+    // matches SettingsStore's own default — see SourceState.mode.
     readonly property SourceState sourceState: SourceState {
+        mode: root.caps.mode || "explore"
         localAvailable: root.caps.localAvailable === true
+        startableModes: root.caps.startableModes !== undefined
+                        ? root.caps.startableModes : []
 
         // A repo id from one source is meaningless to the other, so the whole
-        // navigation stack resets. `nav.reset()` clears state but does NOT
-        // refetch — NavState is a pure holder and the caller owns reloading,
-        // which is why onBackendReady and setSeed both call reload() alongside
-        // it. Omitting the reload here shipped once: the toggle flipped, the
-        // screen cleared, and no request was ever issued.
-        // The reload is deferred by one event-loop turn, and that is
-        // load-bearing rather than defensive. `changed()` is emitted from
-        // inside `select()`, immediately after it assigns `current` — so at
-        // this point `root.source` (a binding to `sourceState.current`) has
-        // NOT been re-evaluated, and neither has anything derived from it.
-        // `repoList.reload()` routes through `call()` -> `methodFor()`, so a
-        // synchronous reload issues `remoteListRepos` for a switch TO local:
-        // the user clicked Local, saw Explore's repositories, and had to
-        // toggle away and back before the second reload picked up the source
-        // the binding had by then settled on.
+        // navigation stack resets on the click — immediately, because the
+        // screen must stop showing the previous mode's data the moment the
+        // user asks for a different one.
         //
-        // Same class as the branch-switch bug CLAUDE.md documents ("A binding
-        // does not update inside the handler that changed its source"), and
-        // the same remedy.
-        onChanged: {
+        // It does NOT reload here. `nav.reset()` clears state but does not
+        // refetch (NavState is a pure holder and the caller owns reloading),
+        // and the reload belongs on `settled()` instead — the click happens
+        // while the write is still in flight, so nothing derived from the mode
+        // describes the mode being switched TO yet. SourceState.settled()
+        // carries the full reasoning and the three defects it fixed.
+        onChanged: nav.reset()
+
+        // The mode the module is actually in has changed. Reset again — an
+        // in-flight reply from the previous mode may have latched an error
+        // after the click's reset — and then reload.
+        //
+        // Deferred by one turn because `repoList.reload()` reads `app.source`
+        // and `app.modeStartable`, bindings derived from `mode` that have NOT
+        // been re-evaluated inside this handler. That is the branch-switch trap
+        // CLAUDE.md documents, and the same remedy.
+        onSettled: {
             nav.reset();
             sourceReload.restart();
         }
     }
 
-    /// Runs `repoList.reload()` one turn after a source switch — see the
-    /// comment on `onChanged` above for why it cannot be called directly.
     readonly property Timer sourceReload: Timer {
         interval: 0
         repeat: false
@@ -84,8 +99,19 @@ Item {
 
     /// Convenience aliases. Views read these rather than reaching through
     /// `sourceState`, so moving the state again does not touch every consumer.
+    ///
+    /// `source` is the backend METHOD PREFIX ("remote"/"local"), derived from
+    /// the mode. `mode` is the persisted choice. They are different things even
+    /// though `local` is spelled the same in both — see SourceState.qml.
     readonly property string source: sourceState.current
+    readonly property string mode: sourceState.mode
     readonly property bool localAvailable: sourceState.localAvailable
+
+    /// Whether this build can start the mode in force. Read by RepoList to
+    /// decide whether to fetch at all — see SourceState.modeStartable for why
+    /// that is derived from the startable SET rather than compared against a
+    /// mode name.
+    readonly property bool modeStartable: sourceState.modeStartable
 
     /// Whether a write could actually succeed, and why not when it could not.
     ///
@@ -100,9 +126,37 @@ Item {
     readonly property bool canWrite: caps.canWriteLocal === true
     readonly property string writeUnavailableReason: caps.writeUnavailableReason || ""
 
-    function setSource(next) {
-        sourceState.select(next);
+    /// Switch mode, and PERSIST it.
+    ///
+    /// This is what makes the toggle a real control rather than a decorative
+    /// one: the mode is a stored setting, the backend rebuilds its LocalStore
+    /// from it, and `getCapabilities()` then reports the new mode, home and
+    /// `localAvailable`. `sourceState.mode` is a binding to that reply, so the
+    /// segment that lights up is the mode actually in force — never one the UI
+    /// merely hoped for.
+    ///
+    /// A refusal is surfaced rather than swallowed. `callSettings` exists for
+    /// exactly this: the message names what was wrong, and a user who clicks a
+    /// segment and sees nothing happen has no way to tell "refused" from
+    /// "broken".
+    function setMode(next) {
+        if (!sourceState.select(next)) return;
+        callSettings("setSetting", ["mode", next], function (reply) {
+            if (reply && reply.error) nav.error = reply.error;
+        });
     }
+
+    /// Whether the settings pane is showing. Deliberately NOT part of NavState:
+    /// settings overlay the current screen rather than replacing it in the
+    /// navigation stack, so closing them returns you to exactly where you were
+    /// without a back-stack entry that has nothing to go back to.
+    ///
+    /// Two ways in — the header's Settings chip and the node identity beside
+    /// the toggle — and, since the pane is opaque and covers both of them,
+    /// there must be a way OUT that lives inside the pane. There was not, and
+    /// it shipped: the panel was a one-way door and the user had to restart the
+    /// app. `SettingsPanel.closed()` is that way out; see its Back control.
+    property bool settingsOpen: false
 
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
@@ -158,18 +212,46 @@ Item {
         // Deliberately does NOT clear nav.error on the way in — see
         // NavState.begin()'s doc comment.
         nav.begin();
+
+        // The mode this request was issued FOR. A failure is only news if the
+        // module is still in it.
+        //
+        // Without this, a request that was perfectly legitimate when it was
+        // made paints an error over whatever the user switched to. The case
+        // that shipped: a `localListRepos` in flight when the user clicks
+        // Embedded is refused by the backend (Embedded resolves no home), and
+        // the refusal latched into `nav.error` beneath a screen explaining that
+        // Embedded is not implemented — an error about something nothing had
+        // asked for. `tests/ui/local.yaml` asserts exactly that it does not.
+        //
+        // The MODE, not `source`: `local` and `embedded` share a method prefix
+        // (see SourceState.qml), so a `source` comparison is blind to the one
+        // switch this needs to catch. That is the same blindness that made the
+        // reload trigger wrong, arriving here from the other direction.
+        //
+        // The counter is still decremented either way — the request really did
+        // finish, and leaking `inflight` would leave the busy strip up for ever.
+        // Only the user-visible message is suppressed, and only for a mode that
+        // is no longer in force. `succeed()` needs no such guard: clearing a
+        // stale error is never wrong, and the per-view staleness guards already
+        // drop the DATA (see RepoList.fetch()).
+        var wantMode = root.mode;
+        function reportFailure(message) {
+            if (root.mode === wantMode) nav.fail(message);
+            else nav.settle();
+            if (onFail) onFail();
+        }
+
         logos.watch(backend[name].apply(backend, args), function (text) {
             var r = R.parse(text);
             if (r.ok) {
                 nav.succeed();
                 onOk(r.data);
             } else {
-                nav.fail(r.error);
-                if (onFail) onFail();
+                reportFailure(r.error);
             }
         }, function (err) {
-            nav.fail(String(err));
-            if (onFail) onFail();
+            reportFailure(String(err));
         });
     }
 
@@ -206,6 +288,24 @@ Item {
         }, function () {});
     }
 
+    /// Source-neutral call that reports failures to its callback rather than
+    /// swallowing them.
+    ///
+    /// `callPlain` drops errors on purpose — a failed capabilities probe should
+    /// not paint the status strip red on every poll. A settings write is the
+    /// opposite: the refusal IS the useful result, since it names the path that
+    /// was tried or the limit that was exceeded, and a user who typed something
+    /// wrong must see why rather than watch the field silently revert.
+    function callSettings(method, args, onDone) {
+        if (!backend) return;
+        logos.watch(backend[method].apply(backend, args), function (text) {
+            var r = R.parse(text);
+            onDone(r.ok ? r.data : { error: r.error });
+        }, function (err) {
+            onDone({ error: String(err) });
+        });
+    }
+
     // ---- test-observable state -------------------------------------------
     // Read by the UI tests (radicle-ui/tests/ui/*.yaml). Cheap bindings that
     // say what the app believes is true, so assertions do not have to infer it
@@ -231,6 +331,53 @@ Item {
     readonly property string sourceName:  source
     readonly property bool   hasLocal:    localAvailable
     readonly property string capsRaw:     capsJson
+
+    // Which node, and which identity. Asserted from outside because the
+    // failure worth catching is the UI showing one mode while the backend is
+    // in another — which a screenshot cannot distinguish from working.
+    readonly property string nodeMode:      caps.mode || ""
+    readonly property string nodeIdentity:  caps.nodeId || ""
+    readonly property string nodeHome:      caps.radHome || ""
+    readonly property bool   gitFound:      caps.gitFound === true
+    readonly property bool   settingsShown: settingsOpen
+
+    // ---- state only the end-to-end layer can assert on --------------------
+    //
+    // Every property below exists because a defect this module actually
+    // shipped was invisible to every other assertion. They are read by
+    // tests/ui/local.yaml; see that spec for what each one catches.
+
+    /// Whether the repository screen is showing the not-implemented state.
+    ///
+    /// The pair with `repoCount` is the assertion that matters: Embedded must
+    /// show this AND no rows. Either alone is satisfied by a bug — a stale
+    /// `localListRepos` reply repopulates the list while this stays true, and
+    /// an empty list is equally true of a node with nothing in it.
+    readonly property bool reposNotImplemented: repoList.notImplemented
+
+    /// Whether the repository screen is blank with no explanation at all.
+    ///
+    /// Never correct, in any mode, at any window size — which is what makes it
+    /// assertable unconditionally rather than only where a count is known. See
+    /// RepoList.sayingNothing for why it is read off the placeholder items
+    /// rather than recomputed from their conditions.
+    readonly property bool reposSayingNothing: repoList.sayingNothing
+
+    /// Whether the node identity told the user it copied.
+    ///
+    /// The confirmation is the ONLY feedback that click produces — the
+    /// clipboard is not observable from a spec — so this is what distinguishes
+    /// a copy that happened from a click that landed on nothing. It is earned
+    /// rather than assumed: NodeIdentity only raises it after reading the
+    /// clipboard back, so it cannot be true for a copy that silently failed.
+    readonly property bool identityCopied: nodeIdentity.confirmShown
+
+    /// Whether the identity is showing less than the whole DID.
+    ///
+    /// The user reported it eliding at a width where it need not. There is no
+    /// single correct value here — it SHOULD elide in a narrow window — so a
+    /// spec asserts it against a known width rather than absolutely.
+    readonly property bool identityShortened: nodeIdentity.shortened
 
     // Sync button: its three idle labels ("Download All" / "Re-sync" /
     // "Update") plus the in-progress percentage are the whole of that
@@ -311,42 +458,215 @@ Item {
             anchors.fill: parent
             spacing: 0
 
-            // ---- top bar (fixed height) ----
+            // ---- top bar (grows to fit; see headerFlow) ----
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Theme.barHeight
+                // Normally the fixed chrome height — the layout rule above
+                // still holds for everything driven by REQUESTS, and nothing
+                // reflows as they come and go.
+                //
+                // Two things are allowed to grow it, both of them properties of
+                // the WINDOW rather than of any request:
+                //
+                //  - The source toggle's caption. That is the point rather than
+                //    an exception: the caption exists BECAUSE the previous
+                //    design put this text in an overlay anchored past the bottom
+                //    of a fixed-height bar, where `z` cannot lift it over another
+                //    parent's later sibling and it rendered as an unreadable
+                //    sliver. A bar that clips its own explanation reintroduces
+                //    exactly that bug, so the bar yields to the text instead.
+                //  - The header wrapping onto a second line at a narrow width.
+                //    See headerFlow for why it wraps at all; the consequence here
+                //    is that the bar can no longer be pinned to one control line,
+                //    because a bar that wrapped its content and kept its height
+                //    would paint the second line straight over the status strip.
+                //
+                // Neither changes while a user is doing anything except resizing
+                // the window or switching mode, so the no-reflow rule survives.
+                //
+                // `captionReserve`, NOT `reservedHeight` and NOT
+                // `implicitHeight`, and the distinction is load-bearing three
+                // ways. `implicitHeight` varies by mode (the caption shows only
+                // in Embedded), and budgeting from it made the bar 44px taller
+                // in Embedded and slid the whole body on the click that
+                // switched. `reservedHeight` fixed that but INCLUDES the segment
+                // strip, which `headerFlow.height` now already accounts for —
+                // adding it here would double-count the strip and leave the bar
+                // 28px too tall in every mode. `captionReserve` is exactly the
+                // overhang below the flow: constant across modes, counted once.
+                // See SourceToggle.qml.
+                Layout.preferredHeight: Math.max(
+                    Theme.barHeight,
+                    headerFlow.height + headerFlow.y + Theme.gap
+                    + sourceToggle.captionReserve)
                 color: Theme.surface
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.gap
-                    anchors.rightMargin: Theme.gap
+                // A `Flow`, not a `RowLayout` — the header WRAPS rather than
+                // squeezing, and this is the whole of that change.
+                //
+                // The previous version was a RowLayout in which the Settings
+                // chip was incompressible and two items yielded: the identity
+                // elided its DID down to a 120px floor and the search field
+                // shrank 260→120. That kept Settings on screen and was rejected
+                // on sight — at ~630px the user got the whole header on one line
+                // with the DID cut in half, and asked for the opposite trade:
+                // *"can you instead make it go on the next line?"*. Nothing here
+                // is squeezed or truncated now; what does not fit moves down.
+                //
+                // QtQuick.Layouts has no wrapping row, so the choice was Flow or
+                // a GridLayout with a computed column count. Flow, because the
+                // column count is not knowable: these items have wildly
+                // different and CONTENT-DEPENDENT widths — a DID is ~411px, the
+                // title 58px — so any column count is wrong for some mode, and
+                // computing one in script would mean re-deriving in JS what the
+                // layout already measures. Flow asks each child for its natural
+                // width and breaks where the next one does not fit, which is
+                // exactly "one line while it fits, a second line when it does
+                // not" and needs no arithmetic to stay true when a component's
+                // content changes.
+                //
+                // What Flow costs is `Layout.fillWidth`, so there is no flexible
+                // spacer and the Settings chip cannot be pinned to the right
+                // edge. It sits at the END OF THE FLOW instead, and that is
+                // better rather than merely acceptable: as the last item placed
+                // it is the one wrapping protects first — it either fits on the
+                // current line or starts a new one, and in neither case can it
+                // be pushed past an edge. The requirement was that Settings stay
+                // reachable at every width, not that it stay right-aligned.
+                //
+                // A second consequence, and it closes a trap rather than opening
+                // one: a Flow SKIPS invisible children outright, where a
+                // RowLayout reserves a declared `Layout.minimumWidth` even for a
+                // child that is not visible. That is what had the identity
+                // holding 120px in Explore and the search field holding 120px
+                // back in Local — ~240px permanently spoken for by two items
+                // never both on screen. There is nothing to gate on `visible`
+                // here because there is nothing being reserved.
+                Flow {
+                    id: headerFlow
+                    objectName: "headerFlow"
+                    x: Theme.gap
+                    // The control line's own offset within the CHROME budget
+                    // (Theme.barHeight), not within the bar — the bar is taller
+                    // than that whenever the caption is budgeted for or the flow
+                    // has wrapped, and centring in it would push the first line
+                    // down as either grew.
+                    y: (Theme.barHeight - Theme.rowHeightSm) / 2
+                    width: parent.width - Theme.gap * 2
                     spacing: Theme.gap
 
+                    // Always present now, at every width.
+                    //
+                    // It used to disappear below 520px — the row's minimums
+                    // genuinely exceeded a narrow window, so something had to
+                    // yield entirely or the Settings chip went off the edge, and
+                    // the title was the only element here whose loss costs the
+                    // user nothing (Basecamp's own chrome already says which
+                    // module this is). With a wrapping header that trade is
+                    // gone: a word that does not fit on the first line goes to
+                    // the second like everything else, and there is no width at
+                    // which dropping it buys anything.
+                    //
+                    // Given the control line's height explicitly so the Flow
+                    // aligns it with the chip and the toggle. A bare Text is
+                    // font-height tall — a few pixels shorter — and a Flow tops
+                    // its items rather than centring them, so without this the
+                    // word sits visibly high on its own line.
                     Text {
+                        objectName: "headerTitle"
                         text: "Radicle"
                         color: Theme.text
                         font.pixelSize: Theme.fontXl
                         font.bold: true
+                        height: Theme.rowHeightSm
+                        verticalAlignment: Text.AlignVCenter
                     }
 
+                    // ONE control for "what am I browsing" — exactly three
+                    // segments, one per mode, and nothing else in it.
+                    //
+                    // The mode used to be chosen only in Settings while this
+                    // bar carried a two-segment `source` toggle AND a separate
+                    // "Attached · z6Mko…" badge. Two vocabularies for one
+                    // question, side by side, which a user read as a single
+                    // control with a dead third segment. The badge is gone, the
+                    // vocabularies are one, and the segment IS the mode.
                     SourceToggle {
                         id: sourceToggle
                         objectName: "sourceToggle"
-                        current: root.source
+                        // The toggle occupies exactly the control LINE in the
+                        // flow, and its caption hangs below that line into the
+                        // space the bar reserves for it.
+                        //
+                        // Pinned with a plain `height`, where the RowLayout
+                        // version used `Layout.preferredHeight` +
+                        // `Layout.maximumHeight` + `Layout.alignment` to say the
+                        // same thing. Attached `Layout.*` properties are INERT
+                        // inside a Flow — it positions children by their own
+                        // `width`/`height` — so leaving them here would have been
+                        // three lines of dead configuration guarding a real
+                        // constraint. Silent, and exactly the shape of defect
+                        // this file keeps being bitten by.
+                        //
+                        // The constraint itself is unchanged and still
+                        // load-bearing: without it the Embedded caption makes
+                        // this item ~72px tall, a Flow gives the whole line that
+                        // height, and every other item on it drops to centre in
+                        // a box four times too tall. The toggle draws from its
+                        // own top downward, so a fixed height keeps the segment
+                        // strip on the line and lets the caption overhang.
+                        //
+                        // The caption drawing outside the flow is deliberate and
+                        // safe: nothing here sets `clip`, and the bar is sized to
+                        // contain it — see the bar's `captionReserve` term.
+                        // tst_mode_switch.qml asserts that it lands inside the
+                        // bar rather than past its edge.
+                        height: Theme.rowHeightSm
+                        mode:           root.mode
+                        // Passed straight through, `undefined` included, and
+                        // that is the point rather than a shortcut. This used
+                        // to substitute `[]` for a missing value, which told
+                        // the toggle "this build starts nothing" during the
+                        // window before the first getCapabilities reply — an
+                        // amber border and an unavailable marker on all three
+                        // segments, Local included, on every launch. `[]` and
+                        // "not yet known" are different claims and the toggle
+                        // now distinguishes them; collapsing them here would
+                        // put the regression back on this side of the
+                        // boundary. See SourceToggle.startableModes.
+                        startableModes: root.caps.startableModes
+                        modeReason:     root.caps.modeUnavailableReason || ""
                         localAvailable: root.localAvailable
+                        pathsProblem:   root.caps.pathsProblem || ""
                         reason: "No Radicle profile on this machine — "
-                                + "install Radicle and run `rad auth` to browse local repositories"
-                        onSourceChosen: function (next) { root.setSource(next); }
+                                + "install Radicle and run `rad auth` to browse local repositories."
+                        onModeChosen: function (next) { root.setMode(next); }
                     }
+
+                    // ---- the mode-detail slot -------------------------
+                    //
+                    // Immediately right of the toggle, showing exactly one
+                    // thing at a time: the detail of whichever mode is
+                    // selected. One rule a user learns once, instead of a
+                    // header whose contents have to be memorised element by
+                    // element.
+                    //
+                    //   Explore  -> which seed is being proxied to
+                    //   Local    -> which identity you are operating as
+                    //   Embedded -> nothing; there is no node yet, and the
+                    //               toggle's own caption already explains that
+                    //
+                    // `SeedPicker` already worked this way (`visible:` keyed on
+                    // the source), so this extends an existing pattern rather
+                    // than inventing a parallel one.
 
                     SeedPicker {
                         id: seedPicker
                         objectName: "seedPicker"
-                        // Which seed is proxied to is a remote-source concern;
-                        // showing the picker while browsing local storage would
-                        // imply it affects what is on screen, which it does not.
-                        visible: root.source === "remote"
+                        // Which seed is proxied to is Explore's detail. Showing
+                        // the picker in any other mode would imply it affects
+                        // what is on screen, which it does not.
+                        visible: root.mode === "explore"
                         currentSeed: root.caps.remoteSeed || ""
                         fetchSeeds: function (cb) {
                             root.callPlain("listKnownSeeds", [], cb);
@@ -362,17 +682,126 @@ Item {
                         }
                     }
 
-                    Item { Layout.fillWidth: true }
+                    // Local's detail. Absent — not blank, not a placeholder —
+                    // in any other mode, because in Explore you are not
+                    // operating as an identity at all and showing one there
+                    // would be noise. Same reasoning as the Local segment being
+                    // absent rather than disabled when there is no profile.
+                    NodeIdentity {
+                        id: nodeIdentity
+                        objectName: "nodeIdentity"
+                        // Two conditions, and they are different questions:
+                        // this mode is the one the identity describes, AND
+                        // there is an identity to describe. The component
+                        // already hides itself for the second (it must, or a
+                        // caller could render an empty slot); this adds the
+                        // first.
+                        visible: root.mode === "local" && nodeIdentity.nodeId !== ""
+                        nodeId: root.caps.nodeId || ""
+                        // The WHOLE DID, at every width. This element used to be
+                        // the one that yielded — `ElideMiddle` down to a 120px
+                        // floor — and that is exactly what the user rejected:
+                        // at ~630px they got the entire header on one line with
+                        // the identity cut to `did:key:z6Mkowuny…EnhaDE8JH3MbLnDBe`,
+                        // and asked for the second line instead.
+                        //
+                        // So `minimumWidth` is left at its default 0, which
+                        // NodeIdentity documents as "do not yield at all", and
+                        // this asks the Flow for exactly the room its full text
+                        // needs. If that does not fit beside the toggle, the Flow
+                        // gives it its own line, where it always does fit — a
+                        // full DID is ~411px and the narrowest window worth
+                        // supporting is wider than that.
+                        //
+                        // The elide mechanism is still IN NodeIdentity, unused,
+                        // and deliberately so rather than ripped out: it is
+                        // opt-in, costs nothing while `minimumWidth` is 0, and
+                        // is the honest last resort for the one case wrapping
+                        // cannot help — a window narrower than the string
+                        // itself. What was removed is this caller opting in at a
+                        // width where a second line was available.
+                        //
+                        // No `Layout.*` here, and none needed: a Flow reads
+                        // `implicitWidth` directly, and it SKIPS invisible
+                        // children rather than reserving their declared minimums
+                        // the way a RowLayout does. The `visible ? … : 0` gates
+                        // that used to be on every constraint existed only to
+                        // work around that, and there is nothing left for them
+                        // to guard.
+                    }
 
                     FilterField {
                         id: searchField
-                        // Local listing takes a scope, not a search string —
-                        // see RepoList.fetch(). A search box that silently did
-                        // nothing would be worse than no search box.
+                        // The local surface takes a scope, not a search string
+                        // — see RepoList.fetch(). A search box that silently
+                        // did nothing would be worse than no search box. Keyed
+                        // on the derived method prefix rather than the mode,
+                        // because it is the SURFACE that lacks search:
+                        // `embedded` would have the same limitation.
                         visible: nav.view === "repos" && root.source === "remote"
-                        Layout.preferredWidth: 260
+                        // Its full width, always. This was the other yielder,
+                        // shrinking 260→120 to keep the row on one line in
+                        // Explore, and it goes for the same reason the
+                        // identity's elide does: a field squeezed to half its
+                        // width shows half a placeholder, and the second line it
+                        // would otherwise wrap onto was there the whole time.
+                        //
+                        // A plain `width` rather than an implicit one, because
+                        // FilterField is a TextField and its natural width is
+                        // its content's — an empty field would collapse to a few
+                        // pixels and grow as the user typed, which is a control
+                        // that moves the layout under the pointer.
+                        width: 260
                         placeholder: "Search repositories"
                         onAccepted: repoList.reload()
+                    }
+
+                    // Settings, LAST in the flow, and its position is the one
+                    // deliberate compromise in this change.
+                    //
+                    // It used to be pinned to the right edge by a flexible
+                    // spacer (`Item { Layout.fillWidth: true }`), which a Flow
+                    // has no equivalent of — a Flow packs its children and stops.
+                    // The spacer is gone rather than replaced, so the chip now
+                    // sits immediately after the mode detail instead of against
+                    // the right edge.
+                    //
+                    // That is a real change in appearance, and it is the right
+                    // trade: the requirement is that Settings stay REACHABLE at
+                    // every width, not that it stay right-aligned. As the last
+                    // item placed it is the one wrapping protects best — it
+                    // either fits on the current line or starts a new one, and
+                    // in neither case can it be pushed past an edge, which is
+                    // precisely how it became unreachable below ~750px before.
+                    //
+                    // Nothing here is incompressible any more, because nothing
+                    // needs to be: the previous version made this chip
+                    // unshrinkable so the row would squeeze its neighbours
+                    // instead of overflowing. With wrapping there is no
+                    // overflow to protect against.
+                    Rectangle {
+                        objectName: "settingsChip"
+                        height: Theme.rowHeightSm
+                        width: settingsLabel.implicitWidth + Theme.gap * 2
+                        radius: Theme.radiusSm
+                        color: root.settingsOpen ? Theme.accentSoft : Theme.bg
+                        border.width: 1
+                        border.color: Theme.border
+
+                        Text {
+                            id: settingsLabel
+                            anchors.centerIn: parent
+                            text: "Settings"
+                            color: root.settingsOpen ? Theme.text : Theme.textDim
+                            font.pixelSize: Theme.fontSm
+                        }
+
+                        MouseArea {
+                            objectName: "settingsToggle"
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.settingsOpen = !root.settingsOpen
+                        }
                     }
                 }
 
@@ -411,6 +840,40 @@ Item {
                     active: nav.view === "repo"
                     onBack: nav.back()
                 }
+            }
+        }
+
+        // Settings overlay the body rather than replacing a StackLayout page:
+        // they are orthogonal to where you are in the repository navigation,
+        // and putting them in the stack would mean "back" from settings had to
+        // decide which screen to restore.
+        Rectangle {
+            objectName: "settingsPane"
+            visible: root.settingsOpen
+            anchors.fill: parent
+            color: Theme.bg
+
+            SettingsPanel {
+                id: settingsPanel
+                objectName: "settingsPanel"
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width - Theme.gapLg * 2, 640)
+                caps: root.caps
+                fetchSettings: function (cb) {
+                    root.callPlain("getSettings", [], cb);
+                }
+                saveSetting: function (key, value, cb) {
+                    root.callSettings("setSetting", [key, value], cb);
+                }
+                // Closing just lowers the overlay. Because settings were never
+                // pushed onto the navigation stack, the screen underneath is
+                // untouched and the user lands exactly where they were — deep
+                // inside a repository if that is where they came from. This is
+                // the payoff for keeping `settingsOpen` out of NavState, and it
+                // is why closing needs no decision about which screen to
+                // restore.
+                onClosed: root.settingsOpen = false
             }
         }
 

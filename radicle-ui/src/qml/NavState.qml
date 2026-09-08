@@ -49,6 +49,26 @@ QtObject {
         error = message;
     }
 
+    /// Call when a request finished but its outcome is no longer worth
+    /// reporting — the state it was issued against has since moved on.
+    ///
+    /// The counter must still come down: the request really did finish, and
+    /// leaking `inflight` leaves the busy strip up for ever. What is skipped is
+    /// only the user-visible message.
+    ///
+    /// Distinct from `succeed()` on purpose, and the difference is not
+    /// cosmetic. `succeed()` CLEARS `error`, which is right for a request that
+    /// worked — the condition it was reporting is demonstrably over. A stale
+    /// request proves nothing either way, so it must not clear a live error
+    /// belonging to the screen the user is actually on. Neither existing
+    /// function has this shape, which is why this is a third one rather than a
+    /// flag on one of them.
+    ///
+    /// See Main.call(): a reply for a mode the module has left comes here.
+    function settle() {
+        inflight--;
+    }
+
     function reset() {
         view = "repos"; rid = ""; repo = null; error = ""; inflight = 0;
     }

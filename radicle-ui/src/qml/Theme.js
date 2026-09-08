@@ -54,6 +54,14 @@ var radiusSm = 4;
 var radius = 6;
 var radiusPill = 999;
 var barHeight = 52;
+
+// The header caption under the mode toggle (SourceToggle.qml). FIXED rather
+// than derived from the control it sits under: a caption is a paragraph and
+// wants a readable measure, and deriving it from the control made the
+// toggle's own height depend on a chain long enough to settle over several
+// layout passes — during which the caption really was outside its parent,
+// which is the clipping bug it exists to replace.
+var captionWidth = 420;
 var headerHeight = 60;
 var tabHeight = 38;
 var statusHeight = 24;

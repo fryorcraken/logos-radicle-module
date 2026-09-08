@@ -118,9 +118,32 @@ steps:
       state: "root.ready === true"
     timeout: 45s
 
-  # The seeded profile is a profile, so the local segment must be offerable.
-  # Asserting it here turns "the wrapper's RAD_HOME did not reach the app" into
-  # a failure that says so, rather than a missing-element failure further down.
+  # The app starts in `explore`, so switching comes FIRST and the profile
+  # assertions come after it.
+  #
+  # This order is load-bearing, not cosmetic. `localAvailable` and `canWrite`
+  # are reported for the mode IN FORCE — `storeForSettings()` gives Explore a
+  # store with no home at all, deliberately, because Explore means "do not
+  # touch a local profile". So both are false in Explore no matter how good the
+  # profile is, and asserting them before the switch would fail on a perfectly
+  # seeded machine.
+  #
+  # These steps used to run before the click and passed only because the
+  # default mode was `local`. That default was itself the bug — a first run
+  # with no profile could show nothing — and the specs depending on it is what
+  # made the dependency invisible. Asserting AFTER the switch is what actually
+  # tests the claim these steps are making, which is about the local mode.
+  - name: switch to the local node
+    click: { objectName: "sourceToggle_local" }
+
+  - name: every call now routes to the local surface
+    wait_for:
+      state: "root.source === 'local'"
+    timeout: 30s
+
+  # The seeded profile is a profile, so Local must find it. Asserting it here
+  # turns "the wrapper's RAD_HOME did not reach the app" into a failure that
+  # says so, rather than a missing-element failure further down.
   - name: the seeded profile is visible to the module
     wait_for:
       state: "root.localAvailable === true"
@@ -131,18 +154,11 @@ steps:
   # prove anything about writing, and every later step would fail for the same
   # single reason — so it fails here, once, where the message is about signing.
   - name: and a write could actually be signed
-    expect:
+    wait_for:
       state:
         - "root.canWrite === true"
         - "root.writeUnavailableReason === ''"
-
-  - name: switch to the local node
-    click: { objectName: "sourceToggle_local" }
-
-  - name: every call now routes to the local surface
-    wait_for:
-      state: "root.source === 'local'"
-    timeout: 30s
+    timeout: 45s
 
   # Exactly one — the seeder creates exactly one. A real profile would make
   # this "> 0"; the fixture is what lets it be a statement rather than a hope.

@@ -98,6 +98,7 @@ logos_test(
         ../src/local_store.cpp
         ../src/local_reader.cpp
         ../src/local_writer.cpp
+        ../src/settings_store.cpp
         # Not just an incidental link target: test_http_client.cpp exercises
         # this file's pure isGenuineTimeout()/applyHttpOutcome() directly.
         # It also stays linked for SeedClient, which references httpGet as
@@ -112,6 +113,7 @@ logos_test(
         test_local_store.cpp
         test_local_reader.cpp
         test_local_writer.cpp
+        test_settings_store.cpp
     EXTRA_INCLUDES
         ../src
 )

@@ -223,12 +223,18 @@ fn the_write_entry_points_are_guarded_too() {
     let junk = c("not-an-oid-at-all");
     let traversal = c("../../../etc/passwd");
     let body = c("hello");
+    // The socket argument gets the same pathological treatment as every other
+    // string here. It reaches `Node::new` and then a connect(2), so a value
+    // over the 108-byte sun_path cap, or one shaped like a traversal, must come
+    // back as JSON rather than as a panic crossing the ABI.
+    let overlong_socket = c(&"/run/user/1000/".to_string().repeat(20));
 
     assert_is_error_json(
         "comment_on_issue(junk id)",
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_comment_on_issue(
                 home.as_ptr(),
+                traversal.as_ptr(),
                 rid.as_ptr(),
                 junk.as_ptr(),
                 body.as_ptr(),
@@ -241,6 +247,7 @@ fn the_write_entry_points_are_guarded_too() {
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_comment_on_issue(
                 home.as_ptr(),
+                overlong_socket.as_ptr(),
                 traversal.as_ptr(),
                 traversal.as_ptr(),
                 body.as_ptr(),
@@ -258,6 +265,7 @@ fn the_write_entry_points_are_guarded_too() {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
             )
         }),
     );
@@ -267,6 +275,7 @@ fn the_write_entry_points_are_guarded_too() {
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_create_issue(
                 home.as_ptr(),
+                overlong_socket.as_ptr(),
                 rid.as_ptr(),
                 body.as_ptr(),
                 body.as_ptr(),
@@ -284,6 +293,7 @@ fn the_write_entry_points_are_guarded_too() {
             radicle_local_ffi::radicle_local_create_issue(
                 home.as_ptr(),
                 traversal.as_ptr(),
+                traversal.as_ptr(),
                 multiline.as_ptr(),
                 body.as_ptr(),
             )
@@ -294,6 +304,7 @@ fn the_write_entry_points_are_guarded_too() {
         "create_issue(all NULL)",
         &call(|| unsafe {
             radicle_local_ffi::radicle_local_create_issue(
+                std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -320,6 +331,92 @@ fn the_write_entry_points_are_guarded_too() {
             "{label}: a refusal must carry a reason: {out}"
         );
     }
+}
+
+/// The environment entry points are guarded exactly like the rest.
+///
+/// These are the newest `extern "C"` functions in the crate, which is precisely
+/// why they are here: the bug this file exists for was an entry point that
+/// forgot `guarded`, and the most likely place for that to happen again is
+/// whatever was added last. Two of them additionally SPAWN A PROCESS, so they
+/// reach failure modes the read paths do not — a path that is a directory, a
+/// binary that cannot be executed — and none of those may cross the boundary as
+/// a panic.
+///
+/// Like `can_write`, `git_probe` answers a negative with `{"found":false,...}`
+/// rather than an error object, so the property asserted is parseable JSON in
+/// the documented shape rather than an `error` key.
+#[test]
+fn the_environment_entry_points_are_guarded_too() {
+    let missing = c("/nonexistent/definitely/not/a/git");
+    let a_directory = c("/");
+    let traversal = c("../../../etc/passwd");
+    let home = c("/nonexistent/definitely/not/a/radicle/home");
+
+    for (label, out) in [
+        (
+            "git_probe(missing)",
+            call(|| unsafe { radicle_local_ffi::radicle_git_probe(missing.as_ptr()) }),
+        ),
+        (
+            // A path that exists but is a directory, not an executable: the
+            // spawn fails rather than the stat.
+            "git_probe(a directory)",
+            call(|| unsafe { radicle_local_ffi::radicle_git_probe(a_directory.as_ptr()) }),
+        ),
+        (
+            "git_probe(traversal-shaped)",
+            call(|| unsafe { radicle_local_ffi::radicle_git_probe(traversal.as_ptr()) }),
+        ),
+        (
+            "git_probe(NULL)",
+            call(|| unsafe { radicle_local_ffi::radicle_git_probe(std::ptr::null()) }),
+        ),
+    ] {
+        let v: serde_json::Value = serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("{label}: reply was not JSON: {e}\n{out}"));
+        assert!(
+            v["found"].is_boolean(),
+            "{label}: must answer the question asked: {out}"
+        );
+    }
+
+    // node_id answers `{"nodeId":"","reason":…}` for anything it cannot read,
+    // so the assertion is on the shape rather than on an error key.
+    for (label, out) in [
+        (
+            "node_id(bad home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_node_id(home.as_ptr()) }),
+        ),
+        (
+            "node_id(NULL home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_node_id(std::ptr::null()) }),
+        ),
+        (
+            "node_id(traversal-shaped home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_node_id(traversal.as_ptr()) }),
+        ),
+    ] {
+        let v: serde_json::Value = serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("{label}: reply was not JSON: {e}\n{out}"));
+        assert!(
+            v["nodeId"].is_string(),
+            "{label}: nodeId must always be present, even when empty: {out}"
+        );
+    }
+
+    // apply_git_path mutates PATH on success, so it is driven only with inputs
+    // that must FAIL — a test that permanently reshaped this process's PATH
+    // would corrupt every later test in the binary, including the ones that
+    // resolve git for real.
+    assert_is_error_json(
+        "apply_git_path(missing)",
+        &call(|| unsafe { radicle_local_ffi::radicle_apply_git_path(missing.as_ptr()) }),
+    );
+    assert_is_error_json(
+        "apply_git_path(a directory)",
+        &call(|| unsafe { radicle_local_ffi::radicle_apply_git_path(a_directory.as_ptr()) }),
+    );
 }
 
 /// `radicle_free_string(NULL)` is a documented no-op. Worth pinning because

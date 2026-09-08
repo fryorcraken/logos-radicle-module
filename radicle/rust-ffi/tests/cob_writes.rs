@@ -22,6 +22,16 @@ use radicle::cob::issue::Issues;
 use radicle::cob::store::access::WriteAs;
 use radicle::storage::ReadStorage as _;
 
+/// The control socket these tests announce to.
+///
+/// Empty, which `control_socket_path` reads as "fall back to
+/// `<home>/node/control.sock`" — a path with nothing listening, in a fixture
+/// with no node running. That is the point: every write below asserts the COB
+/// landed in git storage and is visible to a fresh read, and `announced:false`
+/// is an ordinary outcome that must not turn a successful write into a failure.
+/// Which socket is *chosen* is `control_socket.rs`'s subject, not this file's.
+const NO_NODE: &str = "";
+
 /// Create one issue and return its id.
 fn create_issue(f: &Fixture, rid: &str, title: &str, body: &str) -> String {
     let id = radicle::identity::RepoId::from_urn(rid).expect("valid rid");
@@ -72,6 +82,7 @@ fn a_comment_is_persisted_and_visible_to_a_fresh_read() {
 
     let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
         &home,
+        NO_NODE,
         &rid,
         &issue,
         "a reply posted through the write path",
@@ -116,6 +127,7 @@ fn successive_comments_all_land_in_order() {
     for n in 1..=3 {
         let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
             &home,
+            NO_NODE,
             &rid,
             &issue,
             &format!("comment {n}"),
@@ -145,7 +157,7 @@ fn an_empty_body_is_refused_and_writes_nothing() {
     // empty comment is.
     for body in ["", "   ", "\n\t "] {
         let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
-            &home, &rid, &issue, body,
+            &home, NO_NODE, &rid, &issue, body,
         ));
         assert!(
             v["error"].as_str().is_some(),
@@ -172,7 +184,7 @@ fn commenting_on_an_absent_issue_errors() {
     // parse failure.
     let absent = "0000000000000000000000000000000000000000";
     let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
-        &home, &rid, absent, "hello",
+        &home, NO_NODE, &rid, absent, "hello",
     ));
     assert!(
         v["error"].as_str().is_some(),
@@ -188,7 +200,7 @@ fn a_malformed_issue_id_errors_rather_than_panicking() {
 
     for id in ["", "not-an-oid", "zzzz", "../../etc/passwd"] {
         let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
-            &home, &rid, id, "hello",
+            &home, NO_NODE, &rid, id, "hello",
         ));
         assert!(
             v["error"].as_str().is_some(),
@@ -206,7 +218,7 @@ fn a_bad_repository_errors_rather_than_writing_elsewhere() {
 
     for bad in ["", "not-a-rid", "rad:", "rad:zzzzzzzzzzzzzzzzzzzzzzzzzzzz"] {
         let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
-            &home, bad, &issue, "hello",
+            &home, NO_NODE, bad, &issue, "hello",
         ));
         assert!(
             v["error"].as_str().is_some(),
@@ -225,6 +237,7 @@ fn a_write_with_no_profile_errors() {
     // there is no ~/.radicle at all, and it must not panic across the FFI.
     let v = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
         "",
+        NO_NODE,
         "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5",
         "0000000000000000000000000000000000000000",
         "hello",
@@ -262,6 +275,7 @@ fn a_created_issue_is_visible_to_a_fresh_read() {
 
     let v = parse(&radicle_local_ffi::cobwrite::create_issue(
         &home,
+        NO_NODE,
         &rid,
         "a brand new issue",
         "with a description that becomes the root comment",
@@ -315,6 +329,7 @@ fn a_created_issue_can_be_commented_on() {
 
     let created = parse(&radicle_local_ffi::cobwrite::create_issue(
         &home,
+        NO_NODE,
         &rid,
         "an issue",
         "the description",
@@ -322,7 +337,7 @@ fn a_created_issue_can_be_commented_on() {
     let id = created["id"].as_str().expect("issue id");
 
     let commented = parse(&radicle_local_ffi::cobwrite::comment_on_issue(
-        &home, &rid, id, "a reply",
+        &home, NO_NODE, &rid, id, "a reply",
     ));
     assert!(
         commented.get("error").is_none(),
@@ -342,6 +357,7 @@ fn several_issues_can_be_created_and_are_all_listed() {
     for n in 1..=3 {
         let v = parse(&radicle_local_ffi::cobwrite::create_issue(
             &home,
+            NO_NODE,
             &rid,
             &format!("issue {n}"),
             &format!("body {n}"),
@@ -368,6 +384,7 @@ fn an_empty_title_is_refused_and_creates_nothing() {
     for title in ["", "   ", "\t"] {
         let v = parse(&radicle_local_ffi::cobwrite::create_issue(
             &home,
+            NO_NODE,
             &rid,
             title,
             "a description",
@@ -397,6 +414,7 @@ fn a_multi_line_title_is_refused_with_an_actionable_message() {
     for title in ["two\nlines", "carriage\rreturn", "trailing\n"] {
         let v = parse(&radicle_local_ffi::cobwrite::create_issue(
             &home,
+            NO_NODE,
             &rid,
             title,
             "a description",
@@ -421,7 +439,7 @@ fn an_empty_description_is_refused_and_creates_nothing() {
 
     for body in ["", "   ", "\n\t "] {
         let v = parse(&radicle_local_ffi::cobwrite::create_issue(
-            &home, &rid, "a title", body,
+            &home, NO_NODE, &rid, "a title", body,
         ));
         assert!(
             v["error"].as_str().is_some(),
@@ -444,6 +462,7 @@ fn creating_in_a_bad_repository_errors() {
     for bad in ["", "not-a-rid", "rad:", "rad:zzzzzzzzzzzzzzzzzzzzzzzzzzzz"] {
         let v = parse(&radicle_local_ffi::cobwrite::create_issue(
             &home,
+            NO_NODE,
             bad,
             "a title",
             "a description",
@@ -464,6 +483,7 @@ fn creating_in_a_bad_repository_errors() {
 fn creating_with_no_profile_errors() {
     let v = parse(&radicle_local_ffi::cobwrite::create_issue(
         "",
+        NO_NODE,
         "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5",
         "a title",
         "a description",
