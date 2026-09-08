@@ -67,9 +67,15 @@ Item {
     }
 
     Text {
+        objectName: "listEmptyState"
         anchors.centerIn: parent
         // Only after a request has actually completed, so this never flashes
         // over a list that is still on its way.
+        //
+        // Named so a caller can assert this is NOT showing. RepoList needs
+        // that: in Embedded, "no repositories" is a false claim about a node
+        // that does not exist, and a test that only checked the row count
+        // could not tell the two empty states apart.
         visible: !control.loading && control.loaded
         text: control.emptyText
         color: Theme.textFaint

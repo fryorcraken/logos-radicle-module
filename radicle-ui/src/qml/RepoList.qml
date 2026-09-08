@@ -32,17 +32,45 @@ Item {
     /// Rows currently listed — read by the UI tests.
     readonly property int count: repos.count
 
+    /// Whether this mode has no node to list at all.
+    ///
+    /// Keyed on the MODE, not on `app.source`, and that distinction is the
+    /// whole fix. `source` is the derived method prefix, and `local` and
+    /// `embedded` both derive to `"local"` (see SourceState.qml) — so every
+    /// staleness guard in this file, which compares `source`, is blind to the
+    /// difference between them. A `localListRepos` reply issued in Local
+    /// passes that guard unchanged after a switch to Embedded, and the
+    /// ATTACHED node's repositories land under a segment reading "Embedded".
+    ///
+    /// That is the identity confusion this milestone exists to prevent, and
+    /// the backend was already fixed for the same lie once: `storeForSettings()`
+    /// used to let `embedded` fall through to the attached profile's home.
+    /// This is that lie one layer up, so it is refused the same way — by
+    /// naming the mode explicitly rather than inheriting Local's behaviour.
+    readonly property bool notImplemented: !!app && app.mode === "embedded"
+
     ListModel { id: repos }
 
     function reload() {
         page_ = 0;
         repos.clear();
         loadedOnce = false;
+        hasMore = false;
+        loading = false;
         fetch();
     }
 
     function fetch() {
         if (!app) return;
+        // Embedded has no node to ask, so it asks nothing. Fetching and then
+        // hiding the result is how this bug returns: the reply would still be
+        // in flight, would still pass the prefix-based guard below, and would
+        // still repopulate the model behind the placeholder.
+        if (page.notImplemented) {
+            page.loading = false;
+            page.hasMore = false;
+            return;
+        }
         // The first argument means different things per source: a search
         // `query` for the seed, a `scope` ("all"|"delegate"|"private"|
         // "seeded") for the local node. Passing the search box's text as a
@@ -59,11 +87,19 @@ Item {
         // Enter in the search field) clears the model and calls fetch()
         // again while a previous fetch() may still be in flight — without
         // this, the old reply's items get appended into the new list.
+        //
+        // `wantMode` is captured ALONGSIDE `wantSource` rather than instead of
+        // it, because they answer different questions and neither implies the
+        // other: `source` catches explore<->local (a different backend), and
+        // `mode` catches local<->embedded (the same backend, a different node).
+        // Capturing only the prefix is what let a Local reply land in Embedded.
         var wantSource = app.source;
+        var wantMode = app.mode;
         var wantQuery = page.query;
         var wantPage = page_;
         app.call("ListRepos", args, function (data) {
-            if (app.source !== wantSource || page.query !== wantQuery || page_ !== wantPage)
+            if (app.source !== wantSource || app.mode !== wantMode
+                || page.query !== wantQuery || page_ !== wantPage)
                 return;
             page.loading = false;
             page.loadedOnce = true;
@@ -72,7 +108,8 @@ Item {
                 repos.append({ repo: items[i] });
             page.hasMore = !!data.hasMore;
         }, function () {
-            if (app.source !== wantSource || page.query !== wantQuery || page_ !== wantPage)
+            if (app.source !== wantSource || app.mode !== wantMode
+                || page.query !== wantQuery || page_ !== wantPage)
                 return;
             page.loading = false;
             page.loadedOnce = true;
@@ -248,10 +285,55 @@ Item {
 
     LoadingState {
         anchors.fill: parent
+        // Silenced entirely in Embedded. "No repositories matched" is a
+        // DIFFERENT false claim, not a milder one: it says an embedded node
+        // exists and holds nothing, when none exists at all. A spinner would
+        // be worse still — it promises an answer that is not coming.
+        visible: !page.notImplemented && count === 0
         loading: page.loading
         loaded: page.loadedOnce
         count: repos.count
         emptyText: "No repositories matched"
         loadingText: "Loading repositories…"
+    }
+
+    // ---- Embedded: not implemented ------------------------------------
+    //
+    // A state of its own rather than an empty list, because the two say
+    // different things and only one of them is true. The wording is lifted
+    // from the toggle's own caption ("not available in this version yet") so
+    // the header and the body agree — this module has already shipped one bug
+    // from having two vocabularies for one fact.
+    Column {
+        objectName: "notImplementedState"
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Theme.gapLg * 2, Theme.captionWidth)
+        spacing: Theme.gapSm
+        visible: page.notImplemented
+
+        Text {
+            objectName: "notImplementedNote"
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: "Embedded runs a node inside Basecamp with its own separate "
+                + "identity — it is not available in this version yet."
+            color: Theme.textDim
+            font.pixelSize: Theme.fontLg
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+        }
+
+        // Says what to do instead, so the state is not merely a dead end. It
+        // names the other two modes by the words on their segments.
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: "Choose Explore to browse a seed node, or Local to use the "
+                + "Radicle node on this machine."
+            color: Theme.textFaint
+            font.pixelSize: Theme.fontMd
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+        }
     }
 }
