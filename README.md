@@ -1,15 +1,64 @@
-# logos-radicle-module
+# Radicle for Logos Basecamp
 
-Browse [Radicle](https://radicle.xyz) repositories from
+Browse [Radicle](https://radicle.xyz) repositories from inside
 [Logos Basecamp](https://github.com/logos-co/logos-basecamp).
 
-Two ways to browse, kept deliberately distinct:
+Radicle is peer-to-peer code collaboration: repositories, issues and patches
+live on a network of nodes rather than on a platform. This module gives
+Basecamp a view onto that network.
 
-- **Any repo** — proxies to a public seed node over HTTPS. Needs no local
-  Radicle install and no local node, and can reach any public repository the
-  seed replicates. Read-only.
-- **My node** — reads this machine's own Radicle node, including private
-  repositories, and works offline.
+**What you can do with it:**
+
+- **Browse any public repository, with nothing installed.** Search the
+  repositories a public seed node replicates, walk the file tree, read files
+  and READMEs, page through commits with their diffs, and read issues and
+  patches with the full discussion thread. No Radicle install, no local node,
+  no account.
+- **Browse your own node.** If you already run Radicle on this machine, point
+  the module at `~/.radicle` instead: your private repositories included, and
+  it works offline. Switch branches, and see when a repository has drifted from
+  what your node last fetched.
+- **Take part.** Comment on an issue, or open a new one, signed by your own
+  Radicle key. Writing goes through your local node, so it needs a Radicle
+  install with an unlocked key — the buttons only appear when that is true.
+
+## Install
+
+Two steps: get Basecamp, then add the catalog this module is published to.
+
+### 1. Install Logos Basecamp
+
+Download the latest release for your platform from
+[logos-co/logos-basecamp/releases](https://github.com/logos-co/logos-basecamp/releases)
+— an `.AppImage` on Linux, a `.dmg` on macOS — and run it.
+
+### 2. Add the catalog, then install the module
+
+In Basecamp's package manager, add this URL as a module repository:
+
+```
+https://raw.githubusercontent.com/fryorcraken/logos-modules/main/logos-repo.json
+```
+
+That is [`fryorcraken/logos-modules`](https://github.com/fryorcraken/logos-modules),
+a personal catalog — this module is not in a Logos-run one. Once the catalog is
+added, Basecamp can discover and install **Radicle** from it, and will offer
+updates as new versions are published.
+
+The app ships as two modules, `radicle` (core) and `radicle_ui` (the view).
+**Install the core one first** — the view declares a dependency on it and will
+be skipped if it is missing.
+
+### Optional: browse your own node, and write
+
+Nothing above requires Radicle itself. To use the **My node** source, or to
+comment on and open issues, install [Radicle](https://radicle.xyz/#get-started)
+and let it create a profile in `~/.radicle`. The module detects it on its own.
+
+Writing additionally needs the *private* half of that key reachable — from an
+unencrypted keystore, `RAD_PASSPHRASE`, or an `ssh-agent` holding it. Until one
+of those yields a signer, the module stays read-only and says why, rather than
+offering a compose box it cannot submit.
 
 ## Where this lives
 
@@ -32,7 +81,7 @@ the Logos catalog from here.
 
 | Directory | Module | Type | What it does |
 |---|---|---|---|
-| `radicle/` | `radicle` | `core` | All the business logic: seed-node HTTP, JSON parsing, ref resolution, local-profile detection |
+| `radicle/` | `radicle` | `core` | All the business logic: seed-node HTTP, JSON parsing, ref resolution, local-node reads and writes |
 | `radicle-ui/` | `radicle_ui` | `ui_qml` | Thin QML view; forwards every call to the core module |
 
 The split is not cosmetic. Basecamp sandboxes the QML engine — it installs a
@@ -47,7 +96,8 @@ runtime) rather than trapped in a view.
 The API names its source explicitly rather than hiding it behind one call:
 
 - `remote*` — proxied to a seed node. Public repos only, read-only, needs network.
-- `local*` — this machine's node. Private repos, offline, writable in future.
+- `local*` — this machine's node, through a Rust staticlib over the `radicle`
+  crate. Private repos, offline, and the only writable path.
 - everything else (`getCapabilities`, `listKnownSeeds`, `setRemoteSeed`) is
   source-neutral.
 
@@ -60,13 +110,14 @@ See `radicle/src/radicle_impl.h` for the full contract.
 
 ## Tests
 
-Three layers, each covering what the one below cannot:
+Four layers, each covering what the ones below cannot:
 
 | Layer | Command | Covers |
 |---|---|---|
-| Core module unit tests | `cd radicle && nix build '.#test'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
-| QML component tests | `sh radicle-ui/tests/run-qml-tests.sh` | Selection state, fixed chrome heights, the seed-picker load ordering |
-| End-to-end UI tests | `npx @paradoxcomputer/sitometres run radicle-ui/tests/ui/browse.yaml` | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
+| Core module unit tests | `cd radicle && nix build '.#checks.x86_64-linux.unit-tests'` | URL building, ref resolution, pagination, error shapes, local-profile detection — no network |
+| Rust FFI tests | `cd radicle/rust-ffi && cargo test` | The `local*` path against real fixture profiles, and the panic guard at the `extern "C"` boundary |
+| QML component tests | `sh radicle-ui/tests/run-qml-tests.sh` | One component in isolation: selection state, layout invariants, load ordering |
+| End-to-end UI tests | See [`docs/e2e.md`](docs/e2e.md) | Real clicks in a real Basecamp, real QtRO transport, real seed calls |
 
 The unit tests drive `SeedClient` through an injected transport, so they assert
 on the exact URLs built without touching the network. Two of them exist purely
@@ -74,42 +125,25 @@ because the live API is unforgiving about details that are invisible until they
 fail: path parameters must be full 40-char SHAs, and the tree root needs a
 trailing slash that subpaths must not have.
 
-The sitometres layer needs a Basecamp built with the QML inspector, which is a
-compile-time feature that is off in the shipping AppImage:
-`cd logos-basecamp && nix build .#default`.
+All four layers run on every pull request.
 
-## Status
+## Build it yourself
 
-Browsing any public repository over a seed node works: repository search,
-source tree, file viewer, commits, issues and patches.
-
-Local-node browsing is detected and reported but not yet wired up — the
-`local*` methods return a clear reason rather than pretending to be empty. That
-backend, and writing issues/comments, come next.
-
-## Build
-
-Requires `nix` with flakes.
+Requires `nix` with flakes and [`logos-scaffold`](https://github.com/logos-co/logos-scaffold)
+(`lgs`), which drives the builds from `scaffold.toml`:
 
 ```bash
-# core module
-cd radicle    && nix build '.#lgx'
-
-# UI module (resolve the sibling core module from the working tree)
-cd radicle-ui && nix build '.#lgx' --override-input radicle path:../radicle
-```
-
-Install into Basecamp with [`logos-scaffold`](https://github.com/logos-co/logos-scaffold):
-
-```bash
-lgs basecamp setup      # once
-lgs basecamp modules    # discover the flakes in this repo
+lgs basecamp build --variant all   # both modules, both variants
+lgs basecamp setup                 # once: basecamp + lgpm binaries, dev profiles
 lgs basecamp install
 lgs basecamp launch alice
 ```
 
 Basecamp does not hot-reload plugins; after a rebuild, kill it, remove the
 installed modules, then reinstall and relaunch.
+
+[`CLAUDE.md`](CLAUDE.md) is the contributor guide — the `lgs` verb table, where
+artefacts land, the test layers, and the traps that have bitten changes here.
 
 ## Disclaimer
 
