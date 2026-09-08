@@ -292,11 +292,85 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: cachix/install-nix-action@v27
+      # DeterminateSystems' installer rather than cachix/install-nix-action,
+      # which fails outright on the macos-latest runner: it tries to create
+      # the `_nixbld*` build users the image already provisions, and dies with
+      # `<dscl_cmd> DS Error: -14135 (eDSRecordAlreadyExists)`. Verified here
+      # — the darwin-arm64 leg failed in that step in 25s on this matrix's
+      # first run. DS detects a pre-existing install and skips user creation
+      # on all three runners used below.
+      #
+      # This is the same installer, for the same stated reason, that the
+      # catalog's own release action uses to build these modules' darwin
+      # variant — so the two pipelines now agree on how nix gets onto a mac.
+      #
+      # Pinned to an immutable release SHA rather than a moving tag: this
+      # action installs a toolchain that then builds everything published
+      # from this repo.
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
+          extra-conf: |
             experimental-features = nix-command flakes
+
+      # macos-latest ships without the Metal toolchain, and part of the Qt /
+      # graphics closure needs `xcrun metal` present to build. Cheap no-op
+      # when it is already there, so it is unconditional on macOS rather than
+      # gated on a build failure. Lifted from the catalog's release action,
+      # which hit the same wall building this repo's darwin variant.
+      - name: Ensure Metal toolchain
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          if /usr/bin/xcrun metal --version >/dev/null 2>&1; then
+            echo "Metal toolchain present"
+            exit 0
+          fi
+          echo "Metal toolchain missing, downloading..."
+          xcodebuild -downloadComponent MetalToolchain
+          /usr/bin/xcrun metal --version
+
+      # Persist /nix/store between runs. `install-nix-action` alone does NOT
+      # do this — it installs nix and leaves an empty store — so before this
+      # step every run rebuilt or re-downloaded its whole closure.
+      #
+      # It matters much more now that the matrix covers three platforms than
+      # it did when this job was linux-amd64 only. amd64 was never really
+      # cold: cache.nixos.org has substitutes for essentially all of nixpkgs,
+      # so a "cold" run was mostly download. aarch64-darwin has far thinner
+      # coverage, and this repo compiles the `radicle` crate and the *-sys
+      # crates (libgit2, libssh2, openssl) from source — so on macOS the cost
+      # is real compilation that a substituter cannot remove, and the store
+      # cache is the only thing that removes it.
+      #
+      # Keyed per-platform on the flake inputs. `runner.os` alone would let a
+      # linux and a macOS run collide on one key, and `matrix.variant`
+      # separates the two Linux arches, whose store paths differ entirely.
+      # radicle-ui has no committed flake.lock, so the .nix files are in the
+      # key too — hashFiles yields "" for a path matching nothing, which would
+      # otherwise leave the key keyed on nothing that changes.
+      #
+      # `restore-prefixes-first-match` means a flake edit still restores the
+      # previous run's store and rebuilds only what changed, rather than
+      # starting empty.
+      #
+      # v7, not v5: v5 calls a retired Actions cache API and fails to restore
+      # with "Cache service responded with 400", and its tar cannot read
+      # root-owned nix daemon state. ui-tests.yml carries the full account of
+      # both, which is where this configuration is copied from.
+      - name: Cache the Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-build-${{ matrix.variant }}-${{ hashFiles('radicle/flake.nix', 'radicle-ui/flake.nix', 'radicle/flake.lock', 'radicle-ui/flake.lock', 'radicle/rust-ffi/Cargo.lock') }}
+          restore-prefixes-first-match: nix-build-${{ matrix.variant }}-
+          # Both suffixes are needed: the action's size knobs are per-OS, and
+          # naming only the linux one would leave the macOS store ungoverned
+          # and growing until it blew the 10 GB repo cache quota — evicting
+          # every other cache here as a side effect.
+          gc-max-store-size-linux: 8G
+          gc-max-store-size-macos: 8G
+          purge: true
+          purge-prefixes: nix-build-${{ matrix.variant }}-
+          purge-created: 604800
 
       # `lgs` builds the modules below. There is no flake and no release
       # binary for logos-scaffold — `cargo install` is the documented install
@@ -315,12 +389,19 @@ jobs:
       # would restore a different version's binary and the gate below would
       # then skip installing the version we actually pinned. Bumping
       # LGS_REV starts a clean cache, which is the point.
+      #
+      # Keyed on `matrix.variant`, NOT `runner.os`. `runner.os` is `Linux` for
+      # both ubuntu-latest and ubuntu-24.04-arm, so an arch-blind key let the
+      # arm64 job restore the x86_64 binary, hit the cache, skip the install
+      # below, and then die with exit 126 (exec format error) on the first
+      # `lgs` call. That is precisely what happened the first time this matrix
+      # ran. The variant name carries the arch, so it cannot recur.
       - name: Cache lgs
         id: lgs-cache
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/lgs
-          key: lgs-${{ runner.os }}-git-${{ env.LGS_REV }}
+          key: lgs-${{ matrix.variant }}-git-${{ env.LGS_REV }}
 
       # Gated on the cache miss rather than using `--force`: on a hit there is
       # nothing to do, and `--force` would unconditionally rebuild. Without the
