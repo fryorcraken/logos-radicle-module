@@ -114,12 +114,20 @@ nlohmann::json paginate(const nlohmann::json& arr, int64_t page, int64_t perPage
  * Derive `{"items":[{"name","head"}],"default":"<branch>"}` from a repo
  * document's `refs.refs` map.
  *
- * Free-standing rather than a SeedClient method because BOTH sources need it
- * and both already produce the repo document in the same shape — the remote
- * one from the seed, the local one from the Rust backend. A second
- * implementation for the local side (or a `localListBranches` entry point in
- * the FFI) would be one filter written twice, and a place for the two sources
- * to drift apart on which refs count as branches.
+ * **Seed-side only.** This was once shared with the local path, on the
+ * reasoning that both sources produce a repo document in the same shape so one
+ * filter should serve both. That turned out to be wrong about the local side:
+ * `refs.refs` carries the *canonical* `refs/heads/*`, which in Radicle storage
+ * is a single delegate-consensus ref, while every peer's branches — the local
+ * node's included — live under `refs/namespaces/<nid>/`. Sharing this filter
+ * made the local picker show exactly one branch per repository.
+ *
+ * `localListBranches` now calls a dedicated backend entry point
+ * (`local::list_branches`) that reads those namespaces and returns a richer
+ * shape (per-branch `remote` and `isLocal`, peer branches qualified by node
+ * id). The duplication this comment used to warn against is real but narrow —
+ * "strip `refs/heads/`, skip tags" — and is the price of the two sources
+ * genuinely differing.
  *
  * Passes `{"error":...}` objects through untouched.
  */

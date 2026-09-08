@@ -33,6 +33,7 @@ public:
 
     std::string listRepos(const std::string& scope, int64_t page, int64_t perPage);
     std::string getRepo(const std::string& rid);
+    std::string listBranches(const std::string& rid);
     std::string getTree(const std::string& rid, const std::string& sha,
                         const std::string& path);
     std::string getBlob(const std::string& rid, const std::string& sha,

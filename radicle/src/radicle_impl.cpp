@@ -263,17 +263,28 @@ std::string RadicleImpl::localListBranches(const std::string& rid)
 {
     if (!m_local.available()) return localUnavailable(m_local);
 
-    // Derived from the repo document rather than added to the FFI surface,
-    // exactly as `SeedClient::listBranches` derives it from `getRepo`. The
-    // local backend already returns `refs.refs` in the same shape, so a
-    // dedicated Rust entry point would be a second implementation of one
-    // filter — and a second place for the two sources to drift apart.
+    // This used to derive the list from `getRepo`'s `refs.refs` via
+    // `branchesFromRawJson`, exactly as `SeedClient::listBranches` derives it,
+    // on the reasoning that one filter over one shape leaves the two sources
+    // no room to drift. That reasoning assumed the two sources were reporting
+    // the same thing. They are not: `refs.refs` is the *canonical*
+    // `refs/heads/*`, which in local storage holds a single
+    // delegate-consensus ref, while every peer's branches — including this
+    // node's own — live under `refs/namespaces/<nid>/`. The derived version
+    // therefore reported exactly one branch for every repository on the
+    // machine.
     //
-    // branchesFromRawJson() is what does the parse-then-derive: see its doc
-    // comment in seed_client.h for why this is a free function rather than
-    // inlined here (in short: so the malformed-JSON branch is directly
-    // testable, since the real Rust backend can never produce it).
-    return dump(radicle::branchesFromRawJson(m_localReader.getRepo(rid)));
+    // The namespaced refs cannot just be folded into `refs.refs` instead:
+    // `resolveSha` reads that same map to turn a name into a commit, so
+    // widening it would change what an unqualified branch name resolves to.
+    // Branches get their own reply from the local backend; `refs.refs` keeps
+    // its canonical meaning. See `local::list_branches` for the shape.
+    //
+    // `branchesFromRawJson` therefore has no caller on this path any more. It
+    // is deliberately left in place: it is still `SeedClient`-side logic with
+    // its own tests, and the malformed-reply branch it was extracted to make
+    // testable is a property of the seed path too.
+    return m_localReader.listBranches(rid);
 }
 
 std::string RadicleImpl::localGetTree(const std::string& rid, const std::string& sha,

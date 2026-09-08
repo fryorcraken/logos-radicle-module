@@ -106,12 +106,25 @@ Item {
         }
 
         function test_picker_loads_branches_via_the_injected_fetcher() {
-            compare(picker.count, 2);
+            // main + dev from the fetcher, plus the pinned repository default.
+            // The default is synthesised rather than matched against a
+            // same-named entry: `refs/heads/main` and a peer's `main` are
+            // different refs that can point at different commits.
+            compare(picker.branchCount, 3);
         }
 
         function test_picker_selects_the_current_branch() {
             picker.currentBranch = "dev";
-            compare(picker.currentIndex, 1);
+            compare(picker.displayLabel, "dev",
+                    "the closed control shows the selected branch");
+        }
+
+        /// The blank-chip regression: on a repo where every branch belongs to
+        /// a peer, `currentBranch` (the bare default) matched no row and the
+        /// control rendered empty. The pinned default is what fixes it.
+        function test_the_closed_control_is_never_blank() {
+            verify(picker.displayLabel !== "",
+                   "expected a branch name, got \"" + picker.displayLabel + "\"");
         }
 
         function test_picking_a_branch_emits_branchChosen() {

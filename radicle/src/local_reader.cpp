@@ -45,6 +45,11 @@ std::string LocalReader::getRepo(const std::string& rid)
     return take(radicle_local_get_repo(m_home.c_str(), rid.c_str()));
 }
 
+std::string LocalReader::listBranches(const std::string& rid)
+{
+    return take(radicle_local_list_branches(m_home.c_str(), rid.c_str()));
+}
+
 std::string LocalReader::getTree(const std::string& rid, const std::string& sha,
                                  const std::string& path)
 {

@@ -36,14 +36,58 @@ use crate::local::{open_storage, parse_rid};
 /// unresolvable ref falls back to the repo head rather than erroring, because
 /// that is what the seed client does and the views rely on it (`RepoView`
 /// passes `defaultBranch`, which is `""` when a repo payload omits it).
-fn resolve_commit<'a>(repo: &'a Repository, reference: &str) -> Result<git2::Commit<'a>, String> {
+fn resolve_commit<'a>(
+    home: &str,
+    repo: &'a Repository,
+    reference: &str,
+) -> Result<git2::Commit<'a>, String> {
     let backend = repo.raw();
 
     if !reference.is_empty() {
-        // Try the canonical branch first, then a raw revparse (short SHA,
-        // full SHA, tag). `refs/heads/<name>` is checked explicitly because
-        // revparse on a bare name can pick up a remote-tracking ref instead.
-        for candidate in [format!("refs/heads/{reference}"), reference.to_string()] {
+        // THE CANDIDATE ORDER BELOW IS LOAD-BEARING. Getting it wrong does not
+        // produce an error — an unresolvable ref deliberately falls through to
+        // the repo head (to match `SeedClient::resolveSha`), so a missed
+        // lookup renders the WRONG BRANCH'S FILES under the right branch's
+        // name. Every bug in this function has had that same silent shape.
+        //
+        // Radicle storage keeps every branch under a peer's namespace,
+        // `refs/namespaces/<nid>/refs/heads/<branch>` — the local node's own
+        // included. The unnamespaced `refs/heads/*` holds a single canonical
+        // delegate-consensus ref and nothing else. So:
+        //
+        // 1. `refs/namespaces/<self>/refs/heads/<name>` — the local node's own
+        //    branches, which `list_branches` lists BARE. This candidate is the
+        //    reason local branches resolve at all: `develop` exists at neither
+        //    `refs/heads/develop` nor anywhere else unnamespaced, so without
+        //    it every local branch except the canonical one fell through to
+        //    the head fallback and showed the default branch's files.
+        // 2. `refs/heads/<name>` — the canonical ref. Second so that a local
+        //    branch beats it when both exist.
+        // 3. `refs/namespaces/<nid>/refs/heads/<branch>` — another peer's
+        //    branch, which `list_branches` qualifies as `<nid>/<branch>`.
+        //    Guarded twice: the first segment must parse as a `NodeId` (so an
+        //    ordinary slashed local branch like `feature/login` never builds
+        //    this candidate), and it is tried after 1 so that a local branch
+        //    named literally `<peer-nid>/<branch>` — legal, if perverse —
+        //    still resolves to the local one.
+        // 4. A raw revparse, for short and full SHAs and tags.
+        let local_nid = crate::local::local_node_id(home);
+        let own_namespace =
+            local_nid.map(|nid| format!("refs/namespaces/{nid}/refs/heads/{reference}"));
+
+        let peer_namespace = reference.split_once('/').and_then(|(nid, branch)| {
+            nid.parse::<radicle::node::NodeId>()
+                .ok()
+                .map(|_| format!("refs/namespaces/{nid}/refs/heads/{branch}"))
+        });
+
+        let candidates = own_namespace
+            .into_iter()
+            .chain([format!("refs/heads/{reference}")])
+            .chain(peer_namespace)
+            .chain([reference.to_string()]);
+
+        for candidate in candidates {
             if let Ok(object) = backend.revparse_single(&candidate) {
                 if let Ok(commit) = object.peel_to_commit() {
                     return Ok(commit);
@@ -132,7 +176,7 @@ pub fn get_tree(home: &str, rid: &str, sha: &str, path: &str) -> String {
 
 fn get_tree_inner(home: &str, rid: &str, sha: &str, path: &str) -> Result<Value, String> {
     let repo = open_repo(home, rid)?;
-    let commit = resolve_commit(&repo, sha)?;
+    let commit = resolve_commit(home, &repo, sha)?;
     let root = commit
         .tree()
         .map_err(|e| format!("could not read tree for {}: {e}", commit.id()))?;
@@ -198,7 +242,7 @@ fn get_blob_inner(home: &str, rid: &str, sha: &str, path: &str) -> Result<Value,
         return Err("blob path is required".to_string());
     }
     let repo = open_repo(home, rid)?;
-    let commit = resolve_commit(&repo, sha)?;
+    let commit = resolve_commit(home, &repo, sha)?;
     let tree = commit
         .tree()
         .map_err(|e| format!("could not read tree for {}: {e}", commit.id()))?;
@@ -292,7 +336,7 @@ pub fn get_readme(home: &str, rid: &str, sha: &str) -> String {
 
 fn get_readme_inner(home: &str, rid: &str, sha: &str) -> Result<Value, String> {
     let repo = open_repo(home, rid)?;
-    let commit = resolve_commit(&repo, sha)?;
+    let commit = resolve_commit(home, &repo, sha)?;
     let tree = commit
         .tree()
         .map_err(|e| format!("could not read tree for {}: {e}", commit.id()))?;
@@ -337,7 +381,7 @@ fn list_commits_inner(
     per_page: i64,
 ) -> Result<Value, String> {
     let repo = open_repo(home, rid)?;
-    let commit = resolve_commit(&repo, sha)?;
+    let commit = resolve_commit(home, &repo, sha)?;
     let backend = repo.raw();
 
     let mut walk = backend

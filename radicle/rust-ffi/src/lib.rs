@@ -75,6 +75,25 @@ pub unsafe extern "C" fn radicle_local_get_repo(
     guarded(move || local::get_repo(&home, &rid))
 }
 
+/// Branches across every peer in local storage, the local node's own first.
+///
+/// Unlike the other reads this has no `remote*` twin that returns the same
+/// thing: a seed reports one canonical ref set, while local storage holds one
+/// namespace per peer. `local::list_branches` documents the reply shape and
+/// why it cannot be folded into `get_repo`'s `refs.refs`.
+///
+/// # Safety
+/// `home`, `rid` must each be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_list_branches(
+    home: *const c_char,
+    rid: *const c_char,
+) -> *mut c_char {
+    let home = read_str(home);
+    let rid = read_str(rid);
+    guarded(move || local::list_branches(&home, &rid))
+}
+
 /// Repos in local storage, paginated the same way `remoteListRepos` is.
 ///
 /// # Safety

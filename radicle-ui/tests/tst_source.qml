@@ -12,6 +12,8 @@ import "../src/qml" as Ui
  * tst_clicks.qml).
  */
 Item {
+    id: root
+
     width: 600
     height: 200
 
@@ -106,6 +108,44 @@ Item {
 
     property int reloads: 0
 
+    // -----------------------------------------------------------------------
+    // The reload a source switch triggers must go to the NEW source.
+    //
+    // `changed()` is emitted from inside `select()`, one line after it assigns
+    // `current`. Anything reading a BINDING derived from `current` inside that
+    // handler still sees the old value — so Main.qml's `onChanged` calling
+    // `repoList.reload()` directly issued `remoteListRepos` when switching TO
+    // local. Symptom: click Local, see Explore's repositories, toggle away and
+    // back to get the real ones.
+    //
+    // `switchSource()` below mirrors Main.qml's wiring exactly: a binding to
+    // `current` (not a live read), a handler that fires on `changed`, and a
+    // zero-interval Timer deferring the fetch by one turn. Drop the Timer and
+    // call `doReload()` straight from the handler and this goes red.
+    // -----------------------------------------------------------------------
+    readonly property string boundSource: sourceState.current
+    property string fetchedWith: ""
+
+    function doReload() {
+        // What Main.qml's call() does: resolve the method from the BOUND
+        // alias, not by reading sourceState.current directly. Reading the
+        // property directly would mask the bug, since the assignment itself
+        // is immediate — it is the binding that lags.
+        fetchedWith = boundSource + "ListRepos";
+    }
+
+    Timer {
+        id: deferredReload
+        interval: 0
+        repeat: false
+        onTriggered: doReload()
+    }
+
+    Connections {
+        target: sourceState
+        function onChanged() { deferredReload.restart(); }
+    }
+
     TestCase {
         name: "SourceRouting"
 
@@ -130,6 +170,37 @@ Item {
         function test_an_explicit_source_overrides_the_selected_one() {
             sourceState.select("local");
             compare(sourceState.methodFor("GetRepo", "remote"), "remoteGetRepo");
+        }
+
+        /// The bug a user hit: clicking Local listed the SEED's repositories,
+        /// and only a second toggle showed the node's own.
+        function test_the_reload_after_a_switch_uses_the_new_source() {
+            fetchedWith = "";
+            sourceState.select("local");
+
+            // Nothing fetches synchronously — the deferral is what guarantees
+            // the fetch happens after bindings settle. (This test cannot
+            // reproduce the stale-binding window itself: a `Connections`
+            // handler is invoked later than the inline `onChanged` Main.qml
+            // uses, so the binding has already updated by the time it runs.
+            // What is pinned here is the observable contract — the fetch is
+            // deferred, and it targets the new source — which is what the
+            // user-visible bug violated.)
+            compare(fetchedWith, "", "nothing should have been fetched yet");
+
+            tryCompare(root, "fetchedWith", "localListRepos", 1000,
+                       "the deferred reload must hit the LOCAL surface");
+        }
+
+        /// And back again, so the deferral is not just right in one direction.
+        function test_switching_back_to_the_seed_reloads_from_the_seed() {
+            sourceState.select("local");
+            tryCompare(root, "fetchedWith", "localListRepos", 1000);
+
+            fetchedWith = "";
+            sourceState.select("remote");
+            tryCompare(root, "fetchedWith", "remoteListRepos", 1000,
+                       "switching back must refetch from the seed");
         }
     }
 

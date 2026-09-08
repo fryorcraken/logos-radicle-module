@@ -262,28 +262,31 @@ LOGOS_TEST(a_deeper_backend_failure_is_not_reported_as_localUnavailable)
 // localListBranches — the only local* method with real logic of its own.
 // ---------------------------------------------------------------------------
 
-/// This is the end-to-end wiring check: that RadicleImpl::localListBranches
-/// really does call through m_localReader.getRepo() and derive branches from
-/// whatever comes back, rather than the two ever silently drifting apart.
-/// test_seed_client.cpp pins branchesFromRawJson() itself in isolation
-/// (including its malformed-JSON / is_discarded() branch, which the real Rust
-/// backend can never trigger since it always emits valid JSON via
-/// serde_json); this test pins that localListBranches actually reaches it
-/// through the real LocalReader, on a repo the scratch profile does not have,
-/// so the backend's own {"error":...} propagates rather than becoming an
-/// empty branch list (which would render as "this repo has no branches" — a
-/// different, wrong answer).
-LOGOS_TEST(local_list_branches_derives_branches_from_the_repo_document_via_branchesFrom)
+/// The end-to-end wiring check: that RadicleImpl::localListBranches really
+/// reaches the Rust backend through the real LocalReader, and passes its
+/// failures through.
+///
+/// This used to assert the derivation went through `branchesFromRawJson` over
+/// `getRepo`'s document. It no longer does — that path reported exactly one
+/// branch per repository, because `refs.refs` holds the canonical
+/// delegate-consensus ref while real branches live under
+/// `refs/namespaces/<nid>/`, so the local path now calls a dedicated backend
+/// entry point (`local::list_branches`).
+///
+/// The property under test survives the change, which is why the test does:
+/// on a repo the scratch profile does not have, the backend's own
+/// {"error":...} must propagate rather than becoming an empty branch list
+/// (which would render as "this repo has no branches" — a different, wrong
+/// answer). The mechanism moved; the contract did not.
+LOGOS_TEST(local_list_branches_propagates_a_backend_failure_rather_than_reporting_no_branches)
 {
     ScopedRadHome home("branches-empty-profile");
     home.makeStorage();
 
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{});
-    // A repo that does not exist in this empty scratch profile: getRepo()
-    // returns an {"error":...} object from the Rust backend, which
-    // localListBranches must pass straight through via branchesFrom() rather
-    // than turning into an empty branch list (which would render as "this
-    // repo has no branches" — a different, wrong answer).
+    // A repo that does not exist in this empty scratch profile: the backend
+    // returns an {"error":...} object, which localListBranches must pass
+    // straight through rather than turning into an empty branch list.
     const auto out = parse(impl.localListBranches("rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5"));
 
     LOGOS_ASSERT_TRUE(out.contains("error"));

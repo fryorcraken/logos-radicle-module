@@ -349,6 +349,358 @@ fn get_commit_on_an_unknown_sha_errors_rather_than_showing_head() {
     );
 }
 
+/// A peer's branch arrives from `list_branches` as `<nid>/<branch>`, and
+/// `resolve_commit` has to find it under `refs/namespaces/<nid>/refs/heads/`.
+///
+/// The failure this guards against is silent, which is why the fixture makes
+/// the two branches differ in *content*: an unresolvable ref falls back to the
+/// repo head (deliberately, to match the seed client), so before the namespace
+/// lookup existed, picking a peer's branch showed the canonical branch's files
+/// while the picker happily displayed the peer's name. Asserting on a file that
+/// exists only on the peer's branch is what tells those two apart — asserting
+/// merely that the read succeeded would pass either way.
+#[test]
+fn a_peer_qualified_branch_resolves_to_that_peers_commit() {
+    use radicle::storage::{SignRepository as _, WriteRepository as _};
+
+    let f = init_profile("peer-branch-resolve");
+    let (rid, work) = init_repo(&f, "peer-repo", "peers");
+
+    // A commit that exists only on the peer's branch, carrying a file the
+    // canonical branch does not have.
+    let repo = radicle::git::raw::Repository::open(&work).expect("open working copy");
+    std::fs::write(work.join("PEER_ONLY.md"), "# only on the peer\n").expect("write peer file");
+    fixture::commit_all(&repo, "peer-only commit");
+
+    // Publish it under a *different* node's namespace, the way a replicated
+    // peer's refs actually sit in storage.
+    let peer = radicle::crypto::SigningKey::from_seed(radicle::crypto::Seed::new([99u8; 32]));
+    let peer_nid = radicle::crypto::Signer::public_key(&peer).to_string();
+
+    let id = radicle::identity::RepoId::from_urn(&rid).expect("valid rid");
+    let stored =
+        radicle::storage::ReadStorage::repository(&f.profile.storage, id).expect("repo in storage");
+
+    // Push the commit's OBJECTS into storage before pointing a ref at them.
+    // The working copy and storage are separate object databases, so creating
+    // the ref straight from the commit's OID fails with "target OID for the
+    // reference doesn't exist on the repository" — at that moment the commit
+    // exists only in the working copy.
+    //
+    // Pushed to storage's path directly rather than through the `rad` remote
+    // that `rad::init` configured: that remote's URL is already scoped to THIS
+    // node's namespace, so a namespaced refspec through it would nest one
+    // namespace inside another (`publish` in the fixture module documents the
+    // same trap) and land the branch where nothing reads it.
+    let storage_path = stored.raw().path().to_path_buf();
+    let mut remote = repo
+        .remote_anonymous(&storage_path.display().to_string())
+        .expect("could not open storage as a remote");
+    remote
+        .push(
+            &[
+                format!("+refs/heads/master:refs/namespaces/{peer_nid}/refs/heads/feature")
+                    .as_str(),
+            ],
+            None,
+        )
+        .expect("could not push the peer branch into storage");
+
+    stored.sign_refs(&peer).expect("could not sign peer refs");
+
+    // The canonical branch must NOT have the peer's file — otherwise this test
+    // could not tell the two apart.
+    let canonical = parse(&radicle_local_ffi::gitread::get_tree(
+        &f.home(),
+        &rid,
+        "master",
+        "",
+    ));
+    let canonical_names: Vec<String> = canonical["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|e| e["name"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(
+        !canonical_names.iter().any(|n| n == "PEER_ONLY.md"),
+        "fixture is not discriminating: the canonical branch already has the \
+         peer's file, so this test could not detect a wrong resolution: {canonical_names:?}"
+    );
+
+    // Now the peer's branch, addressed the way the picker addresses it.
+    let v = parse(&radicle_local_ffi::gitread::get_tree(
+        &f.home(),
+        &rid,
+        &format!("{peer_nid}/feature"),
+        "",
+    ));
+    assert!(v.get("error").is_none(), "peer branch should read: {v}");
+
+    let names: Vec<String> = v["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|e| e["name"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "PEER_ONLY.md"),
+        "a peer-qualified branch must resolve to that peer's commit, not the \
+         repo head: {names:?}"
+    );
+}
+
+/// Push a branch into storage under `signer`'s namespace, carrying `marker` as
+/// a file that exists nowhere else, and sign the resulting ref set.
+///
+/// Two details are load-bearing and both were got wrong first time:
+///
+/// - **The marker.** Every bug these tests guard against is silent: an
+///   unresolvable ref falls back to the repo head, so a read of the wrong
+///   branch still succeeds and still renders. Only a file unique to one branch
+///   distinguishes "resolved correctly" from "fell back".
+/// - **`sign_refs`.** `list_branches` enumerates via `remotes()`, which reads
+///   each peer's *signed* ref set rather than globbing `refs/namespaces/*`.
+///   A raw push leaves the branch visible to `resolve_commit` but invisible to
+///   `list_branches`, so a test that skips signing dies on its listing
+///   assertion before reaching the resolution assertions it exists for —
+///   passing or failing for reasons that have nothing to do with the code
+///   under test.
+fn push_branch_with_marker(
+    f: &fixture::Fixture,
+    rid: &str,
+    work: &std::path::Path,
+    signer: &impl radicle::crypto::Signer,
+    branch: &str,
+    marker: &str,
+) {
+    use radicle::storage::SignRepository as _;
+
+    let namespace = radicle::crypto::Signer::public_key(signer).to_string();
+    let repo = radicle::git::raw::Repository::open(work).expect("open working copy");
+    std::fs::write(work.join(marker), format!("# {marker}\n")).expect("write marker");
+    fixture::commit_all(&repo, &format!("commit for {branch}"));
+
+    let id = radicle::identity::RepoId::from_urn(rid).expect("valid rid");
+    let stored =
+        radicle::storage::ReadStorage::repository(&f.profile.storage, id).expect("repo in storage");
+    let storage_path = radicle::storage::WriteRepository::raw(&stored)
+        .path()
+        .to_path_buf();
+
+    let mut remote = repo
+        .remote_anonymous(&storage_path.display().to_string())
+        .expect("could not open storage as a remote");
+    remote
+        .push(
+            &[
+                format!("+refs/heads/master:refs/namespaces/{namespace}/refs/heads/{branch}")
+                    .as_str(),
+            ],
+            None,
+        )
+        .expect("could not push branch into storage");
+
+    stored.sign_refs(signer).expect("could not sign refs");
+
+    // Undo the marker in the working copy so the NEXT branch pushed from it
+    // does not inherit this one's file — otherwise every branch ends up
+    // carrying every marker and no assertion can tell them apart.
+    std::fs::remove_file(work.join(marker)).expect("remove marker");
+    fixture::commit_all(&repo, &format!("drop {marker}"));
+}
+
+/// Entry names in a repo's root tree at `sha`, as the view would see them.
+fn tree_names(home: &str, rid: &str, sha: &str) -> Vec<String> {
+    let v = parse(&radicle_local_ffi::gitread::get_tree(home, rid, sha, ""));
+    assert!(v.get("error").is_none(), "get_tree({sha}) errored: {v}");
+    v["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|e| e["name"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+/// THE regression test for this change: the local node's OWN branches live
+/// under `refs/namespaces/<self-nid>/`, exactly like every peer's, and are
+/// listed BARE. So `develop` exists at neither `refs/heads/develop` nor
+/// anywhere else unnamespaced.
+///
+/// Without the local-namespace candidate in `resolve_commit`, every local
+/// branch except the canonical default fell through to the repo-head fallback
+/// and rendered the default branch's files under the chosen branch's name —
+/// silently, because the fallback is deliberate and returns no error.
+///
+/// Note this needs a NON-CANONICAL branch. An earlier version of the
+/// peer-branch test pushed to `refs/heads/master`, which is the canonical ref
+/// and resolves through a different candidate, so it passed while every real
+/// local branch was broken.
+#[test]
+fn a_local_branch_resolves_to_itself_not_the_repo_head() {
+    let f = init_profile("local-branch-resolve");
+    let (rid, work) = init_repo(&f, "local-repo", "local branches");
+    let me = f.profile.signer().expect("signer");
+
+    push_branch_with_marker(&f, &rid, &work, &me, "develop", "DEVELOP_ONLY.md");
+    // A slashed name too: local branches are listed bare, so `feature/login`
+    // reaches resolution looking exactly like a peer-qualified reference.
+    push_branch_with_marker(&f, &rid, &work, &me, "feature/login", "FEATURE_ONLY.md");
+
+    // Both must be offered bare and flagged local.
+    let listed = parse(&radicle_local_ffi::local::list_branches(&f.home(), &rid));
+    let items = listed["items"].as_array().expect("items");
+    for name in ["develop", "feature/login"] {
+        assert!(
+            items
+                .iter()
+                .any(|i| i["name"] == name && i["isLocal"] == true),
+            "{name} should be listed bare and local: {listed}"
+        );
+    }
+
+    // The fixture must be discriminating: the canonical branch carries neither
+    // marker, so a fallback to head cannot satisfy the assertions below.
+    let canonical = tree_names(&f.home(), &rid, "master");
+    assert!(
+        !canonical.iter().any(|n| n == "DEVELOP_ONLY.md")
+            && !canonical.iter().any(|n| n == "FEATURE_ONLY.md"),
+        "fixture is not discriminating — the canonical branch already carries a \
+         marker, so this test could not detect a wrong resolution: {canonical:?}"
+    );
+
+    let develop = tree_names(&f.home(), &rid, "develop");
+    assert!(
+        develop.iter().any(|n| n == "DEVELOP_ONLY.md"),
+        "a local branch must resolve to itself, not the repo head. Got {develop:?}, \
+         which is the canonical branch's tree."
+    );
+
+    let feature = tree_names(&f.home(), &rid, "feature/login");
+    assert!(
+        feature.iter().any(|n| n == "FEATURE_ONLY.md"),
+        "a slashed local branch must resolve to itself: {feature:?}"
+    );
+    // And it must not have been read as peer `feature`'s branch `login`.
+    assert!(
+        !feature.iter().any(|n| n == "DEVELOP_ONLY.md"),
+        "feature/login resolved to the wrong branch entirely: {feature:?}"
+    );
+}
+
+/// `list_commits` resolves through the same function, so it has the same
+/// failure mode — and it is the tab a user lands on after the file tree.
+#[test]
+fn list_commits_on_a_local_branch_reads_that_branch() {
+    let f = init_profile("local-branch-commits");
+    let (rid, work) = init_repo(&f, "commits-repo", "local branch commits");
+    let me = f.profile.signer().expect("signer");
+
+    push_branch_with_marker(&f, &rid, &work, &me, "develop", "DEV.md");
+
+    let v = parse(&radicle_local_ffi::gitread::list_commits(
+        &f.home(),
+        &rid,
+        "develop",
+        0,
+        10,
+    ));
+    assert!(v.get("error").is_none(), "should read: {v}");
+    let summaries: Vec<String> = v["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|c| c["summary"].as_str().unwrap_or("").to_string())
+        .collect();
+
+    // The branch's own commit is the marker; the canonical branch has only
+    // "initial", so its presence proves which ref was walked.
+    assert!(
+        summaries.iter().any(|s| s == "commit for develop"),
+        "list_commits must walk the chosen local branch, not the head: {summaries:?}"
+    );
+}
+
+/// The residual ambiguity the `NodeId` parse cannot resolve: a local branch
+/// named literally `<peer-nid>/<branch>` where that peer exists and has that
+/// branch. Both candidates then resolve, and ordering decides which wins.
+///
+/// Contrived, but it is the exact shape that turns a name into a wrong answer,
+/// and the guard against it — trying `refs/heads/<name>` before the peer
+/// namespace — is one line that a later refactor could reorder without
+/// noticing. This test is what makes that reordering fail loudly.
+#[test]
+fn a_local_branch_shaped_like_a_peer_reference_wins_over_the_peer() {
+    use radicle::storage::SignRepository as _;
+
+    let f = init_profile("local-beats-peer");
+    let (rid, work) = init_repo(&f, "collide-repo", "collisions");
+
+    let peer = radicle::crypto::SigningKey::from_seed(radicle::crypto::Seed::new([77u8; 32]));
+    let peer_nid = radicle::crypto::Signer::public_key(&peer).to_string();
+    let me = radicle::crypto::Signer::public_key(&f.profile.signer().expect("signer")).to_string();
+
+    let repo = radicle::git::raw::Repository::open(&work).expect("open working copy");
+    let id = radicle::identity::RepoId::from_urn(&rid).expect("valid rid");
+    let stored =
+        radicle::storage::ReadStorage::repository(&f.profile.storage, id).expect("repo in storage");
+    let storage_path = radicle::storage::WriteRepository::raw(&stored)
+        .path()
+        .to_path_buf();
+
+    // The peer's `wip`, with its own distinctive file.
+    std::fs::write(work.join("THEIRS.md"), "# the peer's\n").expect("write");
+    fixture::commit_all(&repo, "peer wip");
+    let mut remote = repo
+        .remote_anonymous(&storage_path.display().to_string())
+        .expect("remote");
+    remote
+        .push(
+            &[format!("+refs/heads/master:refs/namespaces/{peer_nid}/refs/heads/wip").as_str()],
+            None,
+        )
+        .expect("push peer wip");
+
+    // Now a LOCAL branch whose name is literally `<that peer's nid>/wip`.
+    std::fs::write(work.join("MINE.md"), "# mine\n").expect("write");
+    fixture::commit_all(&repo, "local branch named like a peer ref");
+    let mut remote = repo
+        .remote_anonymous(&storage_path.display().to_string())
+        .expect("remote");
+    remote
+        .push(
+            &[
+                format!("+refs/heads/master:refs/namespaces/{me}/refs/heads/{peer_nid}/wip")
+                    .as_str(),
+            ],
+            None,
+        )
+        .expect("push local lookalike");
+
+    stored.sign_refs(&peer).expect("sign peer refs");
+
+    let v = parse(&radicle_local_ffi::gitread::get_tree(
+        &f.home(),
+        &rid,
+        &format!("{peer_nid}/wip"),
+        "",
+    ));
+    assert!(v.get("error").is_none(), "should read: {v}");
+    let names: Vec<String> = v["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|e| e["name"].as_str().unwrap_or("").to_string())
+        .collect();
+
+    // MINE.md is on the local branch; THEIRS.md alone would mean the peer
+    // namespace won and a local branch silently served a peer's files.
+    assert!(
+        names.iter().any(|n| n == "MINE.md"),
+        "a local branch must win over a same-named peer reference: {names:?}"
+    );
+}
+
 #[test]
 fn a_root_commit_diffs_against_the_empty_tree() {
     let f = init_profile("commit-root");

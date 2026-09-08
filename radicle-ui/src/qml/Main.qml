@@ -54,10 +54,32 @@ Item {
         // which is why onBackendReady and setSeed both call reload() alongside
         // it. Omitting the reload here shipped once: the toggle flipped, the
         // screen cleared, and no request was ever issued.
+        // The reload is deferred by one event-loop turn, and that is
+        // load-bearing rather than defensive. `changed()` is emitted from
+        // inside `select()`, immediately after it assigns `current` — so at
+        // this point `root.source` (a binding to `sourceState.current`) has
+        // NOT been re-evaluated, and neither has anything derived from it.
+        // `repoList.reload()` routes through `call()` -> `methodFor()`, so a
+        // synchronous reload issues `remoteListRepos` for a switch TO local:
+        // the user clicked Local, saw Explore's repositories, and had to
+        // toggle away and back before the second reload picked up the source
+        // the binding had by then settled on.
+        //
+        // Same class as the branch-switch bug CLAUDE.md documents ("A binding
+        // does not update inside the handler that changed its source"), and
+        // the same remedy.
         onChanged: {
             nav.reset();
-            repoList.reload();
+            sourceReload.restart();
         }
+    }
+
+    /// Runs `repoList.reload()` one turn after a source switch — see the
+    /// comment on `onChanged` above for why it cannot be called directly.
+    readonly property Timer sourceReload: Timer {
+        interval: 0
+        repeat: false
+        onTriggered: repoList.reload()
     }
 
     /// Convenience aliases. Views read these rather than reaching through
@@ -195,6 +217,7 @@ Item {
     readonly property int    seedCount: seedPicker.count
     readonly property int    repoTab:   repoPage.tab
     readonly property int    treeCount: repoPage.treeCount
+    readonly property string treeNames: repoPage.treeNames
     readonly property int    commitCount: repoPage.commitCount
     readonly property int    issueCount:  repoPage.issueCount
     readonly property int    patchCount:  repoPage.patchCount
@@ -233,6 +256,10 @@ Item {
     readonly property string repoBranch:        repoPage.branch
     readonly property string repoDefaultBranch: repoPage.defaultBranch
     readonly property int    branchCount:       repoPage.branchCount
+    /// True when the picker split the list into this node's branches and other
+    /// peers' — only ever the case on the local source, and only for a repo
+    /// that has some of each.
+    readonly property bool   branchesGrouped:   repoPage.branchesGrouped
     readonly property string branchLabel:       repoPage.branchLabel
     /// See RepoView.branchPickerItem: a ComboBox's popup delegates live in a
     /// separate window and cannot be clicked by objectName, so the branch spec

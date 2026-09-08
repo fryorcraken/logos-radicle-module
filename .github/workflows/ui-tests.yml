@@ -95,16 +95,22 @@ jobs:
     # fail-fast is off: when two specs break it is worth seeing both, and a
     # spec that fails for seed-side reasons should not hide a real failure in
     # another.
-    # `write` is the odd one out and needs two extra things the others do not:
-    # a Rust toolchain, and a seeded Radicle profile with a signable key. Both
-    # are handled by steps below that are `if`-gated on the spec name, so the
-    # other four jobs pay nothing for it. It is in the matrix rather than
+    # `write` and `local` are the odd ones out and need two things the others
+    # do not: a Rust toolchain, and a seeded Radicle profile. Both are handled
+    # by steps below that are `if`-gated on the spec name, so the four
+    # seed-only jobs pay nothing for them. They are in the matrix rather than
     # excluded because a spec not in the matrix runs nowhere — the state three
     # of these were in before af9a746.
+    #
+    # `local` was excluded for a long time on the grounds that a CI runner has
+    # no Radicle profile. That reason expired when the write spec's seeder was
+    # written: it builds one, and now seeds branches across two peers so the
+    # branch picker's grouping is exercised too. Until then the entire `local*`
+    # surface — half the module — had no end-to-end coverage anywhere.
     strategy:
       fail-fast: false
       matrix:
-        spec: [browse, branches, source, sync, write]
+        spec: [browse, branches, source, sync, write, local]
 
     env:
       # NOTE: BASECAMP_REV is NOT set here. It is derived from
@@ -499,15 +505,20 @@ jobs:
       # The runner image already ships a Rust toolchain — `cargo install` above
       # depends on it — so there is no toolchain step to add.
       #
-      # Gated on the spec name so the other four jobs pay none of this.
-      - name: Seed a throwaway Radicle profile (write spec only)
-        if: matrix.spec == 'write'
+      # Gated on the spec name so the four seed-only jobs pay none of this.
+      - name: Seed a throwaway Radicle profile (local-source specs)
+        if: matrix.spec == 'write' || matrix.spec == 'local'
         run: |
           set -eu
           # Under the runner's workspace, and a path that does not exist yet:
           # the seeder REFUSES an existing directory rather than clearing one,
           # so a mistyped path can never land on somebody's ~/.radicle.
-          scratch="$RUNNER_TEMP/write-e2e-profile"
+          # Named per spec. Each matrix job has its own runner and its own
+          # $RUNNER_TEMP, so a shared name would not actually collide — but two
+          # specs seeding into a path called "write-e2e-profile" reads as a
+          # mistake to the next person, and the failure it would cause if the
+          # jobs ever shared a runner is a silent one.
+          scratch="$RUNNER_TEMP/${{ matrix.spec }}-e2e-profile"
           seeded=$(cd radicle/rust-ffi && cargo run --quiet --example seed_write_profile -- "$scratch")
           rad_home=$(printf '%s\n' "$seeded" | sed -n '1p')
           # storage/ is the marker LocalStore uses to decide a profile is real.
@@ -526,10 +537,10 @@ jobs:
       # RAD_HOME before $HOME/.radicle. So the seeded profile reaches the module
       # only through --env, and every local spec needs it — see
       # radicle-ui/tests/run-local-e2e.sh, which documents the failure at
-      # length. Empty for the four read specs, which never leave the seed
+      # length. Empty for the four seed-only specs, which never leave the seed
       # source and must NOT be handed a profile they have no use for.
-      - name: Point the spec at the seeded profile (write spec only)
-        if: matrix.spec == 'write'
+      - name: Point the spec at the seeded profile (local-source specs)
+        if: matrix.spec == 'write' || matrix.spec == 'local'
         run: echo "SPEC_ENV=--env RAD_HOME=$RAD_HOME" >> "$GITHUB_ENV"
 
       # sitometres reads $APP_DIR directly — verified by a real run. It follows
@@ -563,9 +574,9 @@ jobs:
           # green tick on no evidence is worse than a red one. Without it
           # sitometres exits 0 on INCONCLUSIVE by design.
           # $SPEC_ENV is deliberately UNQUOTED: it is either empty (the four
-          # read specs) or the two words `--env RAD_HOME=<path>` (the write
-          # spec), and quoting would pass the whole thing as one argument.
-          # `${SPEC_ENV:-}` because `set -u` is on and the four read specs
+          # seed-only specs) or the two words `--env RAD_HOME=<path>` (write
+          # and local), and quoting would pass the whole thing as one argument.
+          # `${SPEC_ENV:-}` because `set -u` is on and the seed-only specs
           # never set it. The path cannot contain spaces — it is built from
           # $RUNNER_TEMP by the seed step above — so word splitting is safe
           # here in a way it would not be for an arbitrary value.

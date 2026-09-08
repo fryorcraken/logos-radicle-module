@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use radicle::crypto::Seed;
+use radicle::crypto::Signer;
 use radicle::git::fmt::RefString;
 use radicle::identity::project::ProjectName;
 use radicle::identity::Visibility;
@@ -116,6 +117,64 @@ fn init_repo_with(
     .expect("rad init failed");
 
     rid.urn()
+}
+
+/// Create branches under a peer's namespace and sign them, the way real
+/// storage holds every peer's branches:
+/// `refs/namespaces/<nid>/refs/heads/<branch>`, attested by that peer's
+/// `rad/sigrefs`.
+///
+/// This is the shape that made the branch picker show one entry for every
+/// repo. A fixture that only ever calls `rad::init` cannot expose it — the
+/// canonical `refs/heads/<default>` that `init` writes is exactly the one ref
+/// the old glob did find, so the bug was invisible to a self-consistent
+/// fixture. Confirmed against this machine's real storage with
+/// `rad inspect --refs` before being written here.
+///
+/// The refs must be *signed*, not merely written: `list_branches` reads
+/// `remotes()`, which replays each peer's signed ref set rather than globbing
+/// raw namespaces. Writing a bare git ref and skipping the signature would
+/// produce a fixture that fails for a reason unrelated to the bug.
+fn init_signed_branches(fixture: &Fixture, rid: &str, signer: &impl Signer, branches: &[&str]) {
+    let id = radicle::identity::RepoId::from_urn(rid).expect("invalid rid");
+    let repo = radicle::storage::ReadStorage::repository(&fixture.profile.storage, id)
+        .expect("repo not in storage");
+    let remote = signer.public_key();
+
+    // Point every new branch at whatever the canonical head already is: these
+    // tests are about which refs are *found*, not about divergent history.
+    let head = radicle::storage::WriteRepository::raw(&repo)
+        .revparse_single("refs/heads/master")
+        .expect("no canonical master in fixture")
+        .peel_to_commit()
+        .expect("master is not a commit")
+        .id();
+
+    for branch in branches {
+        radicle::storage::WriteRepository::raw(&repo)
+            .reference(
+                &format!("refs/namespaces/{remote}/refs/heads/{branch}"),
+                head,
+                true,
+                "fixture branch",
+            )
+            .expect("could not create namespaced branch");
+    }
+
+    radicle::storage::SignRepository::sign_refs(&repo, signer).expect("could not sign refs");
+}
+
+/// A throwaway keypair standing in for another peer on the network. Real
+/// rather than a literal node-id string because signing that peer's refs
+/// needs its private half.
+fn peer_signer(seed: u8) -> radicle::crypto::SigningKey {
+    radicle::crypto::SigningKey::from_seed(Seed::new([seed; 32]))
+}
+
+/// The local node's own signer — the namespace the user's own branches live
+/// under.
+fn local_signer(fixture: &Fixture) -> impl Signer {
+    fixture.profile.signer().expect("could not load signer")
 }
 
 fn parse(json: &str) -> serde_json::Value {
@@ -353,6 +412,158 @@ fn get_repo_reports_visibility_and_delegates() {
             .unwrap_or("")
             .starts_with("did:key:"),
         "a delegate is identified by DID: {v}"
+    );
+}
+
+/// The bug this file's `init_namespaced_branch` helper exists for: branches
+/// live under `refs/namespaces/<nid>/refs/heads/*`, not the canonical
+/// `refs/heads/*`, so globbing the latter found exactly one branch per repo.
+#[test]
+fn list_branches_finds_branches_under_the_local_namespace() {
+    let fixture = init_profile("branches-local");
+    let rid = init_repo(&fixture, "proj", "a repo");
+    let me = local_signer(&fixture);
+    init_signed_branches(&fixture, &rid, &me, &["develop", "feature/thing"]);
+
+    let v = parse(&radicle_local_ffi::local::list_branches(
+        &fixture.home(),
+        &rid,
+    ));
+    let items = v["items"].as_array().expect("items is an array");
+    let names: Vec<&str> = items.iter().filter_map(|i| i["name"].as_str()).collect();
+
+    assert!(
+        names.contains(&"develop") && names.contains(&"feature/thing"),
+        "own-namespace branches must be listed, got {names:?}"
+    );
+    assert!(
+        names.contains(&"master"),
+        "the default branch must still be listed, got {names:?}"
+    );
+    assert!(
+        items.iter().all(|i| i["isLocal"] == true),
+        "every branch here is the local node's: {v}"
+    );
+}
+
+/// A local branch keeps its bare name, so it resolves exactly as it did
+/// before this change — `resolveSha` and every `local*` read are keyed on it.
+#[test]
+fn a_peer_branch_is_qualified_by_node_id_and_a_local_one_is_not() {
+    let fixture = init_profile("branches-peer");
+    let rid = init_repo(&fixture, "proj", "a repo");
+    let me = local_signer(&fixture);
+    let peer = peer_signer(42);
+    let peer_nid = peer.public_key().to_string();
+    init_signed_branches(&fixture, &rid, &me, &["develop"]);
+    init_signed_branches(&fixture, &rid, &peer, &["develop"]);
+
+    let v = parse(&radicle_local_ffi::local::list_branches(
+        &fixture.home(),
+        &rid,
+    ));
+    let items = v["items"].as_array().expect("items is an array");
+
+    let local: Vec<&str> = items
+        .iter()
+        .filter(|i| i["isLocal"] == true)
+        .filter_map(|i| i["name"].as_str())
+        .collect();
+    let peers: Vec<&str> = items
+        .iter()
+        .filter(|i| i["isLocal"] == false)
+        .filter_map(|i| i["name"].as_str())
+        .collect();
+
+    assert!(
+        local.contains(&"develop"),
+        "the local branch keeps its bare name: {local:?}"
+    );
+    assert!(
+        peers.contains(&format!("{peer_nid}/develop").as_str()),
+        "a peer branch is qualified by node id: {peers:?}"
+    );
+    // Two branches share the name `develop`; qualifying the peer's is what
+    // stops one shadowing the other in the picker and, worse, resolving to
+    // the wrong commit. Asserted as "both survive" rather than a total count,
+    // because how many refs `rad::init` and `sign_refs` seed a namespace with
+    // is the crate's business, not this test's.
+    assert_eq!(
+        local.iter().filter(|n| **n == "develop").count(),
+        1,
+        "exactly one local develop: {local:?}"
+    );
+    assert_eq!(
+        peers
+            .iter()
+            .filter(|n| **n == format!("{peer_nid}/develop"))
+            .count(),
+        1,
+        "exactly one peer develop, not collapsed into the local one: {peers:?}"
+    );
+}
+
+/// Ordering is load-bearing: the picker draws its separator at the first
+/// non-local entry, so a peer branch sorting above a local one would put the
+/// divider in the wrong place.
+#[test]
+fn local_branches_are_listed_before_peer_branches() {
+    let fixture = init_profile("branches-order");
+    let rid = init_repo(&fixture, "proj", "a repo");
+    let me = local_signer(&fixture);
+    let peer = peer_signer(43);
+    // `aaa` sorts before every local branch name, so a single flat sort over
+    // the merged list would pull this peer entry to the top. Only grouping
+    // local-first keeps it below.
+    init_signed_branches(&fixture, &rid, &peer, &["aaa"]);
+    init_signed_branches(&fixture, &rid, &me, &["zzz"]);
+
+    let v = parse(&radicle_local_ffi::local::list_branches(
+        &fixture.home(),
+        &rid,
+    ));
+    let items = v["items"].as_array().expect("items is an array");
+
+    let first_peer = items.iter().position(|i| i["isLocal"] == false);
+    let last_local = items.iter().rposition(|i| i["isLocal"] == true);
+    assert!(
+        matches!((first_peer, last_local), (Some(p), Some(l)) if l < p),
+        "every local branch precedes every peer branch: {v}"
+    );
+}
+
+/// `refs/heads/patches/<id>` is a patch head, not a branch. On a real profile
+/// these outnumber branches roughly 8:1 (heartwood: 658 refs, 84 branches),
+/// so listing them would bury the branches the picker exists to show.
+#[test]
+fn patch_refs_are_not_listed_as_branches() {
+    let fixture = init_profile("branches-patches");
+    let rid = init_repo(&fixture, "proj", "a repo");
+    let me = local_signer(&fixture);
+    init_signed_branches(
+        &fixture,
+        &rid,
+        &me,
+        &[
+            "develop",
+            "patches/0026238e8d80d8539759bbd427c9b4d5f22342e4",
+        ],
+    );
+
+    let v = parse(&radicle_local_ffi::local::list_branches(
+        &fixture.home(),
+        &rid,
+    ));
+    let items = v["items"].as_array().expect("items is an array");
+    let names: Vec<&str> = items.iter().filter_map(|i| i["name"].as_str()).collect();
+
+    assert!(
+        names.contains(&"develop"),
+        "a real branch is still listed: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("patches/")),
+        "patch refs are not branches: {names:?}"
     );
 }
 

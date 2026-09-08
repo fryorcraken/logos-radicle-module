@@ -87,6 +87,9 @@ Item {
     /// is a second implementation of anything, so a spec asserting on them is
     /// asserting on what the UI itself uses.
     readonly property int treeCount:   source.entryCount
+    /// The current directory's entry names — see SourceTab.entryNames for why
+    /// a spec needs the names and not just the count.
+    readonly property string treeNames: source.entryNames
     readonly property int commitCount: commits.count
     readonly property int issueCount:  issues.count
     readonly property int patchCount:  patches.count
@@ -126,8 +129,16 @@ Item {
     readonly property int    fileBodyLength:  source.viewerBodyLength
 
     // ---- branch ----
-    readonly property int    branchCount:  branchPicker.count
-    readonly property string branchLabel:  branchPicker.displayText
+    /// Selectable branches, including the pinned repository default.
+    readonly property int    branchCount:  branchPicker.branchCount
+    /// Whether the list is grouped by peer — false for the seed source, which
+    /// sends no peer information.
+    readonly property bool   branchesGrouped: branchPicker.hasSeparator
+    /// What the closed picker displays: the BARE branch name. `branch` carries
+    /// the peer-qualified value every read is keyed on, so these two differ
+    /// for a peer's branch by design — the node id lives in a section header,
+    /// not on the chip.
+    readonly property string branchLabel:  branchPicker.displayLabel
     /// The picker itself, so an end-to-end spec can emit its `activated`
     /// signal — which is exactly what a click on a popup delegate emits.
     ///
