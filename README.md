@@ -14,10 +14,15 @@ Basecamp a view onto that network.
   and READMEs, page through commits with their diffs, and read issues and
   patches with the full discussion thread. No Radicle install, no local node,
   no account.
+- **Download a repository for faster browsing.** One button caches everything
+  the seed has, so browsing afterwards needs no further round trips. It tells
+  you which state you are in — *Download All* the first time, a percentage
+  while it runs, *Re-sync* once done, and *Update* when a later check finds the
+  branch has moved on.
 - **Browse your own node.** If you already run Radicle on this machine, point
   the module at `~/.radicle` instead: your private repositories included, and
-  it works offline. Switch branches, and see when a repository has drifted from
-  what your node last fetched.
+  it works offline. Switch branches, including those of every peer your node
+  has fetched.
 - **Take part.** Comment on an issue, or open a new one, signed by your own
   Radicle key. Writing goes through your local node, so it needs a Radicle
   install with a reachable signing key — the buttons only appear when the
