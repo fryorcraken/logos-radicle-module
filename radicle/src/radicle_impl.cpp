@@ -246,10 +246,10 @@ std::string RadicleImpl::getCapabilities()
 
     // The startable SET, not just a boolean about the mode in force. A picker
     // draws three rows and has to annotate each one *before* it is chosen; the
-    // boolean cannot answer that, because in `local` — the default — it is true
-    // and says nothing whatever about Embedded. Deriving the set from it left
-    // the Embedded row uncaveated in exactly the state every new user starts
-    // in. See SettingsStore::startableModes().
+    // boolean cannot answer that, because in `explore` — the default — it is
+    // true and says nothing whatever about Embedded. Deriving the set from it
+    // left the Embedded row uncaveated in exactly the state every new user
+    // starts in. See SettingsStore::startableModes().
     nlohmann::json startableModes = nlohmann::json::array();
     for (const auto& m : radicle::SettingsStore::startableModes())
         startableModes.push_back(m);

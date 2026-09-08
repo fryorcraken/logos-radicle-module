@@ -114,12 +114,14 @@ public:
     /// **This exists because `modeIsStartable(currentMode)` cannot substitute
     /// for it, and a UI that tried to derive one from the other shipped a real
     /// bug.** The boolean is a fact about the mode in force; a picker needs the
-    /// fact for every row it draws. In `local` — the default, and where every
+    /// fact for every row it draws. In `explore` — the default, and where every
     /// first-time user is — the boolean is true, from which nothing at all
-    /// follows about Embedded. Deriving the set from it therefore annotated
-    /// nothing, and the user learned Embedded could not run only *after*
-    /// selecting it and having the choice persisted: a control that silently
-    /// does nothing, which is precisely what `ModePicker` promises never to be.
+    /// follows about Embedded. The same holds in `local`: both startable modes
+    /// report true and say nothing about the third. Deriving the set from the
+    /// boolean therefore annotated nothing, and the user learned Embedded could
+    /// not run only *after* selecting it and having the choice persisted: a
+    /// control that silently does nothing, which is precisely what `ModePicker`
+    /// promises never to be.
     ///
     /// So the set is reported directly and consumed directly. When Phase 2
     /// lands its daemon this and `modeIsStartable` change together — they are

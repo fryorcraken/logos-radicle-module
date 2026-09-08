@@ -240,14 +240,20 @@ needed: the portable build *and* `--variant`.
 sitometres gives every run a **throwaway `$HOME`** so a test cannot touch your
 real wallets and keys. `LocalStore` resolves the Radicle home from `RAD_HOME`,
 else `$HOME/.radicle` — so under that throwaway HOME there is no profile,
-`getCapabilities` reports `localAvailable=false`, the toggle hides its "Local"
-segment, and `local.yaml` fails at step 3 with
+`getCapabilities` reports `localAvailable=false`, and `local.yaml` fails with
 
 ```
 state "root.localAvailable === true" — evaluated to false
 ```
 
 on **every** machine, including one with a perfectly good profile.
+
+Two details of that sentence have since changed. The toggle does **not** hide
+its "Local" segment — the three-segment control draws all three and annotates
+the ones that cannot work, so the click target is always there. And that
+assertion now runs **after** the click rather than before it, because
+`localAvailable` is reported for the mode in force and the app starts in
+`explore`; see "The app starts in Explore" below.
 
 That spec's header used to claim the failure meant "this machine has no Radicle
 profile". It did not, and the mistake was expensive: the one automated check
@@ -282,6 +288,43 @@ two processes contending on the same git storage. Five consecutive clean runs
 with no other instance up; two failures while an interactive `lgs basecamp
 launch alice` was being driven by hand. Close the interactive instance first,
 and do not read a lone step-9 failure as a code defect until you have.
+
+## The app starts in Explore, and every spec depends on that
+
+A run under sitometres has a throwaway `$HOME` and therefore no settings file,
+so what the app opens in is `SettingsStore::load()`'s **default mode**. That
+default is `explore`, and the reason is the one this layer proves: `explore` is
+the only mode that can show anything without a local profile, which is exactly
+what a throwaway `$HOME` — and a first-run user — has.
+
+It was `local` for one milestone, defended by a comment about not changing
+behaviour for existing users. Every seed-browsing spec (`browse`, `branches`,
+`source`, `sync`) went red at once, all at the step where repositories were
+supposed to arrive, because the app issued `localListRepos` against a home that
+did not exist and never asked the seed. `write` survived only because it clicks
+`sourceToggle_local` explicitly rather than relying on the default — which is
+the useful signal, not luck: **a spec that names the mode it needs is immune to
+the default moving.**
+
+Two consequences for writing specs here:
+
+- **Do not assert `localAvailable`, `canWrite`, `nodeIdentity` or anything else
+  mode-scoped before switching modes.** `storeForSettings()` hands Explore a
+  store with no home *by design* — Explore means "do not touch a local profile"
+  — so all of them are false in Explore however good the profile is. `local`
+  and `write` both had such assertions ahead of their click, passing only
+  because the default happened to be `local`; both now click first.
+- **Prefer `wait_for` over `expect` for anything downstream of a mode click.**
+  Switching mode is a backend round trip (`setSetting`, then a fresh
+  `getCapabilities`), so a synchronous `expect` immediately after the click
+  races the reply.
+
+The QML side has a matching default: `SourceState.mode` starts at `explore` and
+`Main.qml` binds `caps.mode || "explore"`. That fallback covers the window
+between `Component.onCompleted` and the first capabilities reply — and it is a
+real window, because `onBackendReady()` calls `repoList.reload()` without
+waiting for one. `tst_source.qml` pins it on a `SourceState` nothing has
+assigned to, which is the only way to observe it.
 
 ## If `open` hangs on step 1
 

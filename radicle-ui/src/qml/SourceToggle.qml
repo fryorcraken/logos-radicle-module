@@ -96,8 +96,9 @@ import "Theme.js" as Theme
  * that works).
  *
  * Both are keyed on `startableModes` (a fact about the build) rather than on
- * `modeStartable` (a fact about the mode in force, which is true in the default
- * `local` state and says nothing whatever about Embedded).
+ * `modeStartable` (a fact about the mode in force, which is true in every
+ * startable mode — the default `explore` included — and says nothing whatever
+ * about Embedded).
  *
  * ## One vocabulary, top to bottom
  *
@@ -111,7 +112,13 @@ Item {
     id: toggle
 
     /// The persisted mode: "explore" | "local" | "embedded".
-    property string mode: "local"
+    ///
+    /// The initial value matches `SettingsStore`'s default and `SourceState`'s,
+    /// so the three cannot disagree about what "nobody has said yet" means. In
+    /// practice `Main.qml` always binds this, so it is only ever seen by a
+    /// caller that forgets to — and the mode that touches no local profile is
+    /// the right thing for such a caller to get.
+    property string mode: "explore"
 
     /// Which modes this build can actually start, from
     /// `getCapabilities().startableModes`.

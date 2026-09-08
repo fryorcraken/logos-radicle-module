@@ -49,8 +49,9 @@ Column {
     /// **This must come from `getCapabilities().startableModes`, never from
     /// `modeStartable`.** The latter is a fact about the mode in force; this is
     /// a fact about the build, and one cannot be derived from the other. A
-    /// caller that tried shipped a picker which, in the default `local` state,
-    /// offered Embedded with no caveat at all — see SettingsPanel.qml.
+    /// caller that tried shipped a picker which, in any startable mode — the
+    /// default `explore` included — offered Embedded with no caveat at all.
+    /// See SettingsPanel.qml.
     ///
     /// The default is deliberately conservative rather than "the two that work
     /// today": a caller that forgets to wire this gets over-annotation, which

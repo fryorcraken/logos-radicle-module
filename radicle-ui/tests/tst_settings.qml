@@ -611,19 +611,24 @@ Item {
         }
 
         function test_a_non_startable_mode_says_so_in_its_own_row() {
-            // The honesty guarantee, asserted IN THE DEFAULT STATE — mode
-            // "local", which is startable. That is the whole point: the panel
-            // used to derive its startable set from `caps.modeStartable`, a
-            // fact about the CURRENT mode, so with local selected the set
-            // became all three and Embedded was offered with no caveat at all.
-            // The user selected it, it persisted, and only then did a warning
-            // appear — a control that silently does nothing.
+            // The honesty guarantee, asserted in a STARTABLE mode — "local".
+            // That is the whole point: the panel used to derive its startable
+            // set from `caps.modeStartable`, a fact about the CURRENT mode, so
+            // with a startable mode selected the set became all three and
+            // Embedded was offered with no caveat at all. The user selected it,
+            // it persisted, and only then did a warning appear — a control that
+            // silently does nothing.
             //
             // This test passed before only because the fixture hardcoded
             // `modeStartable: false`, which is the same-answer-for-every-input
-            // trap in fixture form. With the fixture describing the real
-            // default, the assertion is about the panel again.
-            compare(panel.caps.mode, "local", "the default state, on purpose");
+            // trap in fixture form. With the fixture describing a real startable
+            // mode, the assertion is about the panel again.
+            //
+            // `local` rather than the first-run default `explore` because both
+            // are startable and either exposes the bug; pinning it to whatever
+            // the default happens to be would make this test need editing every
+            // time that moves.
+            compare(panel.caps.mode, "local", "a startable mode, on purpose");
             compare(panel.caps.modeStartable, true,
                     "local IS startable — which is exactly why deriving the "
                     + "set from this boolean cannot work");

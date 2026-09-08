@@ -356,15 +356,21 @@ Item {
         /// "control that silently does nothing" failure.
         ///
         /// So with the paragraph gone from the default state, the SEGMENT
-        /// itself has to carry the indication. Asserted in mode `local` — the
-        /// state every first-time user is in, and the one where the caption is
-        /// now absent — because that is exactly where the guarantee could be
-        /// lost without anything else going red.
+        /// itself has to carry the indication. Asserted in mode `local` — a
+        /// STARTABLE mode where the caption is absent — because that is exactly
+        /// where the guarantee could be lost without anything else going red.
+        ///
+        /// `local` rather than the first-run default `explore` only because the
+        /// two are interchangeable for this test's purpose: what it needs is a
+        /// mode whose own startability says nothing about Embedded, and both
+        /// startable modes qualify. Fixing this to the current default would
+        /// make the test re-need editing every time the default moves, for no
+        /// gain.
         ///
         /// Not behind hover: the user rejected tooltips here, and this repo's
         /// last one rendered as a clipped, unreadable sliver.
         function test_the_embedded_segment_is_marked_unavailable_by_default() {
-            compare(toggle.mode, "local", "the default state, on purpose");
+            compare(toggle.mode, "local", "a startable mode, on purpose");
             verify(toggle.isStartable(toggle.mode),
                    "the mode in force IS startable — so nothing about the "
                    + "current mode could be supplying this marker");
@@ -942,6 +948,17 @@ Item {
         onChanged: reloads++
     }
 
+    /// A SourceState nothing has assigned to, which is the state the real one is
+    /// in between `Component.onCompleted` and the first `getCapabilities` reply.
+    ///
+    /// Deliberately separate from `sourceState` above: every test there sets
+    /// `mode` in `init()`, so none of them can see what the component does
+    /// before anyone tells it anything — and that window is exactly where the
+    /// first `ListRepos` call is issued.
+    Ui.SourceState {
+        id: untouchedState
+    }
+
     property int reloads: 0
 
     // The reload a mode switch triggers must go to the NEW surface.
@@ -1005,6 +1022,30 @@ Item {
             sourceState.mode = "embedded";
             compare(sourceState.current, "local");
             compare(sourceState.methodFor("ListRepos"), "localListRepos");
+        }
+
+        /// Before capabilities arrive, the UI must route to the SEED.
+        ///
+        /// `Main.qml`'s `onBackendReady()` calls `repoList.reload()` without
+        /// waiting for the first `getCapabilities` reply, so whatever `current`
+        /// evaluates to in that window decides which backend surface the very
+        /// first list call actually reaches. The initial `mode` was `local`,
+        /// which meant a machine with no Radicle profile issued
+        /// `localListRepos`, got the "no local profile" error, and sat on an
+        /// empty list having never asked the seed — every seed-browsing
+        /// end-to-end spec failed at once for exactly this.
+        ///
+        /// Asserted on a SourceState nothing has assigned to, because that is
+        /// the only way to see the pre-capabilities value: the other TestCase's
+        /// `init()` sets `mode` before every test, which is precisely what hid
+        /// this. Asserted on `current` rather than on `mode`, because the method
+        /// prefix is what the bug was made of — a different initial mode that
+        /// still derived to `remote` would be just as correct.
+        function test_before_capabilities_arrive_the_surface_is_the_seed() {
+            compare(untouchedState.current, "remote",
+                    "the pre-capabilities guess must not reach the local* "
+                    + "methods — there may be no profile to read");
+            compare(untouchedState.methodFor("ListRepos"), "remoteListRepos");
         }
 
         /// A mode this UI does not know routes to the SEED, not to the node.

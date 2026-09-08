@@ -76,12 +76,15 @@ LOGOS_TEST(a_write_through_one_store_is_invisible_to_a_store_elsewhere)
     SettingsStore alice{a.path()};
     SettingsStore bob{b.path()};
 
-    alice.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
+    // A NON-default mode, so the assertion below can tell "bob read his own
+    // file" from "bob read alice's". Writing the default would pass against a
+    // shared file, which is the same-answer-for-every-input trap.
+    alice.set(SettingsStore::kKeyMode, SettingsStore::kModeLocal);
 
-    // bob never wrote a mode, so it must still report the default — not
-    // alice's. A shared file would hand back `explore` here.
+    // bob never wrote a mode, so he must still report the default — not
+    // alice's. A shared file would hand back `local` here.
     LOGOS_ASSERT_EQ(bob.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeLocal));
+                    std::string(SettingsStore::kModeExplore));
 }
 
 // ---------------------------------------------------------------------------
@@ -109,13 +112,16 @@ LOGOS_TEST(setting_one_key_leaves_the_others_untouched)
     ScratchSettings s("independent");
     SettingsStore store{s.path()};
 
-    store.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
+    // A NON-default mode, so the assertion below distinguishes "the first write
+    // survived the second" from "the mode fell back to its default". Writing
+    // `explore` here would satisfy the assertion either way.
+    store.set(SettingsStore::kKeyMode, SettingsStore::kModeLocal);
     store.set(SettingsStore::kKeyRemoteSeed, "https://kept.example");
 
     // Distinct values again, so a store that overwrote the whole file on every
     // write would lose the first one and fail here.
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeExplore));
+                    std::string(SettingsStore::kModeLocal));
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyRemoteSeed),
                     std::string("https://kept.example"));
 }
@@ -146,11 +152,10 @@ LOGOS_TEST(a_missing_settings_file_yields_defaults_rather_than_an_error)
     ScratchSettings s("missing");
     SettingsStore store{s.path()};
 
-    // `local`, because that is what the module did before settings existed:
-    // read whatever home the environment names. A user upgrading must not find
-    // the module behaving differently.
+    // `explore`. See the default-mode test below for why this is the specific
+    // value rather than merely "some known mode".
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeLocal));
+                    std::string(SettingsStore::kModeExplore));
 }
 
 LOGOS_TEST(a_corrupted_settings_file_yields_defaults_rather_than_a_dead_module)
@@ -160,7 +165,64 @@ LOGOS_TEST(a_corrupted_settings_file_yields_defaults_rather_than_a_dead_module)
 
     SettingsStore store{s.path()};
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeLocal));
+                    std::string(SettingsStore::kModeExplore));
+}
+
+LOGOS_TEST(the_default_mode_needs_no_local_profile_to_show_anything)
+{
+    // The first-run guarantee, and the reason the default is Explore.
+    //
+    // The default used to be `local`, on the argument that it preserved what
+    // the module did before modes existed. That argument is about a user who
+    // ALREADY has a working profile — but the default is what a user with NO
+    // settings file gets, and the overwhelmingly common case for that is a
+    // first run, where there may be no Radicle home at all. In `local` with no
+    // profile the module can show nothing: `localListRepos` is the only list
+    // call the UI will issue, it returns the "no local profile" error, and the
+    // repository list stays empty with the seed never asked.
+    //
+    // That is not hypothetical. Every seed-browsing end-to-end spec runs under
+    // a throwaway `$HOME` with no profile, and all of them broke at once the
+    // moment the `local` default landed — the app started in a mode that could
+    // not answer.
+    //
+    // Asserted as a PROPERTY of the default rather than as the literal string
+    // `explore`, because the property is what actually matters and it survives
+    // a future fourth mode: whatever the default is, it must be a mode that
+    // reaches a seed over HTTP rather than one that needs a home on this
+    // machine. `local` and `embedded` both fail that; only `explore` passes.
+    ScratchSettings s("first-run-default");
+    SettingsStore store{s.path()};
+
+    const auto mode = store.get(SettingsStore::kKeyMode);
+
+    LOGOS_ASSERT_TRUE(SettingsStore::isKnownMode(mode));
+    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(mode));
+    LOGOS_ASSERT_TRUE(mode != std::string(SettingsStore::kModeLocal));
+    LOGOS_ASSERT_TRUE(mode != std::string(SettingsStore::kModeEmbedded));
+}
+
+LOGOS_TEST(the_default_and_the_unknown_mode_fallback_agree)
+{
+    // Two answers to two different questions that happen to coincide, and this
+    // pins the coincidence so a future change to either one is a deliberate
+    // divergence rather than an accident.
+    //
+    // `load()` gives an uninterpretable stored mode Explore, on the grounds
+    // that a file this build cannot read is no basis for claiming a node
+    // identity. The default now agrees, on the different grounds that a first
+    // run has no profile to read. The file was inconsistent about this for one
+    // milestone, and the inconsistency was the bug: the fallback path was
+    // right and the default path was not.
+    ScratchSettings fresh("agreement-fresh");
+    ScratchSettings junk("agreement-junk");
+    junk.write(R"({"mode":"turbo"})");
+
+    SettingsStore freshStore{fresh.path()};
+    SettingsStore junkStore{junk.path()};
+
+    LOGOS_ASSERT_EQ(freshStore.get(SettingsStore::kKeyMode),
+                    junkStore.get(SettingsStore::kKeyMode));
 }
 
 LOGOS_TEST(unknown_keys_in_the_file_are_ignored_rather_than_surfaced)
@@ -255,10 +317,10 @@ LOGOS_TEST(an_unknown_mode_is_refused_and_the_message_lists_the_valid_ones)
     LOGOS_ASSERT_CONTAINS(result["error"].get<std::string>(),
                           std::string(SettingsStore::kModeEmbedded));
 
-    // And the stored value is untouched, which is the half a return-only
-    // assertion would miss.
+    // And the stored value is untouched — still the default, since nothing was
+    // ever written. This is the half a return-only assertion would miss.
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeLocal));
+                    std::string(SettingsStore::kModeExplore));
 }
 
 LOGOS_TEST(all_three_modes_are_accepted)
@@ -401,10 +463,20 @@ LOGOS_TEST(a_store_with_no_path_still_reports_defaults_rather_than_failing)
 {
     SettingsStore store{""};
     LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
-                    std::string(SettingsStore::kModeLocal));
+                    std::string(SettingsStore::kModeExplore));
 
     // ...and refuses to write, naming the problem rather than silently
     // pretending the value was stored.
-    const auto result = store.set(SettingsStore::kKeyMode, SettingsStore::kModeExplore);
+    //
+    // A mode OTHER than the default, deliberately: writing the default would
+    // leave the store reporting the same value whether the write was refused,
+    // silently dropped, or genuinely applied, so the follow-up assertion could
+    // not tell them apart.
+    const auto result = store.set(SettingsStore::kKeyMode, SettingsStore::kModeLocal);
     LOGOS_ASSERT_TRUE(isError(result));
+
+    // And nothing changed, which is what makes the refusal above mean
+    // something rather than merely being reported.
+    LOGOS_ASSERT_EQ(store.get(SettingsStore::kKeyMode),
+                    std::string(SettingsStore::kModeExplore));
 }

@@ -18,12 +18,19 @@
 # sitometres gives every run a throwaway $HOME so a test cannot touch your real
 # wallets and keys. LocalStore resolves the Radicle home from RAD_HOME, else
 # $HOME/.radicle — so under that throwaway HOME there is no profile,
-# getCapabilities reports localAvailable=false, the toggle hides its "Local"
-# segment, and step 3 below fails with
+# getCapabilities reports localAvailable=false, and the "this machine has a
+# local Radicle profile" step below fails with
 #
 #     state "root.localAvailable === true" — evaluated to false
 #
 # on EVERY machine, including one with a perfectly good profile.
+#
+# Two details in that sentence have since changed and are worth not
+# re-deriving. The toggle does NOT hide its "Local" segment — the M3 three-
+# segment control always draws all three and annotates the ones that cannot
+# work, so the click target exists regardless. And the profile assertion now
+# runs AFTER the switch rather than before it, because `localAvailable` is
+# reported for the mode in force and the app starts in `explore`.
 #
 # This header used to claim that failure meant "this machine has no Radicle
 # profile". It did not, and the mistake was expensive: the one automated check
@@ -128,14 +135,20 @@ steps:
       state: "root.ready === true"
     timeout: 45s
 
-  # getCapabilities() drives whether the toggle offers a local segment at all.
-  # Asserting it before clicking turns "this machine has no node" into a clear
-  # failure here rather than a confusing missing-element failure one step down.
-  - name: this machine has a local Radicle profile
-    wait_for:
-      state: "root.localAvailable === true"
-    timeout: 45s
-
+  # The app starts in `explore`, so the switch comes FIRST and the profile
+  # assertion comes after it.
+  #
+  # This order is load-bearing. `localAvailable` is reported for the mode IN
+  # FORCE, and `storeForSettings()` gives Explore a store with no home at all —
+  # deliberately, because Explore means "do not touch a local profile". So it is
+  # false in Explore however good the profile is, and asserting it before the
+  # switch would fail on a perfectly prepared machine.
+  #
+  # It used to run before the click, and passed only because the default mode
+  # was `local`. That default was itself a bug — a first run with no profile
+  # could show nothing at all — and this spec depending on it is what made the
+  # dependency invisible. Asserting after the switch also tests the right thing:
+  # the claim is about Local finding a profile, so Local has to be in force.
   - name: switch to the local node
     click: { objectName: "sourceToggle_local" }
 
@@ -143,6 +156,14 @@ steps:
     wait_for:
       state: "root.source === 'local'"
     timeout: 30s
+
+  # Now that Local is in force, getCapabilities reports what it found. Asserting
+  # it here turns "this machine has no node" into a clear failure that says so,
+  # rather than a confusing empty-list failure one step down.
+  - name: this machine has a local Radicle profile
+    wait_for:
+      state: "root.localAvailable === true"
+    timeout: 45s
 
   # The payoff: repositories read out of ~/.radicle/storage, with no network
   # involved. A node with a profile but no repositories would legitimately
@@ -385,10 +406,11 @@ steps:
   # `startableModes` is asserted first, and it is asserted as a SET rather than
   # via `modeStartable`. The two answer different questions — "which modes can
   # this build start?" against "can the mode in force start?" — and deriving
-  # one from the other is a bug this module shipped twice: in the default
-  # `local` mode the boolean is true, so a picker deriving from it offered
-  # Embedded with no caveat whatever. The set is the only thing that can be
-  # true here BEFORE Embedded is selected.
+  # one from the other is a bug this module shipped twice: in ANY startable mode
+  # (which `local`, in force here, is — as is `explore`, where the app starts)
+  # the boolean is true, so a picker deriving from it offered Embedded with no
+  # caveat whatever. The set is the only thing that can be true here BEFORE
+  # Embedded is selected.
   - name: Embedded is marked unstartable before it is chosen
     expect:
       state:

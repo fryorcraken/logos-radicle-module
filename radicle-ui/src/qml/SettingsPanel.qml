@@ -271,8 +271,9 @@ Item {
             // Consumed straight from capabilities. This used to be DERIVED from
             // `caps.modeStartable`, and that was a real bug rather than a
             // stylistic one: the boolean answers "can the mode in force start?"
-            // and the picker needs "which modes can start at all?". In `local` —
-            // the default, and where every first-time user is — the boolean is
+            // and the picker needs "which modes can start at all?". In ANY
+            // startable mode — `explore`, the default and where every first-time
+            // user is, as much as `local` — the boolean is
             // true, so the derivation produced all three modes and the Embedded
             // row carried no caveat whatever. The user selected it, it
             // persisted, and only THEN did a warning appear: a control that

@@ -109,12 +109,41 @@ bool SettingsStore::modeIsStartable(const std::string& mode)
 nlohmann::json SettingsStore::load() const
 {
     nlohmann::json defaults{
-        // Local is the default because it is what M2.1 already did: read
-        // whatever Radicle home the environment names. A user who had a working
-        // module before this change must not find it behaving differently
-        // after it. (This mode was called `attach` before the vocabulary was
-        // unified with the UI's; the meaning is unchanged.)
-        {kKeyMode,       kModeLocal},
+        // **Explore, because the default is what a user with NO settings file
+        // gets, and that is overwhelmingly a first run.**
+        //
+        // This was `local`, on the argument that it preserved what the module
+        // did before modes existed — read whatever Radicle home the environment
+        // names — so an existing user would not find the module behaving
+        // differently. That argument is about a user who ALREADY has a working
+        // profile, and it answers the wrong question: nobody who used a
+        // pre-settings build HAS a settings file, so every reader of this
+        // default is a fresh start, and a fresh start may have no Radicle home
+        // at all.
+        //
+        // In `local` with no profile the module can show nothing. The UI
+        // derives its method prefix from the mode, so `localListRepos` is the
+        // only list call it will issue; that returns the "no local profile"
+        // error, the repository list stays empty, and the seed is never asked.
+        // A first-run user sees an empty app and no way to tell it apart from a
+        // node with no repositories.
+        //
+        // Not hypothetical: every seed-browsing end-to-end spec runs under a
+        // throwaway `$HOME` with no profile, and all of them broke at once when
+        // the `local` default landed.
+        //
+        // The continuity that was being protected costs exactly one click, once
+        // — picking Local persists, so a user with a node clicks it on first
+        // launch and never again. Weighed against a first-run user who cannot
+        // reach anything at all, that is not close.
+        //
+        // This also makes the file self-consistent: `load()` below sends an
+        // uninterpretable stored mode to Explore too. Two different questions —
+        // "what should a NEW user get" and "what should a user whose stored
+        // choice is unreadable get" — that happen to have the same answer, for
+        // different reasons. `the_default_and_the_unknown_mode_fallback_agree`
+        // pins the coincidence so a future change to either is deliberate.
+        {kKeyMode,       kModeExplore},
         {kKeyRadHome,    ""},
         {kKeyRadSocket,  ""},
         {kKeyGitPath,    ""},
@@ -149,16 +178,16 @@ nlohmann::json SettingsStore::load() const
     // reported the attached profile's home, `localAvailable: true` and full read
     // access, all labelled with a mode string the UI has no segment for.
     //
-    // **The fallback is Explore, not the `local` default, and that is the whole
-    // point of the fix rather than an incidental choice.** The default exists to
-    // answer "what should a NEW user get", and for that Local is right: it is
-    // what the module did before modes existed. This is a different question —
-    // "what should a user whose stored choice is uninterpretable get" — and the
-    // answers differ because the risk does. An unknown mode means the file is in
-    // a state this build cannot read; claiming a node identity on the strength
-    // of a file we have just admitted we cannot interpret is exactly the
-    // identity confusion this milestone exists to prevent, and falling back to
-    // `local` would do precisely that, silently, for every corrupt file.
+    // **The fallback is Explore, and it must stay Explore on its own merits
+    // even though the default above now agrees with it.** They answer different
+    // questions — "what should a NEW user get" versus "what should a user whose
+    // stored choice is uninterpretable get" — and the reasons are unrelated, so
+    // a future change to one must not be applied to the other by assuming they
+    // move together. An unknown mode means the file is in a state this build
+    // cannot read; claiming a node identity on the strength of a file we have
+    // just admitted we cannot interpret is exactly the identity confusion this
+    // milestone exists to prevent, and falling back to `local` would do
+    // precisely that, silently, for every corrupt file.
     //
     // Explore is the only mode whose definition is "do not touch a local
     // profile at all". It grants nothing, claims no identity, has a real segment

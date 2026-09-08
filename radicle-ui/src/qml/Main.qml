@@ -50,8 +50,16 @@ Item {
     // the authority on what is in force, and a UI holding its own copy could
     // show a mode the module is not actually in. That is the identity confusion
     // this milestone exists to prevent, one level up.
+    // The `|| "explore"` is the pre-capabilities guess. It matters because
+    // `onBackendReady()` calls `repoList.reload()` without waiting for the
+    // first `getCapabilities` reply, so whatever this evaluates to in that
+    // window decides which backend surface the very first list call reaches.
+    // It was `|| "local"`, and on a machine with no Radicle profile that
+    // issued `localListRepos`, got the "no local profile" error, and left the
+    // list empty with the seed never asked. `explore` is the inert guess and
+    // matches SettingsStore's own default — see SourceState.mode.
     readonly property SourceState sourceState: SourceState {
-        mode: root.caps.mode || "local"
+        mode: root.caps.mode || "explore"
         localAvailable: root.caps.localAvailable === true
         startableModes: root.caps.startableModes !== undefined
                         ? root.caps.startableModes : []

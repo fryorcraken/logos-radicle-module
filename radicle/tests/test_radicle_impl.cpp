@@ -531,8 +531,11 @@ LOGOS_TEST(get_settings_reports_defaults_when_nothing_has_been_persisted)
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
                                 SettingsStore{scratchSettingsPath("defaults")});
 
+    // `explore` — the first-run default, because a fresh install may have no
+    // Radicle home and `local` there can show nothing at all. See
+    // SettingsStore::load() for the whole argument.
     const auto out = parse(impl.getSettings());
-    LOGOS_ASSERT_EQ(out["mode"].get<std::string>(), std::string("local"));
+    LOGOS_ASSERT_EQ(out["mode"].get<std::string>(), std::string("explore"));
     LOGOS_ASSERT_TRUE(out["gitPath"].get<std::string>().empty());
 }
 
@@ -542,11 +545,14 @@ LOGOS_TEST(a_setting_written_through_the_module_is_readable_through_it)
     const auto path = scratchSettingsPath("roundtrip");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    const auto written = parse(impl.setSetting("mode", "explore"));
+    // A NON-default mode, so this proves the value made the round trip rather
+    // than the read simply falling back to the default. Writing `explore` would
+    // read back correctly even if the write had been dropped entirely.
+    const auto written = parse(impl.setSetting("mode", "local"));
     LOGOS_ASSERT_FALSE(written.contains("error"));
 
     const auto read = parse(impl.getSettings());
-    LOGOS_ASSERT_EQ(read["mode"].get<std::string>(), std::string("explore"));
+    LOGOS_ASSERT_EQ(read["mode"].get<std::string>(), std::string("local"));
 }
 
 LOGOS_TEST(set_setting_refuses_an_unknown_key_through_the_module_boundary)

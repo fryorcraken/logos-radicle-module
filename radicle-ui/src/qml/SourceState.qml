@@ -67,7 +67,22 @@ QtObject {
     /// so the backend is the authority on what is actually in force. A UI that
     /// kept its own copy could show a mode the module is not in — which is the
     /// identity confusion this milestone exists to prevent, one level up.
-    property string mode: "local"
+    ///
+    /// **The initial value is the PRE-CAPABILITIES guess, and it is `explore`
+    /// for the same reason `current` falls through to `remote`: it is the one
+    /// mode that touches no local profile.** It was `local`, which made the
+    /// window before the first capabilities reply a window in which the UI
+    /// asserted a local node it had not been told about — and, because
+    /// `Main.qml` calls `repoList.reload()` from `onBackendReady()` without
+    /// waiting for that reply, could actually issue `localListRepos` on the
+    /// strength of the guess.
+    ///
+    /// It also matches `SettingsStore`'s own default, so the guess and the
+    /// answer agree and there is no visible flip on a fresh profile. Guessing
+    /// wrong is still cheap and self-correcting — the binding settles on the
+    /// real mode and `onSourceChanged` reloads — but guessing towards the
+    /// inert mode means a wrong guess reads a seed rather than a node.
+    property string mode: "explore"
 
     /// Whether this machine has a Radicle profile the CURRENT mode can read.
     ///
