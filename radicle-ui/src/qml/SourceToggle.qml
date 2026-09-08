@@ -239,35 +239,49 @@ Item {
     // arithmetic: every term below is a direct binding with no layout pass in
     // between, and the height is correct in the same frame the text changes.
     //
-    // The caption is CONDITIONAL now — only the selected Embedded mode has one
-    // — but the space it occupies is not. That is deliberate, and it is the
-    // second half of that same fix rather than an oversight.
+    // The caption is CONDITIONAL — only the selected Embedded mode has one —
+    // and so is the space this item takes for it. **The reservation that stops
+    // the header jumping lives on the BAR, not here**, and that split is the
+    // whole point of `reservedHeight` below.
     //
-    // A height that followed the caption's visibility made the header 44px
-    // taller in Embedded than in the other two modes, so every mode switch
-    // resized the bar and slid the entire body under the pointer that had just
-    // clicked. A test caught it (tst_layout.qml). Chrome occupying the same
-    // pixels on every screen is this view's stated layout rule; a caption that
-    // comes and goes is exactly the thing that rule exists to prevent.
+    // The previous version put the reservation in this item's own
+    // `implicitHeight`, so the control was 72px tall in every mode while only
+    // its top 28px drew anything. Two user-visible faults came straight out of
+    // that, and they are one defect seen twice:
     //
-    // So the reservation is measured from `captionSizer` — a hidden Text
-    // carrying the LONGEST caption this control can produce, at the same width
-    // and font as the real one. Measured rather than hardcoded, because a
-    // constant would silently stop covering the text the day the wording
-    // changes, and the failure would be the clipping bug returning.
+    //  - The header row centres what it is given. A 72px box whose content sits
+    //    at the top centres 22px higher than the 28px items beside it, so the
+    //    node identity and the title rendered on a visibly different line from
+    //    the segments — reported as *"node id is not on the same line anymore"*.
+    //  - The 44px of dead space is part of the control's hit area but draws
+    //    nothing, so the strip a user aims at is not where the strip appears to
+    //    be. Clicks that look like they land on a segment land under it.
     //
-    // Still pure arithmetic: every term is a direct binding with no layout pass
-    // between them, so the height is right in the same frame the mode changes.
-    // Only the HEIGHT is reserved unconditionally. The width is not, and the
-    // asymmetry is the point: the bar's height is what the body sits below, so
-    // a varying height moves the whole view, while the toggle's width only
-    // competes with a flexible spacer in the header row. Reserving 420px of
-    // width in every mode would squeeze the seed picker and the search field to
-    // pay for a caption that is not on screen.
+    // So this item is sized by what it actually renders, which is the rule the
+    // rest of the file already follows, and the caption's budget is published
+    // for the container to honour.
     implicitWidth: Math.max(frame.width, noteText.visible ? noteText.width : 0)
-    implicitHeight: frame.height + captionGap
-                    + Math.max(captionSizer.height,
-                               noteText.visible ? noteText.height : 0)
+    implicitHeight: frame.height
+                    + (noteText.visible ? captionGap + noteText.height : 0)
+
+    /// The height this control needs when its caption IS showing — what a
+    /// container must budget so the chrome does not resize between modes.
+    ///
+    /// Read by Main.qml's top bar instead of `implicitHeight`. The distinction
+    /// matters and is why this is a second property rather than a taller
+    /// `implicitHeight`: the BAR must be the same height in every mode, or the
+    /// body below it slides on the very click that switched modes (a 44px jump
+    /// that tst_layout.qml catches). The CONTROL must be the height of what it
+    /// draws, or the row centres it against its empty half and the items beside
+    /// it fall off its line.
+    ///
+    /// One number, consumed by whichever item the constraint actually belongs
+    /// to. Putting both on `implicitHeight` is what made the two requirements
+    /// look like one and traded a real jump for a real misalignment.
+    readonly property int reservedHeight:
+        frame.height + captionGap
+        + Math.max(captionSizer.height,
+                   noteText.visible ? noteText.height : 0)
 
     /// The tallest caption this control can render, measured off-screen.
     ///

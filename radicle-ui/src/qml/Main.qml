@@ -409,14 +409,52 @@ Item {
                 // bar yields to the text instead. It changes only when the
                 // capabilities change, which is not something a user watches
                 // happen.
+                //
+                // `reservedHeight`, NOT `implicitHeight`, and the difference is
+                // load-bearing. The toggle's caption shows only in Embedded, so
+                // its `implicitHeight` varies by mode; budgeting from that made
+                // the bar 44px taller in Embedded and slid the whole body on the
+                // click that switched. `reservedHeight` is the caption's budget
+                // whether or not it is on screen, so THIS height is constant
+                // across modes while the toggle itself stays the size of what it
+                // draws — which is what keeps the identity beside it on one line
+                // instead of centred 22px lower. See SourceToggle.qml.
                 Layout.preferredHeight: Math.max(Theme.barHeight,
-                                                 sourceToggle.implicitHeight + Theme.gap)
+                                                 sourceToggle.reservedHeight + Theme.gap)
                 color: Theme.surface
 
+                // Pinned to the TOP of the bar and given the control line's own
+                // height, rather than filling a bar that is taller than the line.
+                //
+                // The bar reserves room for the toggle's caption (see
+                // `reservedHeight` above), so it is taller than the row of
+                // controls in it. A row that filled the bar would centre every
+                // item in that larger box, and the caption — which hangs below
+                // the toggle — would then be pushed past the bar's bottom edge
+                // and clipped, which is the exact bug the caption replaced.
+                //
+                // Anchoring to the top keeps every control on one line at a
+                // fixed y, and leaves the reserved space where the caption
+                // actually renders: underneath.
                 RowLayout {
-                    anchors.fill: parent
+                    id: headerRow
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    // Centred within the CHROME budget (Theme.barHeight), not
+                    // within the bar — the bar is taller than that whenever the
+                    // toggle's caption is budgeted for, and centring in it would
+                    // push the control line down as the reservation grew.
+                    anchors.topMargin: (Theme.barHeight - height) / 2
                     anchors.leftMargin: Theme.gap
                     anchors.rightMargin: Theme.gap
+                    // Exactly the control line. Every item in this row is
+                    // rowHeightSm or smaller, so a row of that height centres
+                    // them all on one baseline — and the toggle, which is top
+                    // aligned and may be taller in Embedded, starts on that same
+                    // line and grows downward past the row into the bar's
+                    // reserved space rather than displacing anything.
+                    height: Theme.rowHeightSm
                     spacing: Theme.gap
 
                     Text {
@@ -438,6 +476,32 @@ Item {
                     SourceToggle {
                         id: sourceToggle
                         objectName: "sourceToggle"
+                        // The toggle occupies exactly the control line in the
+                        // ROW, and its caption hangs below that line into the
+                        // space the bar reserves for it.
+                        //
+                        // All three constraints are load-bearing together:
+                        //
+                        //  - `AlignTop` so the item grows downward. A centred
+                        //    item that grows pushes its own segment strip
+                        //    upwards, off the line the title and identity are on
+                        //    — the same misalignment this change fixes, arriving
+                        //    in one mode instead of three.
+                        //  - `maximumHeight` so the ROW does not grow with it. A
+                        //    RowLayout takes its height from its tallest child,
+                        //    so without this the Embedded caption made the row
+                        //    72px and pushed every OTHER item down to centre in
+                        //    it — the misalignment again, with the sign flipped.
+                        //  - `preferredHeight` so it still gets the line it
+                        //    needs rather than collapsing to nothing.
+                        //
+                        // The caption drawing outside the row is deliberate and
+                        // safe: nothing here sets `clip`, and the bar is sized to
+                        // contain it. tst_mode_switch.qml asserts that it lands
+                        // inside the bar rather than past its edge.
+                        Layout.alignment: Qt.AlignTop
+                        Layout.preferredHeight: Theme.rowHeightSm
+                        Layout.maximumHeight: Theme.rowHeightSm
                         mode:           root.mode
                         startableModes: root.caps.startableModes !== undefined
                                         ? root.caps.startableModes : []

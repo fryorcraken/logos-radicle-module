@@ -1,0 +1,531 @@
+import QtQuick
+import QtQuick.Layouts
+import QtTest
+import "../src/qml" as Ui
+import "../src/qml/Theme.js" as Theme
+
+/*
+ * Switching mode, end to end, against a backend that replies LATER.
+ *
+ * ## Why this file exists when tst_source.qml already covers the toggle
+ *
+ * tst_source.qml drives `SourceState.select()` directly and then assigns
+ * `sourceState.mode` by hand to stand in for the capabilities reply. That
+ * pins the routing, and it is why the routing is correct. What it cannot see
+ * is the wiring BETWEEN the click and that assignment — `Main.setMode()`,
+ * which is the function the user's click actually enters, and which decides
+ * whether a write is issued at all.
+ *
+ * The whole control shipped with its primary action broken while 317 tests
+ * passed, because no test ever went click -> setMode -> write -> reply ->
+ * segment. Every layer was covered; the joins were not. So this file hosts
+ * the REAL SourceToggle inside a REAL header row, clicks it with a real
+ * mouse event, and runs the reply through a fake that answers on a later
+ * turn — the `deferredApp` shape tst_repo_switch.qml and tst_sync_epoch.qml
+ * already use, and for the same reason: a synchronous fake structurally
+ * cannot produce the window where the write is in flight and `mode` has not
+ * settled, which is precisely the window this control lives in.
+ *
+ * ## The invariant, stated once
+ *
+ * A click on a segment must end with that mode in force, EVERY time,
+ * including the second and third time, and including a click that arrives
+ * while a previous write is still in flight. "Every time" is the part that
+ * broke: the first switch worked and the ones after it did not.
+ */
+Item {
+    id: harness
+
+    width: 1000
+    height: 400
+
+    // ------------------------------------------------------------------
+    // A backend that replies on a later turn.
+    //
+    // `setSetting` does not answer immediately: the reply is queued and
+    // delivered by `deliver()`. That is what makes this a round trip rather
+    // than a function call, and it is the only way to reproduce a second
+    // click landing before the first reply.
+    // ------------------------------------------------------------------
+    QtObject {
+        id: backend
+
+        /// What the module has actually persisted. The single source of
+        /// truth the fake answers from, so a write that never arrives is
+        /// visible as a mode that never changes — rather than being masked
+        /// by a fake that echoes whatever it was asked for.
+        property string storedMode: "local"
+
+        /// Writes that have been issued but not yet answered.
+        property var queue: []
+
+        /// Every write this backend was asked to make, in order. Asserted on
+        /// directly: "the segment did not move" and "no write was issued"
+        /// are different faults with different fixes, and a test that only
+        /// watched the segment could not tell them apart.
+        property var writeLog: []
+
+        function setSetting(key, value, cb) {
+            writeLog.push(key + "=" + value);
+            queue.push({ key: key, value: value, cb: cb });
+        }
+
+        /// Answer the oldest outstanding write, applying it the way the real
+        /// module does: persist, then republish capabilities.
+        function deliver() {
+            if (queue.length === 0) return false;
+            var w = queue.shift();
+            if (w.key === "mode") storedMode = w.value;
+            // The real backend refreshes capabilities inside setSetting, so
+            // the reply and the new capabilities land together.
+            harness.publishCapabilities();
+            w.cb({ mode: storedMode });
+            return true;
+        }
+
+        function pending() { return queue.length; }
+    }
+
+    /// Push the backend's current state into `caps`, the way
+    /// `onCapsJsonChanged` does in Main.qml — a whole new object, because a
+    /// mutated `var` does not re-evaluate the bindings that read it.
+    function publishCapabilities() {
+        caps = {
+            mode: backend.storedMode,
+            localAvailable: backend.storedMode === "local",
+            startableModes: ["explore", "local"],
+            nodeId: backend.storedMode === "local"
+                    ? "did:key:z6MkowunyxpkcgAbCdEfGhIjKlMnOpQrStUvWxYz" : ""
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // Main.qml's own state, reproduced in the shape that file has it.
+    // ------------------------------------------------------------------
+    property var caps: ({ mode: "local", localAvailable: true,
+                          startableModes: ["explore", "local"],
+                          nodeId: "did:key:z6MkowunyxpkcgAbCdEfGhIjKlMnOpQrStUvWxYz" })
+
+    readonly property Ui.SourceState sourceState: Ui.SourceState {
+        mode: harness.caps.mode || "local"
+        localAvailable: harness.caps.localAvailable === true
+        onChanged: {
+            harness.reloads++;
+            sourceReload.restart();
+        }
+    }
+
+    readonly property string source: sourceState.current
+    readonly property string mode: sourceState.mode
+
+    onSourceChanged: sourceReload.restart()
+
+    property int reloads: 0
+    property int fetches: 0
+    property string fetchedWith: ""
+
+    readonly property Timer sourceReload: Timer {
+        interval: 0
+        repeat: false
+        onTriggered: {
+            harness.fetches++;
+            harness.fetchedWith = harness.source + "ListRepos";
+        }
+    }
+
+    property string lastError: ""
+
+    /// Main.qml's setMode(), reproduced. This is the function under test.
+    function setMode(next) {
+        if (!sourceState.select(next)) return;
+        backend.setSetting("mode", next, function (reply) {
+            if (reply && reply.error) harness.lastError = reply.error;
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // The header, hosted the way Main.qml hosts it.
+    // ------------------------------------------------------------------
+    Rectangle {
+        id: bar
+        width: harness.width
+        // Main.qml's own arithmetic, verbatim — including the property it
+        // budgets from. Reading `implicitHeight` here instead would make this
+        // fixture disagree with the app about the one number under test.
+        height: Math.max(Theme.barHeight, toggle.reservedHeight + Theme.gap)
+
+        RowLayout {
+            id: headerRow
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: (Theme.barHeight - height) / 2
+            anchors.leftMargin: Theme.gap
+            anchors.rightMargin: Theme.gap
+            height: Theme.rowHeightSm
+            spacing: Theme.gap
+
+            Text {
+                id: title
+                objectName: "headerTitle"
+                text: "Radicle"
+                font.pixelSize: Theme.fontXl
+                font.bold: true
+            }
+
+            Ui.SourceToggle {
+                id: toggle
+                objectName: "sourceToggle"
+                Layout.alignment: Qt.AlignTop
+                Layout.preferredHeight: Theme.rowHeightSm
+                Layout.maximumHeight: Theme.rowHeightSm
+                mode: harness.mode
+                startableModes: harness.caps.startableModes !== undefined
+                                ? harness.caps.startableModes : []
+                localAvailable: harness.caps.localAvailable === true
+                onModeChosen: function (next) { harness.setMode(next); }
+            }
+
+            Ui.NodeIdentity {
+                id: identity
+                objectName: "nodeIdentity"
+                visible: harness.mode === "local" && identity.nodeId !== ""
+                nodeId: harness.caps.nodeId || ""
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Rectangle {
+                id: settingsChip
+                objectName: "settingsChip"
+                Layout.preferredWidth: 70
+                Layout.preferredHeight: Theme.rowHeightSm
+            }
+        }
+    }
+
+    function findByName(node, name) {
+        if (!node) return null;
+        if (node.objectName === name) return node;
+        for (var i = 0; i < node.children.length; i++) {
+            var hit = findByName(node.children[i], name);
+            if (hit) return hit;
+        }
+        return null;
+    }
+
+    /// Click a segment the way a user does — a real mouse event on the
+    /// MouseArea, not a call to modeChosen(). A control whose handler was
+    /// disconnected would still pass a signal-emitting test.
+    function clickSegment(key) {
+        var seg = findByName(toggle, "sourceToggle_" + key);
+        verify(seg !== null, "no segment for " + key);
+        mouseClick(seg);
+    }
+
+    // ==================================================================
+    TestCase {
+        name: "ModeSwitching"
+        when: windowShown
+
+        function init() {
+            backend.storedMode = "local";
+            backend.queue = [];
+            backend.writeLog = [];
+            harness.publishCapabilities();
+            harness.reloads = 0;
+            harness.fetches = 0;
+            harness.fetchedWith = "";
+            harness.lastError = "";
+        }
+
+        function clickSegment(key) {
+            var seg = harness.findByName(toggle, "sourceToggle_" + key);
+            verify(seg !== null, "no segment for " + key);
+            mouseClick(seg);
+        }
+
+        /// The baseline: one click, one write, one settled mode.
+        function test_clicking_a_segment_persists_that_mode() {
+            compare(harness.mode, "local", "precondition");
+
+            clickSegment("explore");
+            compare(backend.writeLog.length, 1,
+                    "the click must issue a write, got: "
+                    + JSON.stringify(backend.writeLog));
+            compare(backend.writeLog[0], "mode=explore");
+
+            backend.deliver();
+            compare(harness.mode, "explore",
+                    "the segment must follow the mode actually in force");
+        }
+
+        /// **The reported bug.** "clicking back and forth between explore and
+        /// local fails" — the first switch worked and the next did not.
+        ///
+        /// Four switches, alternating, each one delivered before the next
+        /// click. A control that only worked once passes the test above and
+        /// fails here on step 1.
+        function test_switching_back_and_forth_works_every_time() {
+            var want = ["explore", "local", "explore", "local"];
+            for (var i = 0; i < want.length; i++) {
+                clickSegment(want[i]);
+                verify(backend.pending() > 0,
+                       "step " + i + ": clicking " + want[i]
+                       + " issued no write at all — the mode is stuck at "
+                       + harness.mode + " and the control is inert. Writes so "
+                       + "far: " + JSON.stringify(backend.writeLog));
+                backend.deliver();
+                compare(harness.mode, want[i],
+                        "step " + i + ": clicked " + want[i]
+                        + " but the mode in force is " + harness.mode);
+            }
+            compare(backend.writeLog.length, 4,
+                    "every click must have written: "
+                    + JSON.stringify(backend.writeLog));
+        }
+
+        /// All three modes, in a cycle, twice round. Explore and Local both
+        /// derive a method prefix; Embedded shares Local's. A switch that
+        /// only fired when the PREFIX changed would pass the two-mode test
+        /// above and drop every local<->embedded move.
+        function test_every_mode_can_be_reached_repeatedly() {
+            var want = ["explore", "local", "embedded",
+                        "explore", "local", "embedded"];
+            for (var i = 0; i < want.length; i++) {
+                clickSegment(want[i]);
+                backend.deliver();
+                compare(harness.mode, want[i],
+                        "step " + i + ": clicked " + want[i]
+                        + " but the mode in force is " + harness.mode);
+            }
+        }
+
+        /// A click that lands while the previous write is still in flight.
+        ///
+        /// This is the case a synchronous fake cannot produce, and the one a
+        /// real user produces constantly by clicking twice. The second click
+        /// must not be swallowed: whatever the user clicked LAST is the mode
+        /// that must end up in force.
+        function test_a_click_during_an_in_flight_write_is_not_lost() {
+            clickSegment("explore");
+            compare(backend.pending(), 1, "the first write is in flight");
+
+            clickSegment("embedded");
+            verify(backend.writeLog.length === 2,
+                   "the second click was swallowed while the first write was "
+                   + "in flight — writes: " + JSON.stringify(backend.writeLog));
+
+            // Both replies land, in order.
+            backend.deliver();
+            backend.deliver();
+            compare(harness.mode, "embedded",
+                    "the LAST mode the user clicked must be the one in force");
+        }
+
+        /// The mode the user is already in is a no-op, and must stay one —
+        /// otherwise every click writes, and the "did anything change"
+        /// question the reload depends on has no answer.
+        function test_clicking_the_current_mode_writes_nothing() {
+            compare(harness.mode, "local");
+            clickSegment("local");
+            compare(backend.writeLog.length, 0,
+                    "re-selecting the mode in force must not write: "
+                    + JSON.stringify(backend.writeLog));
+        }
+
+        /// ...and that no-op must not wedge the control. After clicking the
+        /// mode you are already in, the next real switch must still work.
+        function test_a_no_op_click_does_not_wedge_the_control() {
+            clickSegment("local");
+            clickSegment("explore");
+            verify(backend.pending() > 0,
+                   "a real switch after a no-op click issued no write");
+            backend.deliver();
+            compare(harness.mode, "explore");
+        }
+
+        /// The reload must follow the mode to the NEW surface, on every
+        /// switch rather than only the first. Input-dependent: the value
+        /// recorded names the surface, so a reload that fired against the old
+        /// one is visible rather than merely absent.
+        function test_each_switch_reloads_from_the_new_surface() {
+            clickSegment("explore");
+            backend.deliver();
+            tryCompare(harness, "fetchedWith", "remoteListRepos", 1000,
+                       "switching to Explore must refetch from the seed");
+
+            clickSegment("local");
+            backend.deliver();
+            tryCompare(harness, "fetchedWith", "localListRepos", 1000,
+                       "and switching back must refetch from the node");
+        }
+    }
+
+    // ==================================================================
+    // The header is ONE line.
+    //
+    // The user's report: "node id is not on the same line anymore". The
+    // identity used to sit immediately right of the toggle and now renders
+    // below it, because the toggle reserves caption space it is not using
+    // and the row centres the taller box.
+    //
+    // Asserted on vertical position rather than on `visible`: a test that
+    // only checked the identity was shown passes just as happily while it is
+    // wrapped onto a second line, which is exactly what shipped.
+    // ==================================================================
+    TestCase {
+        name: "HeaderIsOneLine"
+        when: windowShown
+
+        function init() {
+            backend.storedMode = "local";
+            backend.queue = [];
+            backend.writeLog = [];
+            harness.publishCapabilities();
+            settle();
+        }
+
+        /// Let the row finish its polish before measuring.
+        ///
+        /// Unlike the toggle's own height — which is arithmetic, and where a
+        /// wait would be hiding a real one-frame lag — the position of an item
+        /// INSIDE a RowLayout is decided by the layout engine on its next
+        /// polish pass by design. Measuring before that reads the previous
+        /// pass's coordinates, and this file did exactly that: the same
+        /// assertion returned y=20 in one run and y=26 in another. That is the
+        /// test being wrong about when to look, not the layout being unstable.
+        function settle() {
+            waitForRendering(bar);
+        }
+
+        /// The centre of the visible control and the centre of the identity
+        /// must coincide. Centres rather than tops, because the two items
+        /// are different heights and a shared top edge is not what "on the
+        /// same line" means to a reader.
+        function test_the_identity_sits_on_the_toggles_line() {
+            verify(identity.visible, "precondition: Local shows the identity");
+
+            var seg = harness.findByName(toggle, "sourceToggle_local");
+            var segCentre = seg.mapToItem(bar, 0, seg.height / 2).y;
+            var idCentre = identity.mapToItem(bar, 0, identity.height / 2).y;
+
+            verify(Math.abs(segCentre - idCentre) <= 2,
+                   "the toggle's segments are centred at y=" + segCentre
+                   + " but the node id at y=" + idCentre + " — a "
+                   + Math.abs(segCentre - idCentre) + "px drop, so the "
+                   + "identity is rendering on a second line below the "
+                   + "toggle instead of beside it");
+        }
+
+        /// The same for the title, which is the other thing on that line.
+        /// Included because "Radicle", the toggle and the identity are one
+        /// visual row and any one of the three drifting is the same defect.
+        function test_the_title_and_the_toggle_share_a_line() {
+            var seg = harness.findByName(toggle, "sourceToggle_local");
+            var segCentre = seg.mapToItem(bar, 0, seg.height / 2).y;
+            var titleCentre = title.mapToItem(bar, 0, title.height / 2).y;
+
+            verify(Math.abs(segCentre - titleCentre) <= 2,
+                   "the toggle's segments are centred at y=" + segCentre
+                   + " but the title at y=" + titleCentre + " — they are not "
+                   + "on the same line");
+        }
+
+        /// In every mode, so a header that happens to line up in one state
+        /// is not mistaken for one that lines up.
+        function test_the_line_holds_in_every_mode() {
+            var modes = ["explore", "local", "embedded"];
+            for (var i = 0; i < modes.length; i++) {
+                backend.storedMode = modes[i];
+                harness.publishCapabilities();
+                settle();
+
+                var seg = harness.findByName(toggle, "sourceToggle_local");
+                var segCentre = seg.mapToItem(bar, 0, seg.height / 2).y;
+                var titleCentre = title.mapToItem(bar, 0, title.height / 2).y;
+                verify(Math.abs(segCentre - titleCentre) <= 2,
+                       "in " + modes[i] + " the toggle is centred at y="
+                       + segCentre + " and the title at y=" + titleCentre);
+            }
+        }
+
+        /// The mechanism, asserted directly: the CONTROL is the height of what
+        /// it draws, in the modes that draw no caption.
+        ///
+        /// This is the assertion that says WHY the line broke, where the ones
+        /// above say that it broke. The toggle reserved its caption's space in
+        /// its own `implicitHeight`, so it reported 72px while rendering 28px
+        /// of content at the top of that box — and a row centres what it is
+        /// given, which dropped everything beside it onto another line.
+        ///
+        /// Note this cannot be satisfied by removing the reservation
+        /// altogether: the bar test below still requires the budget to exist.
+        /// The two together pin the split — budget on the container, size on
+        /// the control — rather than either one alone.
+        function test_the_control_is_the_height_of_what_it_draws() {
+            var modes = ["explore", "local"];
+            for (var i = 0; i < modes.length; i++) {
+                backend.storedMode = modes[i];
+                harness.publishCapabilities();
+                settle();
+
+                var note = harness.findByName(toggle, "sourceToggleNote");
+                verify(!note.visible,
+                       "precondition: " + modes[i] + " draws no caption");
+                compare(toggle.implicitHeight, Theme.rowHeightSm,
+                        "in " + modes[i] + " the toggle draws only its "
+                        + Theme.rowHeightSm + "px segment strip but reports "
+                        + toggle.implicitHeight + "px — the row will centre it "
+                        + "against that empty space and everything beside it "
+                        + "will leave its line");
+            }
+        }
+
+        /// ...and the BAR is nonetheless the same height in every mode, so the
+        /// body below it never slides on the click that switched modes.
+        ///
+        /// The pair is the point. Making the control shrink is only correct as
+        /// long as the container still budgets for the caption; a fix that
+        /// dropped the reservation entirely would pass the test above and
+        /// reintroduce the 44px header jump this control already shipped once.
+        function test_the_bar_does_not_change_height_between_modes() {
+            var modes = ["explore", "local", "embedded"];
+            var seen = [];
+            for (var i = 0; i < modes.length; i++) {
+                backend.storedMode = modes[i];
+                harness.publishCapabilities();
+                settle();
+                seen.push(bar.height);
+            }
+            for (var j = 1; j < seen.length; j++) {
+                compare(seen[j], seen[0],
+                        "the bar is " + seen[j] + "px in " + modes[j]
+                        + " but " + seen[0] + "px in " + modes[0]
+                        + " — the header jumps when the mode changes");
+            }
+        }
+
+        /// And the caption, in the one mode that has one, is still inside the
+        /// bar. The row is pinned to the bar's top precisely so the reserved
+        /// space sits underneath it; if the row were centred instead, the
+        /// caption would hang past the bar's bottom edge and be clipped —
+        /// which is the tooltip bug this caption exists to replace.
+        function test_the_caption_stays_inside_the_bar() {
+            backend.storedMode = "embedded";
+            harness.publishCapabilities();
+            settle();
+
+            var note = harness.findByName(toggle, "sourceToggleNote");
+            verify(note.visible, "Embedded has a caption to place");
+            verify(note.height > 0, "a zero-height caption is invisible");
+
+            var bottom = note.mapToItem(bar, 0, note.height).y;
+            verify(bottom <= bar.height + 1,
+                   "the caption's bottom is at " + bottom + " inside a "
+                   + bar.height + "px bar — it is being clipped");
+            verify(note.mapToItem(bar, 0, 0).y >= -1,
+                   "the caption starts above the bar's top edge");
+        }
+    }
+}

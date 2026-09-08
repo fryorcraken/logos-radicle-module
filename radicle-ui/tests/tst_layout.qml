@@ -89,13 +89,26 @@ Item {
     Rectangle {
         id: headerHost
         width: 1000
-        height: Math.max(Theme.barHeight, captionToggle.implicitHeight + Theme.gap)
+        // Budgeted from `reservedHeight`, exactly as Main.qml's top bar is.
+        //
+        // NOT `implicitHeight`: that is the height the control DRAWS, which
+        // varies by mode because the caption is conditional, and budgeting a
+        // bar from it is what makes the bar jump. `reservedHeight` is the
+        // caption's budget whether or not it is on screen. The split is the
+        // subject of the two tests below — see SourceToggle.qml.
+        height: Math.max(Theme.barHeight, captionToggle.reservedHeight + Theme.gap)
 
         Ui.SourceToggle {
             id: captionToggle
             objectName: "captionToggle"
             anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
+            // Pinned to the top of the control line rather than centred, which
+            // is also how Main.qml places it. Centring an item that grows by
+            // its caption pushes its own segment strip UPWARDS, off the line
+            // the title and the node identity sit on — the misalignment the
+            // user reported as "node id is not on the same line anymore".
+            anchors.top: parent.top
+            anchors.topMargin: (Theme.barHeight - Theme.rowHeightSm) / 2
             // `embedded`, because that is now the only mode that HAS a caption
             // — the paragraph was unconditional and the user asked for it gone
             // from the modes it is not about. The clipping guarantee still has
@@ -213,7 +226,7 @@ Item {
         }
 
         // The caption is conditional now — visible only for Embedded — and a
-        // header whose height follows a caption that comes and going is a
+        // header whose height follows a caption that comes and goes is a
         // header that JUMPS every time the user changes mode. The content
         // below it slides, and on the click that switched modes, which reads
         // as the UI lurching under the pointer.
@@ -222,6 +235,18 @@ Item {
         // pixels on every screen, which is the layout rule the whole file
         // states at the top. Asserted across all three modes rather than
         // between two, so a bar sized from "is this Embedded" would fail.
+        //
+        // Measured on `reservedHeight`, which is the property the bar is
+        // budgeted from. It used to be `implicitHeight`, and that was the
+        // defect rather than the fix: making one number serve both "how much
+        // room must the bar keep" and "how big is this control" forced the
+        // control to claim 72px while drawing 28px of content at the top of
+        // it, so the header row centred it against its own empty half and the
+        // node identity beside it dropped onto a second line. Two
+        // requirements, two properties; this test owns the first and
+        // test_the_control_is_the_height_of_what_it_draws below owns the
+        // second. Neither alone is sufficient, and a fix that satisfied
+        // either by abandoning the other would go red here.
         function test_the_header_does_not_jump_when_the_mode_changes() {
             var modes = ["explore", "local", "embedded"];
             var seen = [];
@@ -232,17 +257,47 @@ Item {
                 // pass; if this needs a wait to be true, the geometry is being
                 // settled over a frame rather than computed, and a user would
                 // see the frame it was wrong in.
-                seen.push(captionToggle.implicitHeight);
+                seen.push(captionToggle.reservedHeight);
             }
             captionToggle.mode = "embedded";
 
             for (var j = 1; j < seen.length; j++) {
                 compare(seen[j], seen[0],
-                        "the toggle is " + seen[j] + "px in " + modes[j]
+                        "the toggle reserves " + seen[j] + "px in " + modes[j]
                         + " but " + seen[0] + "px in " + modes[0]
                         + " — the header will jump when the mode changes, and "
                         + "everything below it will slide");
             }
+        }
+
+        // The other half of that split, and the reason the reservation had to
+        // move off `implicitHeight` rather than simply being deleted.
+        //
+        // The control must be the size of what it DRAWS. A header row centres
+        // what it is given, so a control reporting 72px while rendering a 28px
+        // segment strip at the top of that box sits 22px higher than the title
+        // and the node identity next to it — which is precisely what the user
+        // saw and reported.
+        //
+        // This test and the one above pull in opposite directions on purpose.
+        // Re-merging the two numbers fails one of them whichever value is
+        // chosen, which is what makes the pair a specification rather than a
+        // pair of observations.
+        function test_the_control_is_the_height_of_what_it_draws() {
+            var modes = ["explore", "local"];
+            for (var i = 0; i < modes.length; i++) {
+                captionToggle.mode = modes[i];
+                var note = findChild(captionToggle, "sourceToggleNote");
+                verify(!note.visible,
+                       "precondition: " + modes[i] + " draws no caption");
+                compare(captionToggle.implicitHeight, Theme.rowHeightSm,
+                        "in " + modes[i] + " the toggle draws only its "
+                        + Theme.rowHeightSm + "px segment strip but reports "
+                        + captionToggle.implicitHeight + "px — a row will "
+                        + "centre it against that empty space and everything "
+                        + "beside it will leave its line");
+            }
+            captionToggle.mode = "embedded";
         }
 
         // ...and the reserved space is real space, not zero. A bar that
