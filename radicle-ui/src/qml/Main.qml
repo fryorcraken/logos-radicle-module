@@ -568,10 +568,12 @@ Item {
                         // first.
                         visible: root.mode === "local" && nodeIdentity.nodeId !== ""
                         nodeId: root.caps.nodeId || ""
-                        // The obvious destination for someone squinting at a
-                        // truncated DID: Settings holds it in full, alongside
-                        // the resolved home.
-                        onActivated: root.settingsOpen = true
+                        // Clicking copies; the component does that itself and
+                        // confirms it on screen. Nothing is wired here on
+                        // purpose — it used to open Settings, and the user
+                        // asked for copying instead. Settings is still reached
+                        // through the chip at the right of this row, so no
+                        // destination was lost.
                     }
 
                     Item { Layout.fillWidth: true }

@@ -86,6 +86,21 @@ Item {
         function pending() { return queue.length; }
     }
 
+    /// Whether the settings overlay is up, as Main.qml holds it.
+    property bool settingsOpen: false
+
+    /// A REAL-LENGTH did — `did:key:` plus a 48-character z-base-58 key, which
+    /// is what `rad self` prints and what the backend actually returns.
+    ///
+    /// The length is the point, not the value. The header now shows the whole
+    /// identity rather than a 14-character head, so it is roughly four times
+    /// wider than it was; a fixture carrying a SHORT id would let every layout
+    /// assertion below pass while the real thing wrapped the header onto a
+    /// second line. This file's fake was 51 characters, and 5 short is enough
+    /// to matter at a fixed monospace measure.
+    readonly property string fullDid:
+        "did:key:z6MkowunyxpkcgCx2DdndJwebjcpk5pEnhaDE8JH3MbLnDBe"
+
     /// Push the backend's current state into `caps`, the way
     /// `onCapsJsonChanged` does in Main.qml — a whole new object, because a
     /// mutated `var` does not re-evaluate the bindings that read it.
@@ -95,7 +110,7 @@ Item {
             localAvailable: backend.storedMode === "local",
             startableModes: ["explore", "local"],
             nodeId: backend.storedMode === "local"
-                    ? "did:key:z6MkowunyxpkcgAbCdEfGhIjKlMnOpQrStUvWxYz" : ""
+                    ? harness.fullDid : ""
         };
     }
 
@@ -104,7 +119,7 @@ Item {
     // ------------------------------------------------------------------
     property var caps: ({ mode: "local", localAvailable: true,
                           startableModes: ["explore", "local"],
-                          nodeId: "did:key:z6MkowunyxpkcgAbCdEfGhIjKlMnOpQrStUvWxYz" })
+                          nodeId: harness.fullDid })
 
     readonly property Ui.SourceState sourceState: Ui.SourceState {
         mode: harness.caps.mode || "local"
@@ -195,11 +210,24 @@ Item {
 
             Item { Layout.fillWidth: true }
 
+            // Main.qml's Settings chip, including its MouseArea.
+            //
+            // The MouseArea is not decoration in this fixture. The identity
+            // beside the toggle used to open Settings too, and it now copies
+            // instead — so this chip is the ONLY way in, and "still reachable"
+            // has to be an assertion rather than a claim. A bare Rectangle here
+            // would have made that untestable.
             Rectangle {
                 id: settingsChip
                 objectName: "settingsChip"
                 Layout.preferredWidth: 70
                 Layout.preferredHeight: Theme.rowHeightSm
+
+                MouseArea {
+                    objectName: "settingsToggle"
+                    anchors.fill: parent
+                    onClicked: harness.settingsOpen = !harness.settingsOpen
+                }
             }
         }
     }
@@ -504,6 +532,135 @@ Item {
                         + " but " + seen[0] + "px in " + modes[0]
                         + " — the header jumps when the mode changes");
             }
+        }
+
+        /// **Settings must still be reachable.** The identity beside the toggle
+        /// was one of two ways in and now copies instead, so this chip is the
+        /// only remaining entrance — and an entrance that stopped working would
+        /// leave the mode picker, the resolved home and the git path
+        /// unreachable, with nothing on screen saying so.
+        ///
+        /// A real click, and asserted in both directions: a chip that latched
+        /// open would be just as broken as one that never opened.
+        function test_the_settings_chip_still_opens_settings() {
+            harness.settingsOpen = false;
+
+            var chip = harness.findByName(settingsChip, "settingsToggle");
+            verify(chip !== null,
+                   "the header has no Settings control — with the identity no "
+                   + "longer opening the panel, there is now no way in at all");
+            mouseClick(chip);
+            compare(harness.settingsOpen, true,
+                    "clicking the Settings chip must open Settings");
+
+            mouseClick(chip);
+            compare(harness.settingsOpen, false,
+                    "and clicking it again must close them");
+        }
+
+        /// Clicking the IDENTITY must not open Settings, in the assembled
+        /// header rather than only in the isolated component. The two live side
+        /// by side on one row, so "the click landed on the other element" is a
+        /// real failure mode that a component test cannot see.
+        function test_clicking_the_identity_in_the_header_does_not_open_settings() {
+            backend.storedMode = "local";
+            harness.publishCapabilities();
+            settle();
+            harness.settingsOpen = false;
+
+            verify(identity.visible, "precondition: the identity is on screen");
+            mouseClick(harness.findByName(identity, "nodeIdentity"));
+            compare(harness.settingsOpen, false,
+                    "clicking the identity opened Settings — it is a copy "
+                    + "button now");
+        }
+
+        /// The identity in this header is the FULL did, not a head.
+        ///
+        /// Asserted here, in the real row, as well as in tst_source.qml's
+        /// isolated component: the component test proves the label renders the
+        /// whole string, and this proves the header actually hands it one and
+        /// nothing between truncates or elides it.
+        function test_the_header_shows_the_whole_identity() {
+            backend.storedMode = "local";
+            harness.publishCapabilities();
+            settle();
+
+            var lbl = harness.findByName(identity, "nodeIdentityLabel");
+            verify(lbl !== null && lbl.visible, "the identity must be on screen");
+            compare(lbl.text, harness.fullDid,
+                    "the header must show the whole did, got: " + lbl.text);
+            verify(lbl.text.indexOf("…") === -1,
+                   "and must not elide it, got: " + lbl.text);
+        }
+
+        /// The full did must not push the identity off the toggle's line.
+        ///
+        /// This is `test_the_identity_sits_on_the_toggles_line` again with the
+        /// thing that actually threatens it: a ~56-character monospace string
+        /// where a 15-character one used to be. The header regressed onto two
+        /// lines once already and the user reported it; a width change of this
+        /// size is exactly the input that would do it again.
+        function test_a_full_length_identity_stays_on_the_toggles_line() {
+            backend.storedMode = "local";
+            harness.publishCapabilities();
+            settle();
+
+            var lbl = harness.findByName(identity, "nodeIdentityLabel");
+            compare(lbl.text, harness.fullDid, "precondition: the full did");
+
+            var seg = harness.findByName(toggle, "sourceToggle_local");
+            var segCentre = seg.mapToItem(bar, 0, seg.height / 2).y;
+            var idCentre = identity.mapToItem(bar, 0, identity.height / 2).y;
+
+            verify(Math.abs(segCentre - idCentre) <= 2,
+                   "with a full-length did the toggle is centred at y="
+                   + segCentre + " and the identity at y=" + idCentre
+                   + " — a " + Math.abs(segCentre - idCentre) + "px drop, so "
+                   + "the identity has wrapped onto a second line");
+        }
+
+        /// ...and does not grow the bar either. A wider identity must be
+        /// absorbed by the row's flexible spacer, not by the header getting
+        /// taller — the 44px jump this file already guards against, arriving
+        /// from a new direction.
+        function test_a_full_length_identity_does_not_grow_the_bar() {
+            backend.storedMode = "explore";
+            harness.publishCapabilities();
+            settle();
+            var withoutIdentity = bar.height;
+
+            backend.storedMode = "local";
+            harness.publishCapabilities();
+            settle();
+            verify(identity.visible, "precondition: Local shows the identity");
+
+            compare(bar.height, withoutIdentity,
+                    "the bar is " + bar.height + "px showing a full-length "
+                    + "identity but " + withoutIdentity + "px without one — "
+                    + "the header grows when the id appears");
+        }
+
+        /// The identity must fit within the row rather than running under the
+        /// controls to its right. `implicitWidth` is what a RowLayout budgets
+        /// from, so an element whose content is wider than it claims overlaps
+        /// its neighbour silently — no wrap, no clip, just illegible text.
+        function test_the_identity_claims_the_width_it_draws() {
+            backend.storedMode = "local";
+            harness.publishCapabilities();
+            settle();
+
+            var lbl = harness.findByName(identity, "nodeIdentityLabel");
+            verify(identity.width >= lbl.implicitWidth,
+                   "the identity is " + identity.width + "px wide but its "
+                   + "label needs " + lbl.implicitWidth + "px — the did is "
+                   + "being drawn over whatever sits beside it");
+
+            var right = identity.mapToItem(bar, identity.width, 0).x;
+            var chipLeft = settingsChip.mapToItem(bar, 0, 0).x;
+            verify(right <= chipLeft + 1,
+                   "the identity ends at x=" + right + " but the Settings chip "
+                   + "starts at x=" + chipLeft + " — they overlap");
         }
 
         /// And the caption, in the one mode that has one, is still inside the

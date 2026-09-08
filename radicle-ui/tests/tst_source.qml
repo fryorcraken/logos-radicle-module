@@ -64,10 +64,48 @@ Item {
         nodeId: ""
     }
 
-    property int identityActivations: 0
+    /// How many times the identity reported a completed copy.
+    property int identityCopies: 0
     Connections {
         target: identity
-        function onActivated() { root.identityActivations++; }
+        function onCopied() { root.identityCopies++; }
+    }
+
+    /// Whether anything asked for Settings. The identity used to open them and
+    /// no longer does; this exists so that change can be asserted as a FALSE
+    /// rather than merely by the absence of an assertion.
+    property bool settingsOpened: false
+    Connections {
+        target: identity
+        ignoreUnknownSignals: true
+        function onSettingsRequested() { root.settingsOpened = true; }
+    }
+
+    // ---- reading the real clipboard ------------------------------------
+    //
+    // QtQuick exposes no Clipboard singleton, so the only handle on the system
+    // clipboard from plain QML is TextEdit's own cut/copy/paste. That is also
+    // exactly how NodeIdentity copies, so these helpers exercise the same
+    // mechanism the component depends on: if the sandbox ever stops providing
+    // a clipboard, these fail rather than quietly asserting nothing.
+    //
+    // A round trip through a SEPARATE TextEdit, deliberately — reading back the
+    // component's own hidden editor would pass even if copy() were never
+    // called, since its text is set regardless.
+    TextEdit { id: clipProbe; visible: false }
+
+    function clipboardSet(text) {
+        clipProbe.text = text;
+        clipProbe.selectAll();
+        clipProbe.copy();
+        clipProbe.text = "";
+    }
+
+    function clipboardGet() {
+        clipProbe.text = "";
+        clipProbe.selectAll();
+        clipProbe.paste();
+        return clipProbe.text;
     }
 
     // -----------------------------------------------------------------------
@@ -501,19 +539,50 @@ Item {
         when: windowShown
 
         function init() {
-            root.identityActivations = 0;
+            root.identityCopies = 0;
+            root.settingsOpened = false;
             identity.nodeId = "";
+            // The confirmation is on a 1.6s timer, so without this a previous
+            // test's copy is still being confirmed when this one starts.
+            identity.clearConfirmation();
         }
 
-        function test_the_identity_is_legible_without_hovering() {
-            identity.nodeId =
-                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+        /// The FULL DID, verbatim — not a prefix, not an elision.
+        ///
+        /// It used to be truncated to 14 characters plus an ellipsis, and the
+        /// user asked for the whole thing. This asserts the complete string
+        /// and, separately, the absence of an ellipsis: an assertion that only
+        /// checked `indexOf("z6Mko") === 0` passes just as happily against the
+        /// truncated version, which is what made the old test unable to catch
+        /// this.
+        function test_the_identity_shows_the_full_did() {
+            var did = "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            identity.nodeId = did;
             var lbl = root.findByName(identity, "nodeIdentityLabel");
             verify(lbl !== null && lbl.visible);
-            verify(lbl.text.indexOf("z6MkvS2mYc1JMm") === 0,
-                   "the head a person recognises must be shown, got: " + lbl.text);
-            verify(lbl.text.indexOf("did:key:") === -1,
-                   "the prefix is noise in chrome, got: " + lbl.text);
+            compare(lbl.text, did,
+                    "the whole identity must be on screen, got: " + lbl.text);
+            verify(lbl.text.indexOf("…") === -1,
+                   "no elision — the user asked for the full id, got: "
+                   + lbl.text);
+        }
+
+        /// The `did:key:` prefix STAYS. `rad self` prints the DID in this form
+        /// and `rad id update --allow` takes it in this form; stripping it to a
+        /// bare NID is trivial for a user, guessing the prefix back is not.
+        ///
+        /// And it must NOT gain a `rad:` prefix: that namespaces REPOSITORY
+        /// ids (`rad:z39LL…`), not node ids, so prefixing this would be
+        /// actively wrong rather than merely redundant.
+        function test_the_identity_keeps_did_key_and_never_says_rad() {
+            var did = "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            identity.nodeId = did;
+            var t = root.findByName(identity, "nodeIdentityLabel").text;
+            verify(t.indexOf("did:key:") === 0,
+                   "the form `rad self` prints and `rad id update --allow` "
+                   + "takes, got: " + t);
+            verify(t.indexOf("rad:") === -1,
+                   "`rad:` prefixes repository ids, not node ids — got: " + t);
         }
 
         /// Input-dependent, so a hardcoded label fails: two identities must
@@ -551,14 +620,105 @@ Item {
         /// Priority 2: anything that looks clickable must BE clickable. The
         /// badge this replaces looked like a button and did nothing, which is
         /// what made it read as broken. A real click, asserting a real effect.
-        function test_clicking_the_identity_asks_for_the_detail() {
-            identity.nodeId =
-                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+        ///
+        /// The effect is now COPYING, not opening Settings — the user asked for
+        /// that directly. Settings stays reachable through the header's own
+        /// Settings chip, which is asserted separately in tst_settings.qml.
+        function test_clicking_the_identity_copies_it() {
+            var did = "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            identity.nodeId = did;
             var area = root.findByName(identity, "nodeIdentity");
             verify(area !== null, "the clickable element must carry the objectName");
+
+            // Put something else on the clipboard first, so a passing
+            // assertion cannot be a leftover from an earlier test.
+            root.clipboardSet("something-else-entirely");
+            compare(root.clipboardGet(), "something-else-entirely",
+                    "precondition: the clipboard holds the decoy");
+
             mouseClick(area);
-            compare(root.identityActivations, 1,
-                    "clicking the identity must do something");
+
+            compare(root.clipboardGet(), did,
+                    "clicking the identity must put the FULL did on the "
+                    + "clipboard, got: " + root.clipboardGet());
+            compare(root.identityCopies, 1,
+                    "and must report exactly one completed copy");
+        }
+
+        /// Input-dependent, so a component that copied a hardcoded string — or
+        /// the first id it ever saw — cannot pass. Two identities, two clicks,
+        /// two different clipboard contents.
+        function test_copying_follows_the_identity_it_is_showing() {
+            var a = "did:key:z6MkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+            var b = "did:key:z6MkBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+            var area = root.findByName(identity, "nodeIdentity");
+
+            identity.nodeId = a;
+            mouseClick(area);
+            compare(root.clipboardGet(), a, "the first identity");
+
+            identity.nodeId = b;
+            mouseClick(area);
+            compare(root.clipboardGet(), b,
+                    "the second identity — a component copying a stale or "
+                    + "hardcoded value would still be reporting the first");
+        }
+
+        /// Nothing to copy means nothing is copied, and no false confirmation.
+        /// The element is invisible in this state, so this can only be reached
+        /// programmatically — but a function that wrote "" to the clipboard
+        /// would silently destroy whatever the user had there.
+        function test_copying_an_absent_identity_does_nothing() {
+            root.clipboardSet("untouched");
+            identity.nodeId = "";
+            identity.copyToClipboard();
+            compare(root.clipboardGet(), "untouched",
+                    "an empty identity must not clear the user's clipboard");
+            compare(root.identityCopies, 0, "and must not claim it copied");
+        }
+
+        /// Clicking must NOT open Settings any more. Asserted as a false, not
+        /// merely omitted: the identity was one of two ways in, and a change
+        /// that copied AND opened the panel would satisfy the copy test above
+        /// while still doing the thing the user asked to stop.
+        function test_clicking_the_identity_does_not_open_settings() {
+            identity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            root.settingsOpened = false;
+            mouseClick(root.findByName(identity, "nodeIdentity"));
+            compare(root.settingsOpened, false,
+                    "the identity is a copy button now — Settings is reached "
+                    + "through the header's Settings chip");
+        }
+
+        /// A click with no visible response is indistinguishable from a broken
+        /// control, which is the fault this whole element has been corrected
+        /// for twice. So the confirmation is asserted, inline and without hover.
+        function test_copying_confirms_itself_on_screen() {
+            identity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            var note = root.findByName(identity, "nodeIdentityCopied");
+            verify(note !== null, "there must be a confirmation element");
+            verify(!note.visible, "precondition: nothing to confirm yet");
+
+            mouseClick(root.findByName(identity, "nodeIdentity"));
+            verify(note.visible,
+                   "a copy with no visible response reads as a dead control");
+            verify(note.text.toLowerCase().indexOf("copied") !== -1,
+                   "and it must say what happened, got: " + note.text);
+        }
+
+        /// The confirmation must not resize the header when it appears — the
+        /// identity sits on a single-line control row that has already
+        /// regressed onto two lines once.
+        function test_the_confirmation_does_not_change_the_elements_height() {
+            identity.nodeId =
+                "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd";
+            var before = identity.implicitHeight;
+            mouseClick(root.findByName(identity, "nodeIdentity"));
+            compare(identity.implicitHeight, before,
+                    "confirming the copy grew the element, which pushes the "
+                    + "header row it sits on");
         }
     }
 
