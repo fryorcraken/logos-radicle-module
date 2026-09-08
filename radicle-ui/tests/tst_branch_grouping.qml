@@ -194,6 +194,32 @@ Item {
                    "and is grouped under its peer: " + found.section);
         }
 
+        // The chip and the section header must colour one peer identically.
+        // They did not: the chip hashed the FULL node id while the header
+        // hashed the abbreviated section LABEL, so a branch showed green on
+        // the chip and grey in the list. Invisible to every assertion that
+        // looked at one of them alone.
+        function test_a_peer_is_one_colour_everywhere() {
+            var r = rows(picker);
+            var peerRow = null;
+            for (var i = 0; i < r.length; i++)
+                if (r[i].name === "z6MkPeerOne/aaa") peerRow = r[i];
+            verify(peerRow !== null, "expected the peer branch");
+
+            // What the header resolves for that section must be the same full
+            // id the row carries — which is what the chip uses.
+            compare(picker.peerIdFor(peerRow.section), peerRow.peer,
+                    "the section header must resolve the peer's FULL node id, "
+                    + "not its display label");
+        }
+
+        // The non-peer sections have no peer and must draw no swatch.
+        function test_the_non_peer_sections_have_no_colour() {
+            compare(picker.peerIdFor("your node"), "");
+            compare(picker.peerIdFor("branches"), "");
+            compare(picker.peerIdFor(""), "");
+        }
+
         function test_your_own_branches_are_sectioned_as_yours() {
             var r = rows(picker);
             var found = null;

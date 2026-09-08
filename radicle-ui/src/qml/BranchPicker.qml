@@ -171,9 +171,39 @@ Item {
                : item.name;
     }
 
+    /// The node id as shown in a section header: in full, minus the `z6Mk`
+    /// prefix every Ed25519 DID carries.
+    ///
+    /// NOT truncated. It was, while the id was prefixed onto all 84 rows and
+    /// width was the enemy; once it moved into a header there is one per peer
+    /// and room to show it. A truncated id is unusable for the thing an id is
+    /// for — telling two peers apart, or matching one against `rad inspect`
+    /// output — and the header is the only place it appears.
+    ///
+    /// The `z6Mk` prefix is dropped because every DID has it: four identical
+    /// characters leading every header carry no information.
     function abbreviate(nid) {
-        var s = nid.indexOf("z6Mk") === 0 ? nid.substring(4) : nid;
-        return s.length > 6 ? s.substring(0, 6) + "…" : s;
+        return nid.indexOf("z6Mk") === 0 ? nid.substring(4) : nid;
+    }
+
+    /// The full node id behind a section label, or "" for the non-peer
+    /// sections ("your node", "branches").
+    ///
+    /// Section headers get their label from `ListView.section`, which only
+    /// carries the string it grouped on — so the header has no route back to
+    /// the peer id except through the rows. Colour must key on the full id,
+    /// the same value the closed chip uses, or one peer renders in two
+    /// different colours depending on where you look at it.
+    function peerIdFor(sectionLabel) {
+        if (sectionLabel === "" || sectionLabel === "your node"
+            || sectionLabel === "branches")
+            return "";
+        for (var i = 0; i < rows.count; i++) {
+            var r = rows.get(i);
+            if (r.section === sectionLabel)
+                return r.peer;
+        }
+        return "";
     }
 
     // ---- filtering --------------------------------------------------------
@@ -281,10 +311,12 @@ Item {
             }
             // Peer provenance as a dot, not a prefix: the closed state answers
             // "which branch am I on", not "whose".
+            // Same square as the section headers — see the comment there for
+            // why it is not a dot.
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: control.displayPeer !== ""
-                width: 6; height: 6; radius: 3
+                width: 7; height: 7; radius: 1
                 color: control.displayPeer !== ""
                        ? Theme.peerColor(control.displayPeer) : "transparent"
             }
@@ -431,26 +463,45 @@ Item {
                 section.labelPositioning:
                     ViewSection.InlineLabels | ViewSection.CurrentLabelAtStart
                 section.delegate: Rectangle {
+                    id: sectionHeader
                     required property string section
                     width: list.width
                     height: section === "" ? 0 : 20
                     visible: section !== ""
                     color: Theme.raised
 
+                    /// This section's peer, in full. `section` is the DISPLAY
+                    /// label; the dot must be keyed on the same full node id
+                    /// the chip uses, or the two disagree — which is exactly
+                    /// what happened: the chip showed green for a branch whose
+                    /// section header showed grey, because `peerColor` was
+                    /// being handed two different strings for one peer.
+                    readonly property string peerId: control.peerIdFor(section)
+
                     Row {
                         anchors.fill: parent
                         anchors.leftMargin: Theme.gapSm
                         spacing: Theme.gapXs
+                        // A square, not a circle. A filled dot reads as a
+                        // presence indicator — "this peer is online" — which
+                        // is a claim this makes no attempt to support: it is
+                        // an identity swatch, constant for a peer whether or
+                        // not their node is reachable. A slight corner radius
+                        // keeps it from looking like a rendering artefact.
                         Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
-                            visible: parent.parent.section !== "your node"
-                                     && parent.parent.section !== "branches"
-                            width: 6; height: 6; radius: 3
-                            color: Theme.peerColor(parent.parent.section)
+                            visible: sectionHeader.peerId !== ""
+                            width: 7; height: 7; radius: 1
+                            color: sectionHeader.peerId !== ""
+                                   ? Theme.peerColor(sectionHeader.peerId)
+                                   : "transparent"
                         }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: parent.parent.section
+                            // Not `parent.parent.section`: inside a Row inside
+                            // the delegate that walks to the wrong object and
+                            // silently yields undefined.
+                            text: sectionHeader.section
                             color: Theme.textFaint
                             font.pixelSize: Theme.fontXs
                             font.family: Theme.mono

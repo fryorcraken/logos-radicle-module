@@ -80,7 +80,12 @@ var statGap = 8;
 // content that demanded the width. A stable, predictable panel is worth more
 // than a snugly-fitted one; long names elide and the filter field is the
 // escape hatch.
-var pickerWidth = 300;
+// Wide enough for a full node id in a section header. A DID minus its shared
+// `z6Mk` prefix is 44 characters, which at 11px monospace is ~290px before
+// padding and the dot. Truncating it instead would save 80px and cost the id
+// its only purpose — telling two peers apart, and matching one against
+// `rad inspect` output.
+var pickerWidth = 380;
 var pickerMaxHeight = 380;
 var pickerTrigger = 180;   // the closed chip
 // Denser than rowHeightSm (28), which is loose for a list that can hold 84
