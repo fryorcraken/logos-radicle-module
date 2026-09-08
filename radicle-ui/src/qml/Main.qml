@@ -316,7 +316,6 @@ Item {
     // failure worth catching is the UI showing one mode while the backend is
     // in another — which a screenshot cannot distinguish from working.
     readonly property string nodeMode:      caps.mode || ""
-    readonly property bool   modeStartable: caps.modeStartable !== false
     readonly property string nodeIdentity:  caps.nodeId || ""
     readonly property string nodeHome:      caps.radHome || ""
     readonly property bool   gitFound:      caps.gitFound === true
