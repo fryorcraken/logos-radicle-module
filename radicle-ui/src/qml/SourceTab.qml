@@ -49,6 +49,22 @@ Item {
     /// Entries in the current directory — read by the UI tests.
     readonly property int entryCount: entries.count
 
+    /// The current directory's entry names, comma-joined.
+    ///
+    /// Exists for the end-to-end specs, and specifically so one can assert
+    /// WHICH branch's tree is on screen rather than merely that a tree
+    /// arrived. That distinction is the whole of the resolution bug: an
+    /// unresolvable ref falls back to the repo head and returns a populated
+    /// tree with no error, so `entryCount > 0` is satisfied just as well by
+    /// the wrong branch as the right one. A spec that names a file unique to
+    /// the branch it picked can tell them apart; one that counts cannot.
+    readonly property string entryNames: {
+        var out = [];
+        for (var i = 0; i < entries.count; i++)
+            out.push(entries.get(i).name);
+        return out.join(",");
+    }
+
     /// The viewer pane's state, surfaced so RepoView (and through it the
     /// end-to-end specs) can assert on what the right-hand pane is showing
     /// without reaching into a nested id. Aliases, not a second copy: the

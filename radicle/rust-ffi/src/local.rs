@@ -219,7 +219,8 @@ fn get_repo_inner(home: &str, rid: &str) -> Result<Value, String> {
 ///   is the bare branch (`main`) so it resolves exactly as it did before;
 /// - every other peer's branches follow, `name` fully qualified
 ///   (`<nid>/<branch>`) so it cannot collide with a local branch of the same
-///   name, and `label` abbreviated for display.
+///   name, and `label` the bare branch name — the node id is in `remote`, and
+///   how (or whether) to shorten it for display is the view's decision.
 ///
 /// Order is load-bearing: the picker draws a separator at the first entry
 /// whose `isLocal` is false, so "yours" and "theirs" stay visually distinct.
@@ -230,23 +231,18 @@ pub fn list_branches(home: &str, rid: &str) -> String {
     }
 }
 
-/// Shorten a node ID for display: `ireRat…`. The full id stays in `name`,
-/// which is what every subsequent read is keyed on — only the label shrinks.
-///
-/// The leading `z6Mk` is dropped first. Every Ed25519 DID starts with it, so
-/// in a list of peers it is four characters of pure noise repeated on every
-/// row — and it was crowding out the branch name, which is the part that
-/// actually differs. `z6MkgFq6…/cli/cob-migrate` becomes `gFq6z5…/cli/cob-migrate`.
-fn abbreviate_nid(nid: &str) -> String {
-    let nid = nid.strip_prefix("z6Mk").unwrap_or(nid);
-    // 6 chars past the shared prefix still distinguishes this machine's
-    // handful of peers. Collisions are a display concern only; `name` is
-    // never abbreviated, so nothing downstream can confuse two peers.
-    match nid.char_indices().nth(6) {
-        Some((idx, _)) => format!("{}…", &nid[..idx]),
-        None => nid.to_string(),
-    }
-}
+// There was an `abbreviate_nid` here, shortening a node id to `gFq6z5…` for
+// the `label` field. It is gone rather than left unused: the picker moved the
+// node id out of every row and into one section header per peer, where it is
+// shown in FULL, and derives the bare branch name itself — so this produced a
+// string nothing read, and the two implementations had already drifted (this
+// one truncated to six characters, the view's does not truncate).
+//
+// Noting it because this crate's clippy runs with `-D warnings` precisely so
+// dead code gets a decision rather than an `#[allow]`, and twice before in
+// this crate the answer was "it should have been called". Here it genuinely
+// should not: `remote` carries the full id for anyone who wants to abbreviate
+// it, and how to abbreviate is a display decision that belongs with the view.
 
 fn list_branches_inner(home: &str, rid: &str) -> Result<Value, String> {
     let storage = open_storage(home)?;
@@ -326,8 +322,21 @@ fn list_branches_inner(home: &str, rid: &str) -> Result<Value, String> {
                 })
             } else {
                 json!({
+                    // `label` is the BARE branch name, the same as a local
+                    // one's. It used to be `<abbreviated nid>/<branch>`, from
+                    // when the picker showed the node id on every row; the id
+                    // now lives in a section header and the view derives the
+                    // bare name itself, so that label was written and never
+                    // read — two abbreviation implementations that had already
+                    // drifted apart (this one truncated to six characters,
+                    // the view's does not truncate at all).
+                    //
+                    // Kept as a field rather than dropped because `name` is
+                    // qualified and unambiguous while `label` is what a
+                    // consumer displays, and a non-QML consumer should not
+                    // have to re-derive the split. `remote` carries the id.
                     "name": format!("{nid_str}/{branch}"),
-                    "label": format!("{}/{branch}", abbreviate_nid(&nid_str)),
+                    "label": branch,
                     "head": oid.to_string(),
                     "remote": nid_str,
                     "isLocal": false,

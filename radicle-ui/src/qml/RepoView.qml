@@ -87,6 +87,9 @@ Item {
     /// is a second implementation of anything, so a spec asserting on them is
     /// asserting on what the UI itself uses.
     readonly property int treeCount:   source.entryCount
+    /// The current directory's entry names — see SourceTab.entryNames for why
+    /// a spec needs the names and not just the count.
+    readonly property string treeNames: source.entryNames
     readonly property int commitCount: commits.count
     readonly property int issueCount:  issues.count
     readonly property int patchCount:  patches.count

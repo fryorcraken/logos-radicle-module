@@ -217,6 +217,7 @@ Item {
     readonly property int    seedCount: seedPicker.count
     readonly property int    repoTab:   repoPage.tab
     readonly property int    treeCount: repoPage.treeCount
+    readonly property string treeNames: repoPage.treeNames
     readonly property int    commitCount: repoPage.commitCount
     readonly property int    issueCount:  repoPage.issueCount
     readonly property int    patchCount:  repoPage.patchCount

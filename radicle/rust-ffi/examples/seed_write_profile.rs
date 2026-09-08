@@ -190,7 +190,23 @@ fn seed_branches(profile: &Profile, rid: &str, work: &Path) {
     let peer = radicle::crypto::SigningKey::from_seed(Seed::new([21u8; 32]));
     let peer_nid = radicle::crypto::Signer::public_key(&peer).to_string();
     push_branch(&repo, &storage_path, &peer_nid, "master");
+
+    // `their-work` gets a file that exists on NO other branch, and that is the
+    // whole reason this commit is here rather than the branch being pushed
+    // from the same tree as the peer's master.
+    //
+    // `local.yaml` picks the last row in the list — this branch — and then
+    // asserts the tree contains this file. Without it the spec could only
+    // assert `treeCount > 0`, which the failure it exists to catch satisfies
+    // perfectly: an unresolvable ref falls back to the repo head and returns
+    // a populated tree with no error. That is precisely why the resolution
+    // bug was silent, and an assertion that cannot distinguish the fallback
+    // from a correct read is not covering resolution at all.
+    std::fs::write(work.join("THEIR_WORK.md"), "# only on the peer's branch\n")
+        .expect("could not write THEIR_WORK.md");
+    commit_all(&repo, "a commit on the peer's branch");
     push_branch(&repo, &storage_path, &peer_nid, "their-work");
+
     stored
         .sign_refs(&peer)
         .expect("could not sign the peer's refs");

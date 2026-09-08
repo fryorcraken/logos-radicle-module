@@ -56,10 +56,18 @@
 # assertions below be exact rather than directional.
 #
 # Run locally against your own node with `sh radicle-ui/tests/run-local-e2e.sh`,
-# which points RAD_HOME at your real profile instead. The assertions are written
-# to hold either way: nothing here names a repository or counts one, so a
+# which points RAD_HOME at your real profile instead. Almost every assertion is
+# written to hold either way — nothing names a repository or counts one, so a
 # developer's node with nine repositories satisfies them as readily as CI's
 # with one.
+#
+# ONE step is seeded-profile-specific, deliberately: "and it is the picked
+# branch's tree, not the repo head's" names THEIR_WORK.md, a file the seeder
+# puts on one branch and nowhere else. It is the only way to assert that a
+# peer-qualified branch RESOLVED rather than falling back to the repo head,
+# because the fallback returns a populated tree with no error — an assertion
+# that both outcomes satisfy is not an assertion. Expect that one step to fail
+# against your own node; every other step holds.
 
 app: radicle_ui
 with: [radicle]
@@ -171,14 +179,29 @@ steps:
 
   # Resolution is the half that broke silently: a peer-qualified name that
   # failed to resolve fell back to the repo head, so the WRONG branch's files
-  # rendered under the right branch's name with no error anywhere. A populated
-  # tree plus no error is what says the qualified name resolved.
+  # rendered under the right branch's name with no error anywhere.
+  #
+  # So this asserts on a FILENAME, not a count. `treeCount > 0` is satisfied
+  # perfectly by the fallback — that is exactly why the bug was invisible —
+  # and an assertion the failure passes is not covering the failure. The
+  # seeder puts THEIR_WORK.md on the peer's `their-work` branch and nowhere
+  # else, so its presence says the peer-qualified name resolved to that
+  # peer's commit rather than falling through to the repo head.
+  #
+  # Against a developer's own node (run-local-e2e.sh) the file will not be
+  # there, so this step is written to hold in CI and reported honestly as
+  # seeded-profile-specific rather than pretending to be machine-independent
+  # like the rest of this spec.
   - name: the tree reloads for the picked branch
     wait_for:
       state:
         - "root.treeCount > 0"
         - "root.navError === ''"
     timeout: 60s
+
+  - name: and it is the picked branch's tree, not the repo head's
+    expect:
+      state: "root.treeNames.indexOf('THEIR_WORK.md') >= 0"
 
   # ---- commits ------------------------------------------------------------
   #
