@@ -35,6 +35,10 @@ Item {
     /// and the git preflight readout.
     property var caps: ({})
 
+    /// The user is done here. The HOST decides what that means — see the
+    /// close control below for why this panel does not close itself.
+    signal closed()
+
     property var settings: ({})
     property string lastError: ""
     property bool loaded: false
@@ -80,17 +84,84 @@ Item {
     implicitWidth: 520
     implicitHeight: column.implicitHeight + Theme.gapLg * 2
 
+    // Escape closes it, the reflex every dismissable thing owes a keyboard
+    // user. `Keys` needs focus to see anything, so the panel takes it when it
+    // becomes visible — otherwise the shortcut exists and never fires, which is
+    // the "control that silently does nothing" shape in a keybinding.
+    focus: visible
+    onVisibleChanged: if (visible) forceActiveFocus()
+    Keys.onEscapePressed: function (event) {
+        panel.closed();
+        event.accepted = true;
+    }
+
     ColumnLayout {
         id: column
         anchors.fill: parent
         anchors.margins: Theme.gapLg
         spacing: Theme.gapLg
 
-        Text {
-            text: "Radicle node"
-            color: Theme.text
-            font.pixelSize: Theme.fontXl
-            font.bold: true
+        // ---- the way out --------------------------------------------------
+        //
+        // This panel is an OPAQUE OVERLAY over the whole view, and the control
+        // that opens it lives in the header underneath. Without this it was a
+        // one-way door: the user clicked their node id, landed here, and had to
+        // restart Basecamp. It shipped that way.
+        //
+        // Placed FIRST in the column, not last, and that is the fix rather than
+        // a stylistic choice. The panel is anchored to the top of a pane it can
+        // grow taller than, so a control at the end of the column sits below
+        // the fold on a short window — present, `visible: true`, and
+        // unreachable. Top-left is also where a user looks for a way back,
+        // matching RepoView, CommitView and ThreadView.
+        //
+        // Same chrome as those three (`‹  Back`, hover fill, objectName on the
+        // MouseArea rather than the Rectangle) so it reads as the same control
+        // it already is elsewhere in the app.
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.gap
+
+            Rectangle {
+                Layout.preferredWidth: 68
+                Layout.preferredHeight: 28
+                radius: Theme.radius
+                color: backMouse.containsMouse ? Theme.surfaceAlt : "transparent"
+                border.color: Theme.border
+                border.width: 1
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "‹  Back"
+                    color: Theme.text
+                    font.pixelSize: Theme.fontMd
+                }
+
+                MouseArea {
+                    id: backMouse
+                    // On the MouseArea: see RepoView.qml's backButton for why
+                    // naming the Rectangle makes which control a click reaches
+                    // depend on sibling order.
+                    objectName: "settingsBackButton"
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // The panel announces rather than closes itself: the HOST
+                    // owns the overlay's visibility, and a panel that hid
+                    // itself would leave the host's `settingsOpen` still true —
+                    // after which the Settings toggle would need two clicks to
+                    // reopen it. Same division as RepoView's `back()`.
+                    onClicked: panel.closed()
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Radicle node"
+                color: Theme.text
+                font.pixelSize: Theme.fontXl
+                font.bold: true
+            }
         }
 
         // Who you are, and where that comes from — in full.

@@ -150,6 +150,12 @@ Item {
     /// settings overlay the current screen rather than replacing it in the
     /// navigation stack, so closing them returns you to exactly where you were
     /// without a back-stack entry that has nothing to go back to.
+    ///
+    /// Two ways in — the header's Settings chip and the node identity beside
+    /// the toggle — and, since the pane is opaque and covers both of them,
+    /// there must be a way OUT that lives inside the pane. There was not, and
+    /// it shipped: the panel was a one-way door and the user had to restart the
+    /// app. `SettingsPanel.closed()` is that way out; see its Back control.
     property bool settingsOpen: false
 
     onCapsJsonChanged: {
@@ -606,6 +612,14 @@ Item {
                 saveSetting: function (key, value, cb) {
                     root.callSettings("setSetting", [key, value], cb);
                 }
+                // Closing just lowers the overlay. Because settings were never
+                // pushed onto the navigation stack, the screen underneath is
+                // untouched and the user lands exactly where they were — deep
+                // inside a repository if that is where they came from. This is
+                // the payoff for keeping `settingsOpen` out of NavState, and it
+                // is why closing needs no decision about which screen to
+                // restore.
+                onClosed: root.settingsOpen = false
             }
         }
 

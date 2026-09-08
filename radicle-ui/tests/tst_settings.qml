@@ -86,6 +86,181 @@ Item {
         saveSetting: function (k, v, cb) { fakeBackend.set(k, v, cb); }
     }
 
+    /// Find the first descendant carrying `name` as its objectName.
+    ///
+    /// `findChild` is used throughout this file and is enough for the panel's
+    /// own internals, but the escape-hatch case below has to search a HOST
+    /// whose child is the panel, and it has to be able to return a MouseArea —
+    /// which is where the objectName lives, by this repo's own convention.
+    function findByName(node, name) {
+        if (!node) return null;
+        if (node.objectName === name) return node;
+        for (var i = 0; i < node.children.length; i++) {
+            var hit = harness.findByName(node.children[i], name);
+            if (hit) return hit;
+        }
+        return null;
+    }
+
+    // ---- the overlay, hosted the way Main.qml hosts it --------------------
+    //
+    // Settings do not replace a page in the navigation StackLayout; they cover
+    // it. That is the whole reason closing them can restore "wherever you
+    // were" without a back-stack entry — but it is also how the panel became a
+    // ONE-WAY DOOR: the overlay covers the header, the header is where the
+    // "Settings" toggle lives, and with no control inside the overlay there
+    // was no way back at all. The user had to restart Basecamp.
+    //
+    // Main.qml itself needs a live QtRO backend and cannot be instantiated in a
+    // component test, so what is reproduced here is the STRUCTURE that failed:
+    // a body screen, an opaque pane covering it bound to `settingsOpen`, and
+    // the real SettingsPanel inside. Everything asserted below is about the
+    // real component; only the host is a stand-in.
+    property bool settingsOpen: false
+
+    /// Stands in for the navigation stack under the overlay. Its `screen`
+    /// records where the user was, so "closing restores the previous screen"
+    /// is an assertion about a value that could actually be wrong, rather than
+    /// about a default that would look identical either way.
+    Rectangle {
+        id: bodyUnderneath
+        objectName: "bodyUnderneath"
+        anchors.fill: parent
+        property string screen: "repos"
+    }
+
+    Rectangle {
+        id: overlayPane
+        objectName: "overlayPane"
+        anchors.fill: parent
+        // Opaque, exactly as in Main.qml: this is what makes the panel a door
+        // rather than a floating card, and therefore what makes a missing exit
+        // a trap rather than a nuisance.
+        color: "#0d1117"
+        visible: harness.settingsOpen
+
+        Ui.SettingsPanel {
+            id: overlayPanel
+            objectName: "overlayPanel"
+            anchors.top: parent.top
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: 600
+            caps: harness.defaultCaps
+            fetchSettings: function (cb) { fakeBackend.get(cb); }
+            saveSetting: function (k, v, cb) { fakeBackend.set(k, v, cb); }
+            onClosed: harness.settingsOpen = false
+        }
+    }
+
+    TestCase {
+        name: "SettingsAreEscapable"
+        when: windowShown
+
+        function init() {
+            harness.settingsOpen = true;
+            bodyUnderneath.screen = "repo:rad:zDEEP";
+        }
+
+        function cleanup() {
+            harness.settingsOpen = false;
+        }
+
+        /// The defect, stated directly: there must BE a way out.
+        ///
+        /// Asserted on the element existing and being visible rather than by
+        /// clicking first, because "the control is missing" and "the control is
+        /// there but does nothing" are different faults with different fixes,
+        /// and a click-only test reports them identically.
+        function test_the_panel_offers_a_visible_way_out() {
+            var back = harness.findByName(overlayPanel, "settingsBackButton");
+            verify(back !== null,
+                   "the settings panel has no close control — it covers the "
+                   + "header that opened it, so this is a one-way door and the "
+                   + "user has to restart the app");
+            verify(back.visible, "a close control nobody can see is not one");
+            verify(back.width > 0 && back.height > 0,
+                   "the close control has no clickable area: "
+                   + back.width + "x" + back.height);
+        }
+
+        /// A real click through the MouseArea, and the assertion is on the
+        /// overlay's VISIBILITY rather than on a signal count.
+        ///
+        /// That distinction is the lesson CommitView's back button taught this
+        /// repo from the other side: a click test structurally cannot see a
+        /// covering overlay, so a test that only counted clicks would pass just
+        /// as happily against a panel that stayed on screen. What has to be
+        /// impossible is "closed" being indistinguishable from "still open but
+        /// transparent" — hence `visible`, which is what actually decides
+        /// whether the user is still trapped.
+        function test_clicking_the_way_out_actually_closes_the_panel() {
+            verify(overlayPane.visible, "the fixture must start open");
+
+            var back = harness.findByName(overlayPanel, "settingsBackButton");
+            verify(back !== null, "no close control to click");
+            mouseClick(back);
+
+            verify(!harness.settingsOpen,
+                   "clicking the close control must ask the host to close");
+            verify(!overlayPane.visible,
+                   "the overlay is still covering the screen — the panel "
+                   + "signalled nothing, or the signal is not connected");
+        }
+
+        /// Escape closes it too, consistent with every other dismissable thing
+        /// a user meets. A keyboard user who cannot find the control still gets
+        /// out, and the reflex costs nothing when there is a button as well.
+        function test_escape_closes_the_panel() {
+            verify(overlayPane.visible, "the fixture must start open");
+            overlayPanel.forceActiveFocus();
+            keyClick(Qt.Key_Escape);
+            verify(!overlayPane.visible,
+                   "Escape must dismiss the settings panel");
+        }
+
+        /// Closing restores where the user WAS, not a default screen.
+        ///
+        /// The value under the overlay is deliberately not the default one, so
+        /// a panel that closed by resetting the navigation stack — sending a
+        /// user who was deep inside a repository back to the repository list —
+        /// fails here. That is a real and tempting wrong fix: it is what
+        /// putting settings into the StackLayout would have forced.
+        function test_closing_restores_the_screen_that_was_underneath() {
+            compare(bodyUnderneath.screen, "repo:rad:zDEEP",
+                    "the fixture must place the user somewhere specific");
+
+            var back = harness.findByName(overlayPanel, "settingsBackButton");
+            mouseClick(back);
+
+            verify(!overlayPane.visible);
+            compare(bodyUnderneath.screen, "repo:rad:zDEEP",
+                    "closing settings sent the user somewhere else — settings "
+                    + "overlay the navigation stack and must not disturb it");
+        }
+
+        /// The close control must be reachable, not merely present.
+        ///
+        /// It lives inside a panel that is `anchors.top`-ed to the pane and can
+        /// grow past the bottom of it, so a control placed at the END of the
+        /// column would be off-screen on a short window — present, visible by
+        /// the property, and unclickable. Asserted on geometry for the same
+        /// reason the caption is: a click test cannot tell you an element is
+        /// outside the viewport, it just silently reaches whatever is there.
+        function test_the_way_out_is_within_the_visible_pane() {
+            var back = harness.findByName(overlayPanel, "settingsBackButton");
+            var topLeft = back.mapToItem(overlayPane, 0, 0);
+            var bottom = back.mapToItem(overlayPane, 0, back.height).y;
+
+            verify(topLeft.y >= -1,
+                   "the close control is above the pane's top edge, at "
+                   + topLeft.y);
+            verify(bottom <= overlayPane.height + 1,
+                   "the close control's bottom is at " + bottom + " in a "
+                   + overlayPane.height + "px pane — it is off-screen, and a "
+                   + "way out the user cannot reach is not a way out");
+        }
+    }
+
     TestCase {
         name: "SettingsPanel"
         when: windowShown
