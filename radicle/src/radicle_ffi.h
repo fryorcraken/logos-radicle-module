@@ -164,6 +164,79 @@ char* radicle_apply_git_path(const char* configured);
 /// -> {"nodeId":"did:key:z6Mk…"} or {"nodeId":"","reason":"…"}
 char* radicle_local_node_id(const char* home);
 
+// ---------------------------------------------------------------------------
+// Identity creation.
+//
+// The `rad auth` half of the embedded node. Unlike everything above, these do
+// not assume a profile exists at `home` — they are what makes one — so `home`
+// here names a directory that may not exist yet rather than one `LocalStore`
+// has already detected.
+// ---------------------------------------------------------------------------
+
+/// Whether `home` already holds a **complete** Radicle identity.
+///
+/// The markers are `keys/radicle.pub` AND `config.json`, not the directory
+/// existing. Both halves are load-bearing:
+///
+///  - An embedded home is a directory this module creates and may well have
+///    created already — for settings, or on a run that failed between `mkdir`
+///    and keygen. Treating "the directory is there" as "a profile is there"
+///    would make such a setup permanently uncompletable.
+///  - `Profile::init` writes the keystore FIRST and then runs seven more
+///    fallible steps, so a crashed init leaves key files with no profile around
+///    them. Keying on the keystore alone would report that home as occupied for
+///    ever, and there is deliberately no `force` — see `init_profile`.
+///
+/// So a half-created home answers **false** here: it is not a profile, and
+/// creating into it is the recovery rather than a destructive act.
+///
+/// Note this asks a different question from `LocalStore::available()`, which
+/// looks for `storage/`. That one asks "can I browse this"; this one asks
+/// "would creating here destroy a real identity". A home with keys and no
+/// storage answers yes here and no there, and both answers are correct.
+///
+/// -> {"exists":bool}
+char* radicle_local_profile_exists(const char* home);
+
+/// Creates a Radicle identity at `home`, the way `rad auth` does.
+///
+/// **An existing profile is refused, never overwritten.** This is the one
+/// irreversible operation in the module: the signing key *is* the identity, and
+/// every repository delegating to it becomes unreachable if it is replaced.
+/// There is deliberately no `force` — a flag that exists is a flag a future UI
+/// can pass by accident.
+///
+/// Note the crate refuses a second init as well (`Keystore::init` returns
+/// `AlreadyInitialized`), so this module's own guard is a second line rather
+/// than the only one. It earns its place by firing *before* the home directory
+/// tree is created, and by naming the consequence instead of a keystore file.
+/// Stated here because the opposite was claimed at one point, and a reader who
+/// checks the crate would otherwise find the justification false.
+///
+/// A **half-created** home — key material present, initialisation unfinished —
+/// is reported distinctly and as recoverable, naming the path to remove. It is
+/// neither "occupied" nor "absent", and calling it occupied would leave the
+/// home permanently uncompletable while claiming a signing key is at risk that
+/// nothing ever signed with. It is reported rather than repaired: deleting key
+/// material automatically would turn a classifier bug into a destroyed
+/// identity.
+///
+/// `home` must be an **absolute** path. A relative one is refused rather than
+/// resolved against a working directory this module does not control.
+///
+/// An empty `passphrase` writes the key UNENCRYPTED, matching `ssh-keygen` and
+/// the crate's own `env::passphrase()`. That is a real trade rather than a
+/// default to hide: an unencrypted key lets the node start unattended and lets
+/// writes happen with no prompt, at the cost of a secret in plaintext on disk.
+/// The outcome comes back as `encrypted` so a caller states what happened
+/// instead of assuming it followed the input.
+///
+/// -> {"created":true,"nodeId":"did:key:z6Mk…","home":"…","alias":"…",
+///     "encrypted":bool}
+/// -> {"error":"…"}
+char* radicle_local_init_profile(const char* home, const char* alias,
+                                 const char* passphrase);
+
 /// Releases a string returned by any of the above. Passing anything else, or
 /// freeing twice, is undefined behaviour — the same contract as `free()`.
 void radicle_free_string(char* s);

@@ -118,4 +118,15 @@ std::string LocalReader::applyGitPath(const std::string& configured)
     return take(radicle_apply_git_path(configured.c_str()));
 }
 
+std::string LocalReader::profileExists(const std::string& home)
+{
+    return take(radicle_local_profile_exists(home.c_str()));
+}
+
+std::string LocalReader::initProfile(const std::string& home, const std::string& alias,
+                                     const std::string& passphrase)
+{
+    return take(radicle_local_init_profile(home.c_str(), alias.c_str(), passphrase.c_str()));
+}
+
 } // namespace radicle

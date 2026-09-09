@@ -121,6 +121,129 @@ Note this does *not* go through `radicle::git::version()` — that helper
 validates whatever `PATH` currently resolves, not the candidate handed to it,
 so it cannot answer the question being asked.
 
+## Creating an identity: the one irreversible thing in this crate
+
+`profileinit.rs` is the `rad auth` half of the embedded node. Everything else
+here reads a profile or writes into one; this makes one, and that difference
+carries the constraints below.
+
+**An existing profile is refused, never overwritten, and there is no `force`.**
+The signing key *is* the identity — replacing it makes every repository
+delegating to it unreachable, and nothing recovers it. A `force` flag was
+considered and rejected: no caller legitimately wants to destroy a key, and a
+flag that exists is one a future UI can pass by accident.
+
+**This guard is a second line, not the only one, and the file used to say
+otherwise.** It claimed `Keystore::init` "would overwrite happily". It does
+not: `radicle-crypto-0.19.0/src/ssh/keystore.rs:121-133` checks both key paths
+and returns `AlreadyInitialized`. Deleting our guard left every test in
+`tests/profile_init.rs` green at the time, because the crate caught every case.
+
+That correction is worth keeping rather than quietly fixing, because the false
+claim was doing work: it was the argument for the guard's existence, and a
+reader who checked the crate would find it untrue and could reasonably delete
+the guard as redundant. The two reasons that actually hold:
+
+- **It fires before `Home::new`.** The crate's check is inside `Profile::init`,
+  by which time the home directory tree exists — so a refusal there leaves a
+  half-made home behind. Ours leaves the filesystem untouched.
+- **The message names the consequence**, not a file. "keystore already
+  initialized, file '…' exists" describes plumbing; "creating another would
+  overwrite its signing key" describes what the user is about to lose.
+
+The consequence for testing is the part that bites: because *both* guards
+error, a test asserting only that a second init fails passes with ours deleted
+— and so does one asserting the error names the home, since the crate's message
+embeds the path too. `a_second_init_is_refused_and_leaves_the_first_identity_intact`
+therefore asserts on the distinguishing wording, verified by mutation.
+
+**There are three home states, not two, and the third is the one that bites.**
+`Profile::init` writes the keystore *first* (`profile.rs:241`) and then runs
+seven more fallible operations, each with a `?`. If any fails — a full disk, a
+permissions hiccup, the process killed — the key files are on disk and nothing
+removes them. So a home can be:
+
+| State | Markers | Meaning |
+|---|---|---|
+| `Empty` | no `keys/radicle.pub` | safe to create into |
+| `Complete` | keys **and** `config.json` | creating would destroy a real identity |
+| `Partial` | keys, no `config.json` | crashed init; recoverable, never a usable identity |
+
+A two-state check keyed on the keystore alone reports `Partial` as occupied for
+ever — and since there is deliberately no `force`, that home becomes
+**permanently uncompletable**, with the guard protecting a stub that was never
+an identity while telling the user their signing key is at risk. Both halves of
+that message are false, and it is the worse failure of the two the guard exists
+to prevent.
+
+`Partial` is **reported, not repaired**. Deleting key material automatically
+would mean a classifier bug costs an identity — the one failure here with no
+recovery — traded against a case that needs only a sentence naming the path to
+remove. `keys/` is named rather than the whole home, so a home holding
+unrelated files is not swept away on our advice.
+
+**Why `config.json` is the completeness marker and `storage/` is not.**
+`Home::new` creates all four subdirectories up front — `storage`, `keys`,
+`node`, `cobs` (`profile.rs:595-599` via `subdirectories()` at `:654`) —
+*before* any key is written. So `storage/` is present in the `Partial` state
+too, and keying on it restores the original bug exactly. Verified by mutation,
+and pinned by
+`a_half_created_home_still_has_storage_which_is_why_config_is_the_marker`, which
+asserts the directory's presence directly so a future crate version that
+reorders creation fails loudly rather than making the marker choice look
+arbitrary. `config.json` is a file written by `Config::init`, the statement
+immediately after keygen, so it means precisely "keygen succeeded and init got
+at least one step further".
+
+The marker is deliberately narrower than "fully usable": a home that failed at,
+say, the COB cache migration has a `config.json` and reads as `Complete`. That
+is the safe direction to err — refusing to overwrite a home with real key
+material *and* a config is right even when a later database is missing. Only
+the pre-config window is unambiguously "nothing here was ever an identity".
+
+Note this is also a *different* question from `LocalStore::available()`, which
+looks for `storage/`: that asks "can I browse this", this asks "would creating
+here destroy a real identity". A home with keys and no storage answers yes to
+the second and no to the first, and both are correct. One consequence worth
+knowing: `available()` reports a `Partial` home as browsable, since `storage/`
+is there. Harmless for reads — it is empty — but it is why the two questions
+cannot share a marker.
+
+**A relative `home` is refused, not resolved**, mirroring the git-path check
+below and for a stronger reason: this writes a permanent signing key, and a
+Basecamp-launched module's working directory is not something the user chose or
+can see. The test asserts nothing was created at the resolved location, because
+"it returned an error" would not notice a guard that fired too late.
+
+**The seed comes from `/dev/urandom`, not from the crate's own
+`profile::env::rng()`.** That helper returns a `fastrand::Rng` — wyrand, which
+is not a CSPRNG. It is the right tool where the crate uses it (jitter,
+shuffling) and the wrong one for the seed of a permanent signing identity.
+`getrandom` would be the idiomatic dependency and is deliberately not used:
+`Cargo.lock` is vendored wholesale by `flake.nix` under a pinned hash, so
+naming a direct dependency rewrites the lock and invalidates that hash even
+when the package is already in the graph transitively. Eight lines of
+`File::read_exact` is what `getrandom` does on Linux anyway.
+
+**The marker for "a profile is here" is `keys/radicle.pub`, not the directory
+existing** — and it is deliberately a *different* question from
+`LocalStore::available()`, which looks for `storage/`. That one asks "can I
+browse this"; this one asks "would creating here destroy a key". A home with
+keys and no storage answers yes to the second and no to the first, and both
+answers are correct. Collapsing them would make an embedded home this module
+had already `mkdir`'d — for settings, or on a run that failed between the
+directory and keygen — permanently uncompletable, with an error blaming a
+profile that does not exist.
+
+**The isolation test is the one that carries the file, and it is written to be
+able to fail.** `two_homes_get_two_different_identities` asserts two homes
+yield two *different* node ids. The obvious version — two directories, both
+hold a key — passes against a hardcoded seed, which is not hypothetical:
+`tests/fixture/mod.rs` uses `Seed::new([7u8;32])` deliberately so failures
+reproduce. Two homes, one identity, every directory-shaped assertion green.
+This was verified by temporarily returning that fixed seed and watching the
+assertion go red with the same DID on both sides.
+
 ## `cargo clippy -- -D warnings` is load-bearing here, not style policing
 
 CI runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.

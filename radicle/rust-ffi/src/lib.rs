@@ -13,6 +13,7 @@ pub mod cobwrite;
 pub mod env;
 pub mod gitread;
 pub mod local;
+pub mod profileinit;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -386,6 +387,56 @@ pub unsafe extern "C" fn radicle_apply_git_path(configured: *const c_char) -> *m
 pub unsafe extern "C" fn radicle_local_node_id(home: *const c_char) -> *mut c_char {
     let home = read_str(home);
     guarded(move || env::node_id(&home))
+}
+
+// ---------------------------------------------------------------------------
+// Identity creation.
+//
+// The `rad auth` half of the embedded node: this is the only entry point that
+// brings an identity into existence rather than reading or changing one. It
+// goes through `guarded` like everything else — a panic crossing `extern "C"`
+// is undefined behaviour whatever the function was doing — and it matters more
+// here than anywhere else, because the panic would land mid-keygen with a
+// half-written keystore on disk.
+// ---------------------------------------------------------------------------
+
+/// Whether `home` already holds a Radicle identity.
+///
+/// Asked separately from creating one so a wizard can tell a user what it is
+/// about to do *before* it does it. `radicle_local_init_profile` refuses an
+/// occupied home anyway — this is not the safety check, it is what lets the
+/// safety check never be the thing a user first hears about.
+///
+/// -> {"exists":bool}
+///
+/// # Safety
+/// `home` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_profile_exists(home: *const c_char) -> *mut c_char {
+    let home = read_str(home);
+    guarded(move || serde_json::json!({ "exists": profileinit::profile_exists(&home) }).to_string())
+}
+
+/// Create a Radicle identity at `home`, the way `rad auth` does.
+///
+/// An empty `passphrase` means an unencrypted key on disk, matching
+/// `ssh-keygen` and the crate's own `env::passphrase()`. An existing profile is
+/// **refused, never overwritten** — see `profileinit::init_profile`.
+///
+/// -> {"created":true,"nodeId":"did:key:z6Mk…","home":"…","alias":"…","encrypted":bool}
+/// -> {"error":"…"}
+///
+/// # Safety
+/// `home`, `alias`, `passphrase` must each be NULL or a valid NUL-terminated
+/// UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_init_profile(
+    home: *const c_char,
+    alias: *const c_char,
+    passphrase: *const c_char,
+) -> *mut c_char {
+    let (home, alias, passphrase) = (read_str(home), read_str(alias), read_str(passphrase));
+    guarded(move || profileinit::init_profile(&home, &alias, &passphrase))
 }
 
 /// Frees a string previously returned by one of the `radicle_local_*`

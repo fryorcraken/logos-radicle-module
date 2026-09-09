@@ -225,6 +225,84 @@ LOGOS_TEST(a_real_profile_lists_its_repositories_through_the_backend)
     LOGOS_ASSERT_FALSE(patches.contains("error"));
 }
 
+// ---------------------------------------------------------------------------
+// Identity creation, at this layer.
+//
+// The Rust tests (`rust-ffi/tests/profile_init.rs`) own the behaviour: that two
+// homes get two DIFFERENT node ids, that a second init is refused without
+// touching the first key, that a passphrase actually encrypts. This layer owns
+// the wiring — that the two new entry points cross the boundary, come back as
+// owned JSON in the module's shape, and free cleanly.
+//
+// **Nothing here creates a profile.** Every case below is a refusal, and that
+// is deliberate rather than a gap: a test that created an identity would write
+// a permanent signing key somewhere, and the only home this layer could point
+// at without a fixture builder is the developer's real one. The Rust layer
+// creates profiles because it has `scratch_dir` and a `Drop` that removes them.
+// ---------------------------------------------------------------------------
+
+/// Both entry points cross the boundary and answer in this module's shape.
+LOGOS_TEST(the_identity_entry_points_return_parseable_json_from_the_rust_backend)
+{
+    const auto exists = parse(LocalReader::profileExists(scratchPath("no-identity")));
+    LOGOS_ASSERT_TRUE(exists.contains("exists"));
+    LOGOS_ASSERT_TRUE(exists["exists"].is_boolean());
+    // A scratch directory has no keystore, so this is the answer that proves
+    // the marker really is `keys/radicle.pub` and not "the directory is there"
+    // — the directory IS there, mkdir'd by scratchPath above.
+    LOGOS_ASSERT_FALSE(exists["exists"].get<bool>());
+
+    // An empty home is refused rather than resolved from the environment. That
+    // matters more here than anywhere else in this file: a fallback to
+    // RAD_HOME/HOME would make this test create a key in the developer's real
+    // profile, and the refusal is what makes the test safe to run at all.
+    const auto created = parse(LocalReader::initProfile("", "tester", ""));
+    LOGOS_ASSERT_TRUE(created.contains("error"));
+    LOGOS_ASSERT_TRUE(created["error"].is_string());
+    LOGOS_ASSERT_FALSE(created["error"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(created.contains("created"));
+}
+
+/// An unusable alias is refused, and the refusal crosses the boundary as an
+/// error object rather than as a crash or an empty string.
+LOGOS_TEST(an_unusable_alias_is_refused_across_the_boundary)
+{
+    // A home that genuinely cannot be created, so this test can never leave a
+    // profile behind on the developer's disk whichever guard fires first.
+    //
+    // This used to be `scratchPath(...) + "/nested/home"` with a comment saying
+    // it "cannot be created". That was simply wrong — `Home::new` calls
+    // `create_dir_all`, so a nested path under a writable scratch directory is
+    // created happily, and with a valid alias that spelling really does make a
+    // profile. The comment asserted a second guard that does not exist.
+    //
+    // `/proc` is not writable, which is a property of the filesystem rather
+    // than a claim about this crate's control flow — the same path the Rust
+    // side's guarded-boundary test uses, and for the same reason.
+    const std::string home = "/proc/nonexistent-cannot-create/home";
+
+    for (const std::string& alias : {std::string(""),
+                                     std::string("has spaces"),
+                                     std::string("tab\there")}) {
+        const auto j = parse(LocalReader::initProfile(home, alias, ""));
+        LOGOS_ASSERT_TRUE(j.contains("error"));
+        LOGOS_ASSERT_TRUE(j["error"].is_string());
+    }
+}
+
+/// Repeated calls allocate and free on the Rust side the same way every other
+/// method here does — a leak or double-free in the new pair would otherwise
+/// only show up as drift nobody attributes to this code.
+LOGOS_TEST(repeated_identity_calls_do_not_leak_or_double_free)
+{
+    const std::string home = scratchPath("identity-churn");
+
+    for (int i = 0; i < 200; ++i) {
+        LOGOS_ASSERT_FALSE(LocalReader::profileExists(home).empty());
+        LOGOS_ASSERT_FALSE(LocalReader::initProfile("", "tester", "").empty());
+    }
+}
+
 /// A rid with characters that need care crossing a C string boundary must come
 /// back as a normal error, not a truncated or corrupted one.
 LOGOS_TEST(an_odd_rid_crosses_the_boundary_intact)

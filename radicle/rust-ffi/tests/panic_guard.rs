@@ -419,6 +419,115 @@ fn the_environment_entry_points_are_guarded_too() {
     );
 }
 
+/// The identity entry points are guarded too.
+///
+/// This file advertises itself as the inventory of every `extern "C"` function,
+/// which is only useful if it actually is one — an entry point outside its watch
+/// is exactly the gap it exists to close, and these two were added after it was
+/// written. They are guarded in `lib.rs`; this is what keeps that true.
+///
+/// `init_profile` is the sharpest case in the crate. A panic mid-keygen would
+/// cross the ABI having already written a secret key to disk, so an unwind here
+/// is not merely UB, it is UB with partial key material left behind.
+///
+/// Every input below must FAIL, deliberately: a test that successfully created
+/// an identity would write a permanent key somewhere on the developer's disk,
+/// and `tests/profile_init.rs` is the layer with scratch homes and cleanup. The
+/// success path is covered there.
+#[test]
+fn the_identity_entry_points_are_guarded_too() {
+    let unwritable = c("/proc/nonexistent-cannot-create/home");
+    let relative = c("relative/not/absolute");
+    let traversal = c("../../../etc/passwd");
+    let alias = c("tester");
+    let bad_alias = c("has spaces");
+    let pass = c("");
+
+    for (label, out) in [
+        (
+            "init_profile(unwritable home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_local_init_profile(
+                    unwritable.as_ptr(),
+                    alias.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "init_profile(relative home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_local_init_profile(
+                    relative.as_ptr(),
+                    alias.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "init_profile(traversal-shaped home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_local_init_profile(
+                    traversal.as_ptr(),
+                    alias.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "init_profile(bad alias)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_local_init_profile(
+                    unwritable.as_ptr(),
+                    bad_alias.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            // All NULL — the shape `read_str` maps to "", and the one a C
+            // caller produces most easily by mistake.
+            "init_profile(all NULL)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_local_init_profile(
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            }),
+        ),
+    ] {
+        assert_is_error_json(label, &out);
+    }
+
+    // profile_exists answers `{"exists":bool}` rather than an error object —
+    // "there is nothing there" is an answer to the question, not a failure to
+    // answer it — so the assertion is on the documented shape.
+    for (label, out) in [
+        (
+            "profile_exists(unwritable home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_local_profile_exists(unwritable.as_ptr())
+            }),
+        ),
+        (
+            "profile_exists(traversal-shaped home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_profile_exists(traversal.as_ptr()) }),
+        ),
+        (
+            "profile_exists(NULL home)",
+            call(|| unsafe { radicle_local_ffi::radicle_local_profile_exists(std::ptr::null()) }),
+        ),
+    ] {
+        let v: serde_json::Value = serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("{label}: reply was not JSON: {e}\n{out}"));
+        assert!(
+            v["exists"].is_boolean(),
+            "{label}: must answer the question asked: {out}"
+        );
+    }
+}
+
 /// `radicle_free_string(NULL)` is a documented no-op. Worth pinning because
 /// the C++ `take()` helper calls it on every reply, and a crash here would be
 /// a crash on the happy path.
