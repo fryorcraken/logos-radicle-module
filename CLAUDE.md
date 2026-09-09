@@ -251,7 +251,8 @@ will notice anyway.
 | You want to | Run |
 |---|---|
 | build both modules, both variants | `lgs basecamp build --variant all` |
-| build just the portable artefacts (e2e, AppImage) | `lgs basecamp build-portable` |
+| build just the portable artefacts (AppImage, release) | `lgs basecamp build-portable` |
+| build just the dev artefacts (what the e2e layer runs) | `lgs basecamp build --variant lgx` |
 | check one module still compiles | `lgs basecamp build --variant lgx --module radicle_ui` |
 | install into the dev profiles | `lgs basecamp install` |
 | launch Basecamp for manual testing | `lgs basecamp launch alice` |

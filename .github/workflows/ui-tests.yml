@@ -122,15 +122,13 @@ jobs:
       # `[repos.basecamp].pin` in scaffold.toml by the "Resolve the pinned
       # Basecamp rev" step below, which exports it for every later step.
       #
-      # It used to be hardcoded here, and that was safe only while this
-      # workflow also did the build. Now `lgs basecamp setup` does, and it
-      # reads the pin from scaffold.toml — so a literal here would be a second
-      # source of truth for one fact. Bump scaffold.toml and forget this, and
-      # the store cache silently keys on the old rev: it restores a store full
-      # of the previous Basecamp, the build finds nothing useful in it and
-      # recompiles from scratch on every run, forever. Nothing errors; the
-      # specs still pass; the job just quietly costs ~9 minutes instead of ~3,
-      # and CI slowness gets blamed on the runners.
+      # It used to be hardcoded here, which made it a second source of truth
+      # for one fact. Bump scaffold.toml and forget this, and the store cache
+      # silently keys on the old rev: it restores a store full of the previous
+      # Basecamp, the build finds nothing useful in it and recompiles from
+      # scratch on every run, forever. Nothing errors; the specs still pass;
+      # the job just quietly costs ~9 minutes instead of ~3, and CI slowness
+      # gets blamed on the runners.
       SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
       # Where `lgs basecamp build --variant lgx` collects both modules.
       # sitometres takes ONE --app-dir search root and browse.yaml declares
@@ -316,7 +314,7 @@ jobs:
       # is not the Basecamp compile (~1.5 min) but pulling ~5 GB of closure from
       # the substituters (~4.5 min); the cache removes the download, not the
       # compile. Keyed on the pinned rev — resolved from scaffold.toml by the
-      # step above, which is also the rev `setup` builds — so bumping the pin
+      # step above, which is also the rev the Basecamp build uses — so bumping the pin
       # starts a fresh cache rather than restoring a store that cannot help.
       #
       # `env.BASECAMP_REV` here resolves against the accumulated step

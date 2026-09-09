@@ -55,47 +55,16 @@ if [ ! -d "$rad_home/storage" ]; then
     exit 1
 fi
 
-# Keep in step with ui-tests.yml's SITOMETRES.
-#
-# This was pinned to a fork commit for the inspector-probe bug, which only ever
-# affected the BUNDLE: the released probe looks for `bin/.LogosBasecamp`, and a
-# nix dirBundler bundle ships `bin/.LogosBasecamp.elf`. The dev `#app` this
-# script now uses ships the former, so a published version works again.
-#
-# The drift this file previously recorded is still the lesson: it once claimed
-# to match CI while naming a version that could not run at all, and nothing
-# noticed because nothing runs this script in CI. If you change the pin in
-# ui-tests.yml, change it here, and actually run this once.
-SITOMETRES="@paradoxcomputer/sitometres@0.1.2"
-
-# The dev Basecamp — the inspector is ON in `#app` and off in the shipping
-# bundles; see docs/e2e.md. Built to a local out-link rather than through
-# `lgs basecamp setup`, which would also seed profiles and rewrite
-# scaffold.toml.
-basecamp_bin="$root/result-basecamp/bin/LogosBasecamp"
-if [ ! -x "$basecamp_bin" ]; then
-    echo "local e2e: no Basecamp at $basecamp_bin" >&2
-    echo "           Build it first — the expensive one-time step:" >&2
-    echo "             nix build \"github:logos-co/logos-basecamp/\$(tomlq -r '.repos.basecamp.pin' scaffold.toml)#app\" \\" >&2
-    echo "               -o result-basecamp --accept-flake-config" >&2
-    echo "           See docs/e2e.md." >&2
-    exit 1
-fi
-
-# The DEV modules, matching the dev Basecamp. Mismatching the two halves gets
-# you a UI that opens to nothing and a timeout on step 1 — see docs/e2e.md.
-app_dir="$root/.scaffold/basecamp/lgx"
-if [ ! -d "$app_dir" ]; then
-    echo "local e2e: no dev build at $app_dir" >&2
-    echo "           Run \`lgs basecamp build --variant lgx\` first." >&2
-    exit 1
-fi
+# SITOMETRES, basecamp_bin and app_dir, with their preflight checks. Shared
+# with run-write-e2e.sh so the two cannot drift — they have twice. The most
+# recent time, this file was updated to the dev `#app` and its sibling was
+# left naming `lgs basecamp setup --inspector`, a flag that no longer exists.
+# Neither script runs in CI, so nothing caught it.
+label="local e2e"
+. "$here/e2e-env.sh"
 
 echo "local e2e: reading $rad_home"
 
-# No --variant: sitometres' hostVariant() default is `linux-amd64-dev`, which
-# is exactly what `.#lgx` produces.
-#
 # --strict because without it sitometres exits 0 on INCONCLUSIVE, and a green
 # tick on no evidence is worse than a red one.
 exec npx --yes "$SITOMETRES" run "$here/ui/local.yaml" \

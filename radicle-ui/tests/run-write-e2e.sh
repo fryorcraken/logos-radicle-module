@@ -47,38 +47,10 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
-# Pinned to what ui-tests.yml pins. Published sitometres (0.1.0) refuses the
-# bundle with "no Basecamp with the QML inspector compiled in": its probe never
-# looks at the `.LogosBasecamp.elf` that nix's dirBundler actually ships. This
-# build probes that sibling, which is why there is no copy-and-symlink step
-# here. Keep in step with ui-tests.yml's SITOMETRES.
-SITOMETRES="github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9"
-
-# `lgs basecamp setup --inspector` records the binary it built here rather than
-# leaving a ./result symlink. Parsed, not sourced: `. file` would EXECUTE it,
-# and basecamp_bin is a path, so a value carrying $(...) would run.
-state="$root/.scaffold/state/basecamp.state"
-if [ ! -f "$state" ]; then
-    echo "write e2e: no $state" >&2
-    echo "           Run \`lgs basecamp setup --inspector\` first — it builds the" >&2
-    echo "           inspector Basecamp and records where it put it. That is the" >&2
-    echo "           expensive one-time step; see CLAUDE.md, \"Running the" >&2
-    echo "           end-to-end layer\"." >&2
-    exit 1
-fi
-basecamp_bin=$(sed -n 's/^basecamp_bin=//p' "$state")
-if [ -z "$basecamp_bin" ] || [ ! -x "$basecamp_bin" ]; then
-    echo "write e2e: $state names no usable basecamp_bin" >&2
-    echo "           Re-run \`lgs basecamp setup --inspector\`." >&2
-    exit 1
-fi
-
-app_dir="$root/.scaffold/basecamp/portable"
-if [ ! -d "$app_dir" ]; then
-    echo "write e2e: no portable build at $app_dir" >&2
-    echo "           Run \`lgs basecamp build-portable\` first." >&2
-    exit 1
-fi
+# SITOMETRES, basecamp_bin and app_dir, with their preflight checks. Shared
+# with run-local-e2e.sh so the two cannot drift — they have twice.
+label="write e2e"
+. "$here/e2e-env.sh"
 
 # Under the crate's own gitignored tmp/, not /tmp: everything a run writes
 # stays inside the working directory, which is the convention tests/fixture
@@ -118,6 +90,5 @@ npx --yes "$SITOMETRES" run "$here/ui/write.yaml" \
     --app radicle_ui \
     --app-dir "$app_dir" \
     --basecamp "$basecamp_bin" \
-    --variant linux-amd64 \
     --env "RAD_HOME=$rad_home" \
     --strict

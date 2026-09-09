@@ -61,13 +61,17 @@ version = "0.4.1"
 # immediately.
 #
 # WARNING: `lgs basecamp setup` DESTROYS this whole comment block. It rewrites
-# the file without preserving comments. Scaffold#266 briefly fixed that, and
-# then reverted the fix into its own PR — the revert is #266's current head,
-# which is what both CI workflows pin via LGS_REV. Verified rather than
-# assumed: a `setup --inspector` run on that build removed 26 comment lines
-# here. So run `git diff scaffold.toml` after any `setup` and restore what it
-# took. Keep the note — it is the record of two bugs that each cost a
-# debugging session.
+# the file without preserving comments. Scaffold#266 briefly fixed that and
+# then reverted the fix into a separate PR, so the stripping is still live on
+# the released version both CI workflows pin via LGS_VERSION. Verified rather
+# than assumed: a `setup` run removed 26 comment lines here. So run
+# `git diff scaffold.toml` after any `setup` and restore what it took.
+#
+# No CI job runs `setup` any more, and neither does the e2e layer — only
+# `install` and `launch` need it, so this bites during interactive work.
+#
+# Keep the note — it is the record of two bugs that each cost a debugging
+# session.
 [basecamp.env]
 # Qt's own logging otherwise vanishes into the platform log sink, so neither
 # `lgs basecamp launch` nor the profile log captures it.
