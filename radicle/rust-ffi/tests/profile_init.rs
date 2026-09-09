@@ -309,6 +309,143 @@ fn a_bad_alias_is_refused_and_creates_nothing() {
     cleanup(&dir);
 }
 
+// ---------------------------------------------------------------------------
+// The half-created home.
+//
+// `Profile::init` writes the keystore first and then runs seven more fallible
+// steps (radicle-0.25.1/src/profile.rs:240-266). Any of them failing leaves key
+// files on disk with no profile around them. A two-state check would call that
+// home occupied for ever, and with no `force` it would be permanently
+// uncompletable — the guard protecting a stub that was never an identity.
+//
+// The fixture builds that state directly rather than trying to make a real init
+// fail partway: forcing a failure at, say, `database_mut` needs a filesystem
+// the test cannot arrange portably, while the state itself is exactly "key
+// files present, config.json absent" and is fully specified by that sentence.
+// ---------------------------------------------------------------------------
+
+/// Build the state a crashed init leaves: key material, no `config.json`.
+///
+/// Made by creating a real profile and then deleting `config.json`, rather than
+/// by writing plausible bytes into `keys/` — so the key files are genuinely the
+/// ones `Keystore::init` produces, and the crate's own guard behaves exactly as
+/// it would in the real failure.
+fn half_created_home(name: &str) -> (std::path::PathBuf, String) {
+    let (dir, home) = fresh_home(name);
+    let created = parse(&init_profile(&home, "tester", ""));
+    assert!(
+        created["created"].as_bool().unwrap_or(false),
+        "fixture precondition: a profile was created, got: {created}"
+    );
+    std::fs::remove_file(std::path::Path::new(&home).join("config.json"))
+        .expect("fixture: could not remove config.json");
+    (dir, home)
+}
+
+/// **A half-created home is not reported as an occupied one.**
+///
+/// The distinguishing assertion is on the message, for the same reason the
+/// duplicate-init test asserts on wording: a collapsed two-state version still
+/// errors here, so "it failed" cannot tell the two apart. Verified by mutation
+/// — making `home_state` return `Complete` whenever keys exist makes this fail.
+#[test]
+fn a_half_created_home_is_reported_as_recoverable_not_as_an_existing_identity() {
+    let (dir, home) = half_created_home("profile-init-partial");
+
+    let out = parse(&init_profile(&home, "tester", ""));
+    let message = out["error"].as_str().unwrap_or_default();
+
+    assert!(!message.is_empty(), "a partial home must be refused: {out}");
+    assert!(
+        message.contains("half-created"),
+        "a half-created home must be named as such, not reported as an existing \
+         identity — the key here was never usable and nothing ever signed with \
+         it. Got: {out}"
+    );
+    assert!(
+        !message.contains("would overwrite its signing key"),
+        "a half-created home must NOT claim a signing key is at stake: that is \
+         both false and unactionable, and it is what a two-state check produces. \
+         Got: {out}"
+    );
+    // The message has to be actionable, which means naming the path to remove.
+    assert!(
+        message.contains("keys"),
+        "the message must name what to remove, got: {out}"
+    );
+
+    cleanup(&dir);
+}
+
+/// And the state is genuinely reachable through the public classifier, not just
+/// an artefact of how the error is worded.
+#[test]
+fn a_half_created_home_does_not_read_as_an_existing_profile() {
+    let (dir, home) = half_created_home("profile-init-partial-classify");
+
+    assert!(
+        !profile_exists(&home),
+        "a home with key material but no completed init is not a profile — \
+         reporting it as one is what makes it permanently uncompletable"
+    );
+
+    cleanup(&dir);
+}
+
+/// The recovery actually works: remove what the message names, and creation
+/// succeeds.
+///
+/// This is the assertion that makes the error's claim ("this is recoverable")
+/// true rather than merely reassuring. Without it the message could promise a
+/// recovery that does not exist.
+#[test]
+fn removing_the_key_material_the_message_names_makes_the_home_usable_again() {
+    let (dir, home) = half_created_home("profile-init-partial-recover");
+
+    std::fs::remove_dir_all(std::path::Path::new(&home).join("keys"))
+        .expect("could not remove the keys directory the message names");
+
+    let created = parse(&init_profile(&home, "tester", ""));
+    assert!(
+        created["created"].as_bool().unwrap_or(false),
+        "after removing the stale key material the home must be usable, got: \
+         {created}"
+    );
+    assert!(
+        !created["nodeId"].as_str().unwrap_or_default().is_empty(),
+        "and must yield a real identity: {created}"
+    );
+
+    cleanup(&dir);
+}
+
+/// `storage/` cannot be the completeness marker, and this pins why.
+///
+/// `Home::new` creates all four subdirectories — `storage`, `keys`, `node`,
+/// `cobs` — before any key is written (`profile.rs:595-599`). So `storage/` is
+/// present in the half-created state too, and a version of `home_state` keyed
+/// on it would classify every broken home as complete: the exact bug, restored.
+///
+/// Asserting the directory's presence directly means this fails loudly if a
+/// future crate version reorders creation, rather than the marker choice
+/// quietly becoming arbitrary.
+#[test]
+fn a_half_created_home_still_has_storage_which_is_why_config_is_the_marker() {
+    let (dir, home) = half_created_home("profile-init-partial-markers");
+
+    assert!(
+        std::path::Path::new(&home).join("storage").exists(),
+        "precondition: Home::new creates storage/ before keygen, so it cannot \
+         distinguish a finished profile from a half-created one"
+    );
+    assert!(
+        !std::path::Path::new(&home).join("config.json").exists(),
+        "precondition: config.json is the marker and is absent here"
+    );
+
+    cleanup(&dir);
+}
+
 /// A relative home is refused rather than resolved against the process CWD.
 ///
 /// Symmetric with `env.rs`'s relative-git-path refusal, and for a stronger

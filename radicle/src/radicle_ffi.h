@@ -173,18 +173,27 @@ char* radicle_local_node_id(const char* home);
 // has already detected.
 // ---------------------------------------------------------------------------
 
-/// Whether `home` already holds a Radicle identity.
+/// Whether `home` already holds a **complete** Radicle identity.
 ///
-/// The marker is `keys/radicle.pub`, NOT the directory existing. That
-/// distinction is load-bearing: an embedded home is a directory this module
-/// creates and may well have created already — for settings, or on a run that
-/// failed between `mkdir` and keygen. Treating "the directory is there" as "a
-/// profile is there" would make such a setup permanently uncompletable.
+/// The markers are `keys/radicle.pub` AND `config.json`, not the directory
+/// existing. Both halves are load-bearing:
+///
+///  - An embedded home is a directory this module creates and may well have
+///    created already — for settings, or on a run that failed between `mkdir`
+///    and keygen. Treating "the directory is there" as "a profile is there"
+///    would make such a setup permanently uncompletable.
+///  - `Profile::init` writes the keystore FIRST and then runs seven more
+///    fallible steps, so a crashed init leaves key files with no profile around
+///    them. Keying on the keystore alone would report that home as occupied for
+///    ever, and there is deliberately no `force` — see `init_profile`.
+///
+/// So a half-created home answers **false** here: it is not a profile, and
+/// creating into it is the recovery rather than a destructive act.
 ///
 /// Note this asks a different question from `LocalStore::available()`, which
 /// looks for `storage/`. That one asks "can I browse this"; this one asks
-/// "would creating here destroy a key". A home with keys and no storage answers
-/// yes here and no there, and both answers are correct.
+/// "would creating here destroy a real identity". A home with keys and no
+/// storage answers yes here and no there, and both answers are correct.
 ///
 /// -> {"exists":bool}
 char* radicle_local_profile_exists(const char* home);
@@ -203,6 +212,14 @@ char* radicle_local_profile_exists(const char* home);
 /// tree is created, and by naming the consequence instead of a keystore file.
 /// Stated here because the opposite was claimed at one point, and a reader who
 /// checks the crate would otherwise find the justification false.
+///
+/// A **half-created** home — key material present, initialisation unfinished —
+/// is reported distinctly and as recoverable, naming the path to remove. It is
+/// neither "occupied" nor "absent", and calling it occupied would leave the
+/// home permanently uncompletable while claiming a signing key is at risk that
+/// nothing ever signed with. It is reported rather than repaired: deleting key
+/// material automatically would turn a classifier bug into a destroyed
+/// identity.
 ///
 /// `home` must be an **absolute** path. A relative one is refused rather than
 /// resolved against a working directory this module does not control.

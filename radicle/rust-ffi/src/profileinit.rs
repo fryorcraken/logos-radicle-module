@@ -79,27 +79,95 @@ fn os_seed() -> Result<Seed, String> {
     Ok(Seed::new(bytes))
 }
 
-/// Whether `home` already holds a Radicle profile.
+/// What a directory holds, as far as creating an identity is concerned.
 ///
-/// `keys/radicle.pub` is the marker rather than the directory existing, and
-/// that distinction is the whole point: an embedded home is a directory this
-/// module creates and may well have created already — for settings, or on a
-/// run that failed after `mkdir` and before keygen. Treating "the directory is
-/// there" as "a profile is there" would refuse to ever complete such a setup,
-/// with an error blaming a profile that does not exist.
+/// **There are three states, not two, and missing the third is a trap.**
+/// `Profile::init` writes the keystore *first* and then performs seven more
+/// fallible steps (`radicle-0.25.1/src/profile.rs:240-266`: `Config::init`,
+/// `Storage::open`, `policies_mut`, `notifications_mut`, `database_mut().init`,
+/// `cobs_db_mut`, `migrate`), each with a `?`. If any of them fails — a full
+/// disk, a permissions hiccup, the process killed — the key files are already
+/// on disk and nothing removes them.
 ///
-/// `storage/` is what `LocalStore::detect()` looks for on the C++ side, and the
-/// two are deliberately different questions: that one asks "can I browse this",
-/// this one asks "would creating here destroy a key". A home with keys and no
-/// storage must answer yes here and no there.
-pub fn profile_exists(home: &str) -> bool {
+/// A two-state check keyed on the keystore therefore reports that home as
+/// *occupied* forever after, and since there is deliberately no `force`, the
+/// home becomes permanently uncompletable through this API. The guard meant to
+/// protect a real identity would instead be protecting a stub that never was
+/// one, while telling the user their signing key is at risk.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HomeState {
+    /// No key material. Safe to create into, whether or not the directory
+    /// itself exists.
+    Empty,
+    /// A complete profile. Creating here would destroy a real identity.
+    Complete,
+    /// Key material present but initialisation did not finish. Recoverable —
+    /// and the error must say so, because the key here is not one anybody has
+    /// used, published or delegated to.
+    Partial,
+}
+
+/// Classify `home` for the purposes of creating an identity.
+///
+/// ## Why `config.json` is the completeness marker and `storage/` is not
+///
+/// The obvious pair of markers would be `storage/` and `config.json`. Only the
+/// second works, and the reason is ordering rather than taste: `Home::new`
+/// creates **all four subdirectories up front** — `storage`, `keys`, `node`,
+/// `cobs` (`profile.rs:595-599`, via `subdirectories()` at `:654`) — before a
+/// single key is written. So `storage/` is present in the partial state too,
+/// and using it as the marker would classify every broken home as complete,
+/// which is the bug this enum exists to fix.
+///
+/// `config.json` is a *file*, written by `Config::init` at `profile.rs:242` —
+/// the very next statement after `keystore.init`. It exists only if keygen
+/// succeeded and init got at least one step further, which is exactly the
+/// question being asked.
+///
+/// Note this makes the marker narrower than "the profile is fully usable": a
+/// home that failed at, say, the COB cache migration has a `config.json` and
+/// reads as `Complete` here. That is deliberate and is the safe direction to
+/// err — `Complete` refuses, and refusing to overwrite a home that has real
+/// key material *and* a config is right even when some later database is
+/// missing. Only the pre-config window is unambiguously "nothing here was ever
+/// a working identity".
+pub fn home_state(home: &str) -> HomeState {
     if home.is_empty() {
-        return false;
+        return HomeState::Empty;
     }
-    std::path::Path::new(home)
-        .join("keys")
-        .join("radicle.pub")
-        .exists()
+    let path = std::path::Path::new(home);
+
+    // The public key is the marker for "key material exists" rather than the
+    // directory: an embedded home is one this module creates and may well have
+    // created already — for settings, or on a run that failed between `mkdir`
+    // and keygen. Treating "the directory is there" as "a profile is there"
+    // would refuse to ever complete such a setup.
+    if !path.join("keys").join("radicle.pub").exists() {
+        return HomeState::Empty;
+    }
+
+    if path.join("config.json").exists() {
+        HomeState::Complete
+    } else {
+        HomeState::Partial
+    }
+}
+
+/// Whether `home` already holds a **complete** Radicle profile.
+///
+/// Kept as the boolean the C++ boundary asks for, derived from `home_state`
+/// rather than re-deriving its own answer — one classifier, one set of markers.
+///
+/// Note this deliberately answers a different question from
+/// `LocalStore::available()` on the C++ side, which looks for `storage/`: that
+/// one asks "can I browse this", this asks "would creating here destroy a real
+/// identity". A home with keys and no storage answers yes here and no there,
+/// and both are correct.
+///
+/// **A partial home reports `false`**, because it is not a profile — creating
+/// into it is the recovery, not a destructive act.
+pub fn profile_exists(home: &str) -> bool {
+    home_state(home) == HomeState::Complete
 }
 
 /// Create a Radicle identity at `home`, the way `rad auth` does.
@@ -141,6 +209,24 @@ pub fn profile_exists(home: &str) -> bool {
 /// flag a future UI can pass by accident. The stake is real — the signing key
 /// *is* the identity, and every repository delegating to it becomes unreachable
 /// if it is replaced.
+///
+/// ## The half-created home, which is neither of the above
+///
+/// `Profile::init` writes the keystore first and then runs seven more fallible
+/// steps (`profile.rs:240-266`). Any of them failing leaves key files on disk
+/// with no profile around them, and nothing cleans up.
+///
+/// A two-state check would then call that home *occupied* for ever, and with no
+/// `force` it would be permanently uncompletable — the guard protecting a stub
+/// that was never an identity, while telling the user their signing key is at
+/// stake. That is worse than the case it was written for, because it is both
+/// false and unactionable.
+///
+/// So `home_state` names three states and this reports the third distinctly:
+/// half-created, recoverable, with the path to remove. **It is reported, not
+/// repaired.** Deleting key material automatically would make a
+/// misclassification cost an identity, which is the one failure here with no
+/// recovery; a sentence costs the user one command and cannot destroy anything.
 ///
 /// ## The passphrase, and why empty means unencrypted
 ///
@@ -201,11 +287,36 @@ fn init_profile_inner(home: &str, alias: &str, passphrase: &str) -> Result<Strin
     // `Home::new` creates the directory tree, and by naming the consequence
     // rather than the file. See the doc comment — and note that the test for
     // this asserts on the message, because "it errored" is true of both.
-    if profile_exists(home) {
-        return Err(format!(
-            "a Radicle identity already exists at {home} — creating another \
-             would overwrite its signing key, which cannot be recovered"
-        ));
+    //
+    // Three states, not two: see `home_state`. A PARTIAL home reaches the arm
+    // below with its own message, because telling a user their signing key is
+    // at risk when the "key" is a stub from a failed run is both false and
+    // unactionable.
+    match home_state(home) {
+        HomeState::Empty => {}
+        HomeState::Complete => {
+            return Err(format!(
+                "a Radicle identity already exists at {home} — creating another \
+                 would overwrite its signing key, which cannot be recovered"
+            ));
+        }
+        HomeState::Partial => {
+            // Reported rather than silently repaired. Deleting key material is
+            // the one act this module refuses everywhere else, and doing it
+            // automatically here would mean a classifier bug becomes a destroyed
+            // identity — the failure mode with no recovery, traded for the one
+            // that only needs a sentence. The user is told exactly which path to
+            // remove, and `keys/` is named rather than the whole home so a home
+            // that also holds unrelated files is not swept away on our advice.
+            let keys = std::path::Path::new(home).join("keys");
+            return Err(format!(
+                "the Radicle home at {home} is half-created: it has key material \
+                 but initialisation did not finish, so there is no usable \
+                 identity here. This is recoverable — nothing has ever signed \
+                 with this key. Remove {} and try again.",
+                keys.display()
+            ));
+        }
     }
 
     // Validated before the home is created, for the same reason. `Alias` has

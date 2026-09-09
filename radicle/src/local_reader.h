@@ -98,7 +98,7 @@ public:
     // caller actually has to know.
     // -----------------------------------------------------------------------
 
-    /// Whether `home` already holds a Radicle identity.
+    /// Whether `home` already holds a **complete** Radicle identity.
     ///
     /// Asked separately from creating one so a wizard can tell a user what it
     /// is about to do before it does it. `initProfile` refuses an occupied home
@@ -106,8 +106,14 @@ public:
     /// check from being the first thing a user hears about.
     ///
     /// Deliberately a different question from `LocalStore::available()`: that
-    /// looks for `storage/` and means "can I browse this", while this looks for
-    /// `keys/radicle.pub` and means "would creating here destroy a key".
+    /// looks for `storage/` and means "can I browse this", while this means
+    /// "would creating here destroy a real identity".
+    ///
+    /// **A half-created home answers false.** `Profile::init` writes the
+    /// keystore before seven further fallible steps, so a crashed init leaves
+    /// key files with no profile around them; treating that as occupied would
+    /// make the home permanently uncompletable, since there is no `force`. The
+    /// markers are therefore `keys/radicle.pub` *and* `config.json`.
     ///
     /// -> {"exists":bool}
     static std::string profileExists(const std::string& home);
