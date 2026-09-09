@@ -8,27 +8,20 @@ The whole sequence, in order. Steps 1 and 2 are one-time per machine; step 3
 is the one you repeat.
 
 ```bash
-# 1. The inspector Basecamp — via `lgs`, no raw `nix build`. The rev comes
-#    from [repos.basecamp].pin in scaffold.toml; --inspector selects the attr
-#    AND classifies it as the portable stack.
-#    It writes basecamp_bin= to .scaffold/state/basecamp.state.
-lgs basecamp setup --inspector
+# 1. The Basecamp with the QML inspector. That is the DEV `#app` — the
+#    inspector is off in the shipping outputs, not in the dev build. The rev
+#    is [repos.basecamp].pin in scaffold.toml, the one place it is written.
+nix build "github:logos-co/logos-basecamp/$(tomlq -r '.repos.basecamp.pin' scaffold.toml)#app" \
+  -o result-basecamp --accept-flake-config
 
-# 2. Read where setup put the bundle. No copy, no symlink: --basecamp points
-#    straight at scaffold's own binary inside the read-only out-link. Source
-#    the state file rather than reconstructing the path or hunting /nix/store.
-. .scaffold/state/basecamp.state
-
-# 3. Build the modules and run the spec. Match CI's SITOMETRES pin exactly —
-#    the probe fix that makes step 2 a one-liner is unreleased, so plain
-#    `@0.1.0` (or an unpinned npx) refuses the bundle.
-lgs basecamp build-portable --print-output
-npx --yes 'github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9' \
+# 2. Build the modules — the DEV variant, matching the dev Basecamp — and run
+#    the spec.
+lgs basecamp build --variant lgx
+npx --yes '@paradoxcomputer/sitometres@0.1.2' \
   run radicle-ui/tests/ui/browse.yaml \
   --app radicle_ui \
-  --app-dir .scaffold/basecamp/portable \
-  --basecamp "$basecamp_bin" \
-  --variant linux-amd64 \
+  --app-dir .scaffold/basecamp/lgx \
+  --basecamp ./result-basecamp/bin/LogosBasecamp \
   --strict          # without it sitometres exits 0 on INCONCLUSIVE
 ```
 
@@ -115,98 +108,120 @@ Read such a property off the placeholder items' own `visible` rather than
 recomputing their conditions, or it will agree with them while they render
 nothing.
 
-## `setup --inspector` and `lgs basecamp launch` cannot coexist
+## Running specs no longer conflicts with `lgs basecamp launch`
 
-`--inspector` does not only pick a different Basecamp: it moves
-`[repos.basecamp].attr` **and** `[repos.lgpm].attr` to the portable stack
-(`bin-bundle-dir-inspector` / `cli-portable`), and it persists both to
-`scaffold.toml`. That is exactly what the specs need and exactly what an
-interactive `lgs basecamp launch` cannot use — the dev profiles are seeded for
-the dev stack, so a launch afterwards fails with **"no variant for this
-stack"** and the app opens to nothing.
+It used to. `setup --inspector` moved `[repos.basecamp].attr` **and**
+`[repos.lgpm].attr` to the portable stack and persisted both to
+`scaffold.toml`, so a spec run and an interactive `lgs basecamp launch` needed
+mutually exclusive project state — and the switch was whole-project even from a
+worktree, because `scaffold.toml` is tracked. Flipping it under someone doing
+manual testing broke their session with a message that did not name the cause.
 
-The two states are mutually exclusive, and the switch is a whole-project one
-even from a worktree, because `scaffold.toml` is tracked and shared. So:
+**Both now work at once.** The e2e layer builds its own Basecamp to a local
+out-link and touches neither `attr` key, so `scaffold.toml` no longer encodes
+which of the two you are doing. Nothing to flip, nothing to revert, nothing to
+avoid committing.
 
-- **Before running `setup --inspector`, check nobody is driving Basecamp by
-  hand.** Flipping it under someone doing manual testing breaks their session
-  with a message that does not name the cause.
-- **`lgs basecamp setup --no-inspector` reverts it**, and is what to run when
-  handing the machine back for interactive use.
-- Leaving the two `attr` lines flipped in your working tree is what a spec run
-  needs, but **do not commit them** — they are local machine state, not a
-  project decision. `git diff scaffold.toml` after any `setup` shows both them
-  and the comment stripping described above; restore the comments, keep the
-  attrs, commit neither.
+The one caveat that survives is unrelated to scaffold: two Basecamps against
+the same `~/.radicle` still contend, which is the `local.yaml` step-9 note at
+the end of this file.
 
-CI is unaffected: each runner does one or the other and is destroyed.
-
-## Why step 1 is `lgs` and not `nix`
+## Why the dev `#app`, and not the inspector bundle
 
 The specs need a Basecamp built **with the QML inspector**, a compile-time
-feature that is off in the shipping AppImage. This used to be a raw `nix build`
-because scaffold had no way to select that output; `setup --inspector` closed
-it. What has not changed is that this is the expensive, one-time-per-machine
-step, and that it produces a bundle sitometres still cannot consume directly —
-which is step 2, and is not licence to hand-roll the module builds too.
+feature. For a long time this file said that meant
+`#bin-bundle-dir-inspector`, and the job built it through
+`lgs basecamp setup --inspector`. **That was wrong, and cost a great deal of
+incidental complexity.** Reading logos-basecamp's `flake.nix` at the pinned
+rev:
 
-## Why `SITOMETRES` is a git commit (the inspector probe bug)
+| attr | inspector | feeds |
+|---|---|---|
+| `app` | **on** (`inherit logosQtMcp`, no `enableInspector` flag) | the dev build |
+| `appDistributed` | off (`enableInspector = false`) | `#bin-bundle-dir`, appimage, macos |
+| `appDistributedWithInspector` | on | `#bin-bundle-dir-inspector` |
 
-**Published sitometres (0.1.0) cannot run this bundle at all.** It refuses with
-"no Basecamp with the QML inspector compiled in" even though the inspector is
-there: `hasInspector()` in `src/app/discover.ts` probes exactly
-`bin/LogosBasecamp` (a ~5 KB sh wrapper) and `bin/.LogosBasecamp` (absent),
-never the `bin/.LogosBasecamp.elf` that nix's `dirBundler` actually ships.
+The inspector is off in the **shipping** outputs — which is what the flake's
+own comment says — not off in the dev build. Upstream's `integration-test` and
+`shutdown-test` checks, both inspector-driven, use `appPkg = app`.
 
-That bug is why this job used to carry a copy-and-symlink step — `cp -RL` the
-bundle somewhere writable, then create the filename the probe wanted. **That
-step is gone.** `ui-tests.yml` and step 2 above point `--basecamp` straight at
-scaffold's `basecamp_bin`.
+Verified rather than inferred, with the same probe sitometres uses (searching
+for the literal `[QmlInspector] Inspector server listening on port`):
 
-Filed as
-[paradoxcomputer/sitometres#1](https://github.com/paradoxcomputer/sitometres/issues/1),
-fixed by [#3](https://github.com/paradoxcomputer/sitometres/pull/3), which is
-open — hence a git pin rather than a version. The fix probes three spellings
-(`.<base>`, `.<base>.elf`, `.<base>-wrapped`) and resolves symlinks before
-looking beside the binary; `-wrapped` is what nixpkgs `makeWrapper` emits.
+| build | sibling probed | needle |
+|---|---|---|
+| `#app` | `bin/.LogosBasecamp` | present |
+| `#bin-bundle-dir-inspector` | `bin/.LogosBasecamp.elf` | present |
+| `#bin-bundle-dir` (shipping) | `bin/.LogosBasecamp.elf` | **absent** |
 
-`npx` on a git ref runs the package's `prepare` script, so the TypeScript is
-compiled at install time and no published artefact is needed.
+That last row is the control: it proves the probe discriminates rather than
+matching anything it is pointed at. `ui-tests.yml` asserts the `#app` row on
+every run, so a future Basecamp flipping `enableInspector` off for the dev
+build fails loudly instead of silently removing the inspector this layer
+depends on.
 
-**Pin the commit, never the branch.** A moving ref would silently change the
-tool that gates every spec — the same hazard `LGS_REV` guards against, and one
-this repo watched happen for real when scaffold#266 was force-pushed
-mid-session. Revert to `@paradoxcomputer/sitometres@<version>` once #3 ships;
-nothing else changes, because the workaround step is already deleted.
+Three consequences, and together they are why this is a simplification:
 
-**Do not point `--basecamp` at the `.elf` directly** — that clears the probe
-and then fails to spawn with `ENOENT`, because the wrapper is what sets the
-bundled library and Qt plugin paths. The wrapper is the binary; the `.elf` is
-what the probe needs to *find beside* it.
+- **No `basecamp setup`.** It also built lgpm and seeded `alice`/`bob`
+  profiles this job never used, and it rewrites `scaffold.toml`, stripping
+  every comment — which is why the pin had to be read *before* it ran. That
+  ordering constraint is gone with it.
+- **No `--variant` override.** sitometres' `hostVariant()` defaults to
+  `linux-amd64-dev`, exactly what `.#lgx` produces. The override existed only
+  because the bundle demands portable variants.
+- **No dev-vs-portable classification problem** — the entire subject of
+  [logos-co/scaffold#265](https://github.com/logos-co/scaffold/issues/265).
+  It only ever arose from choosing the bundle.
 
-**Check the issue tracker before re-filing.** This was filed twice — the second
+The one raw `nix build` here is deliberate: `lgs` has no verb that builds a
+Basecamp attr without also running `setup`'s profile seeding.
+
+## Why `SITOMETRES` is a plain version again
+
+It was pinned to a fork commit for the **inspector probe bug**: released
+sitometres refused the *bundle* with "no Basecamp with the QML inspector
+compiled in" even though the inspector was there, because `hasInspector()` in
+`src/app/discover.ts` probed `bin/LogosBasecamp` (a ~5 KB sh wrapper) and
+`bin/.LogosBasecamp`, never the `bin/.LogosBasecamp.elf` that nix's
+`dirBundler` ships for a bundle. Filed as
+[paradoxcomputer/sitometres#1](https://github.com/paradoxcomputer/sitometres/issues/1).
+
+**The dev `#app` ships `bin/.LogosBasecamp`** — the spelling the released probe
+has always looked for — so that bug is not on this path at all. Confirmed by
+running `browse.yaml` green on both `0.1.0` and `0.1.2` against the dev app
+before the switch.
+
+**Pin the version, never a range or `latest`.** A moving ref would silently
+change the tool that gates every spec.
+
+**Do not point `--basecamp` at the `.LogosBasecamp` ELF directly** — that
+clears the probe and then fails to spawn with `ENOENT`, because the wrapper is
+what sets the library and Qt plugin paths. The wrapper is the binary; the
+dot-file is what the probe needs to *find beside* it.
+
+**Check the issue tracker before re-filing.** #1 was filed twice — the second
 time by an agent that found the bug in sitometres' source and opened a
 duplicate without looking first.
 
-## Why `--app-dir` points straight at the portable directory
+## Why `--app-dir` points straight at the build directory
 
 **No copying into `dist/` is needed.** sitometres has no `--dist` flag; it
 takes a single `--app-dir` search root and looks for `.lgx` beneath it. Both
 modules must be findable from that one root, because `browse.yaml` declares
 `with: [radicle]`. The old instructions built each module separately — two
 sub-flake `result-*` symlinks, no single directory holding both — so they
-copied the pair into `dist/` purely to collect them. `build-portable` already
-does the collecting.
+copied the pair into `dist/` purely to collect them. `lgs basecamp build`
+already does the collecting.
 
 Confirmed by a real run rather than inferred: sitometres consumes
-`.scaffold/basecamp/portable/` as-is. It follows the `/nix/store` symlinks and
-is not confused by the `<NN>-` load-order prefix — the two details most likely
-to have broken it. **Do not "fix" this back into a copy step.**
+`.scaffold/basecamp/lgx/` as-is. It follows the `/nix/store` symlinks and is
+not confused by the `<NN>-` load-order prefix — the two details most likely to
+have broken it. **Do not "fix" this back into a copy step.**
 
 ## Keep `radicle.url` on one line
 
-`build-portable` builds both `role = "project"` modules in dependency order and
-**derives the `--override-input radicle path:<abs>` itself**, by reading
+`lgs basecamp build` builds both `role = "project"` modules in dependency order
+and **derives the `--override-input radicle path:<abs>` itself**, by reading
 `radicle-ui/flake.nix` — which is why that input must stay on one line:
 
 ```nix
@@ -216,24 +231,30 @@ radicle.url = "path:../radicle";
 Scaffold's sibling-override parser is line-based. Flattening this into the
 multi-line `inputs.radicle = { url = "…"; };` form is not a syntax error and
 nothing warns: the override silently stops applying, and `radicle-ui` gets
-built against the locked pin instead of the working tree. If a portable build
+built against the locked pin instead of the working tree. If a build
 mysteriously ships stale core-module behaviour, check this line first.
 
-## Why `--variant linux-amd64`
+## Why there is no `--variant` flag
 
-sitometres unpacks one platform variant from the `.lgx` and defaults to
-`linux-amd64-dev`, which suits the dev app (`#app`) but not the bundle. The
-bundle accepts only `[linux-x86_64, linux-amd64]`, so staging `.#lgx` gets you
-a line in Basecamp's log —
+There used to be one, and the reason it is gone is worth keeping: **the
+Basecamp and the modules must come from the same stack.**
+
+sitometres unpacks one platform variant from the `.lgx`, defaulting to
+`hostVariant()` — `linux-amd64-dev`. A dev Basecamp accepts exactly that; a
+portable bundle accepts only `[linux-x86_64, linux-amd64]`. Since this layer
+now runs the dev `#app` with `.#lgx` modules, the default is already right and
+`--variant linux-amd64` would *break* it.
+
+Mismatch the halves either way and Basecamp logs one line —
 
 ```
-Warning: module 'radicle' … was installed for variant 'linux-amd64-dev' which is
+Warning: module 'radicle' … was installed for variant '<x>' which is
 not supported on this platform and will not be loadable
 ```
 
-— and then a UI that opens to nothing and a spec that times out on its first
-step, with nothing in sitometres' output explaining why. Both halves are
-needed: the portable build *and* `--variant`.
+— then the UI opens to nothing and the spec times out on its first step, with
+nothing in sitometres' output explaining why. The pairing is what matters, not
+the particular flag.
 
 ## `local.yaml` needs RAD_HOME — run it with `run-local-e2e.sh`
 
@@ -347,12 +368,12 @@ programs, so there is nothing for them to hang off.
 
 Nor is it worth asking scaffold for an `lgs basecamp test` verb: that means
 scaffold taking a dependency on one third-party test tool and a hardcoded
-Basecamp flake attr, and since `build-portable` absorbed the build-and-collect
-dance the remaining flow is two commands.
+Basecamp flake attr, and since `lgs basecamp build` absorbed the
+build-and-collect dance the remaining flow is two commands.
 
 That leaves `radicle-ui/tests/run-e2e.sh`, matching `run-qml-tests.sh` and
 `check-qml-syntax.sh` beside it — same pattern, no arguments, sets its own
 environment. Worth adding **when someone writes it against a verified-working
-invocation** rather than transcribing this file. The thing to get right: steps
-1 and 2 are one-time and expensive, so it must detect an existing bundle and
-skip them, or it will rebuild Basecamp on every run and nobody will use it.
+invocation** rather than transcribing this file. The thing to get right: step 1
+is expensive and one-time, so it must detect an existing `result-basecamp` and
+skip it, or it will rebuild Basecamp on every run and nobody will use it.

@@ -55,58 +55,52 @@ if [ ! -d "$rad_home/storage" ]; then
     exit 1
 fi
 
-# Pinned to what ui-tests.yml pins, and deliberately NOT to the published
-# version.
-#
-# This script used to invoke `@paradoxcomputer/sitometres@0.1.0`, with a
-# comment saying that was "to match CI". It had stopped matching, and the drift
-# was invisible because nothing runs this script in CI: published 0.1.0 REFUSES
-# the bundle outright with "no Basecamp with the QML inspector compiled in",
-# since its probe looks for `bin/.LogosBasecamp` and never at the
-# `bin/.LogosBasecamp.elf` that nix's dirBundler actually ships. So this wrapper
-# could not run on any machine — the same permanently-red shape the RAD_HOME
-# note above exists to document, arriving a second time in the same file.
 # Keep in step with ui-tests.yml's SITOMETRES.
-SITOMETRES="github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9"
-
-# `lgs basecamp setup --inspector` records the binary it built here rather than
-# leaving a ./result symlink. Parsed, not sourced: `. file` would EXECUTE it,
-# and basecamp_bin is a path, so a value carrying $(...) would run.
 #
-# This used to look for "$root/basecamp/bin/LogosBasecamp" — a copy-and-symlink
-# layout that existed only to work around the 0.1.0 probe bug above, and that
-# was deleted when the workaround was dropped. The path had not existed for
-# some time and nothing noticed, for the same reason as the pin.
-state="$root/.scaffold/state/basecamp.state"
-if [ ! -f "$state" ]; then
-    echo "local e2e: no $state" >&2
-    echo "           Run \`lgs basecamp setup --inspector\` first — it builds the" >&2
-    echo "           inspector Basecamp and records where it put it. That is the" >&2
-    echo "           expensive one-time step; see docs/e2e.md." >&2
-    exit 1
-fi
-basecamp_bin=$(sed -n 's/^basecamp_bin=//p' "$state")
-if [ -z "$basecamp_bin" ] || [ ! -x "$basecamp_bin" ]; then
-    echo "local e2e: $state names no usable basecamp_bin" >&2
-    echo "           Re-run \`lgs basecamp setup --inspector\`." >&2
+# This was pinned to a fork commit for the inspector-probe bug, which only ever
+# affected the BUNDLE: the released probe looks for `bin/.LogosBasecamp`, and a
+# nix dirBundler bundle ships `bin/.LogosBasecamp.elf`. The dev `#app` this
+# script now uses ships the former, so a published version works again.
+#
+# The drift this file previously recorded is still the lesson: it once claimed
+# to match CI while naming a version that could not run at all, and nothing
+# noticed because nothing runs this script in CI. If you change the pin in
+# ui-tests.yml, change it here, and actually run this once.
+SITOMETRES="@paradoxcomputer/sitometres@0.1.2"
+
+# The dev Basecamp — the inspector is ON in `#app` and off in the shipping
+# bundles; see docs/e2e.md. Built to a local out-link rather than through
+# `lgs basecamp setup`, which would also seed profiles and rewrite
+# scaffold.toml.
+basecamp_bin="$root/result-basecamp/bin/LogosBasecamp"
+if [ ! -x "$basecamp_bin" ]; then
+    echo "local e2e: no Basecamp at $basecamp_bin" >&2
+    echo "           Build it first — the expensive one-time step:" >&2
+    echo "             nix build \"github:logos-co/logos-basecamp/\$(tomlq -r '.repos.basecamp.pin' scaffold.toml)#app\" \\" >&2
+    echo "               -o result-basecamp --accept-flake-config" >&2
+    echo "           See docs/e2e.md." >&2
     exit 1
 fi
 
-app_dir="$root/.scaffold/basecamp/portable"
+# The DEV modules, matching the dev Basecamp. Mismatching the two halves gets
+# you a UI that opens to nothing and a timeout on step 1 — see docs/e2e.md.
+app_dir="$root/.scaffold/basecamp/lgx"
 if [ ! -d "$app_dir" ]; then
-    echo "local e2e: no portable build at $app_dir" >&2
-    echo "           Run \`lgs basecamp build-portable\` first." >&2
+    echo "local e2e: no dev build at $app_dir" >&2
+    echo "           Run \`lgs basecamp build --variant lgx\` first." >&2
     exit 1
 fi
 
 echo "local e2e: reading $rad_home"
 
+# No --variant: sitometres' hostVariant() default is `linux-amd64-dev`, which
+# is exactly what `.#lgx` produces.
+#
 # --strict because without it sitometres exits 0 on INCONCLUSIVE, and a green
 # tick on no evidence is worse than a red one.
 exec npx --yes "$SITOMETRES" run "$here/ui/local.yaml" \
     --app radicle_ui \
     --app-dir "$app_dir" \
     --basecamp "$basecamp_bin" \
-    --variant linux-amd64 \
     --env "RAD_HOME=$rad_home" \
     --strict

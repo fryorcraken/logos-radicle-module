@@ -29,8 +29,12 @@ name: UI tests
 #
 # ─── why Basecamp is BUILT and not fetched ──────────────────────────────────
 # sitometres attaches to Basecamp's QML inspector. That is a compile-time
-# feature and is off in every shipping build, so the only usable target is
-# `#bin-bundle-dir-inspector`.
+# feature and is off in every SHIPPING build (`#bin-bundle-dir`, `#bin-appimage`,
+# `#bin-macos-app` all pass `enableInspector = false`), so a released artefact
+# cannot be used and Basecamp is built from source.
+#
+# The target is `#app`, the DEV build — see "Why the dev #app" on the build
+# step below.
 #
 # Measured on 2026-09-03 against rev aa23776 (Basecamp 0.2.3): that output is
 # NOT in the logos public binary cache. Checked two ways —
@@ -54,11 +58,12 @@ name: UI tests
 #     dependencies AROUND Basecamp do come from it — 676 paths were substituted
 #     on the run above, for a resulting store of 5.15 GB.
 #   * the rev is pinned, in `[repos.basecamp].pin` in scaffold.toml — the one
-#     place it is written. `lgs basecamp setup` builds that pin, and the store
+#     place it is written. The build step below reads that pin, and the store
 #     cache key is derived from it. An unpinned build would recompile on every
 #     upstream commit and would also miss the store cache every time.
-# If a future Basecamp release publishes the inspector bundle, drop the store
-# cache and let the substituter do the work — re-check with the curl above.
+# If a future Basecamp release publishes an inspector-enabled build, drop the
+# store cache and let the substituter do the work — re-check with the curl
+# above.
 
 on:
   push:
@@ -127,67 +132,54 @@ jobs:
       # specs still pass; the job just quietly costs ~9 minutes instead of ~3,
       # and CI slowness gets blamed on the runners.
       SPEC: radicle-ui/tests/ui/${{ matrix.spec }}.yaml
-      # Where `lgs basecamp build-portable` collects both modules. sitometres
-      # takes ONE --app-dir search root and browse.yaml declares
+      # Where `lgs basecamp build --variant lgx` collects both modules.
+      # sitometres takes ONE --app-dir search root and browse.yaml declares
       # `with: [radicle]`, so both .lgx must be findable from here.
-      APP_DIR: .scaffold/basecamp/portable
+      #
+      # The DEV directory, not portable — see "Why the dev #app" below.
+      APP_DIR: .scaffold/basecamp/lgx
       # Keep in step with ci.yml's build job.
       #
-      # TEMPORARY: a git rev, not a crates.io version. `setup --inspector` and
-      # `build --print-output` are both from logos-co/scaffold#266, which is
-      # open, so there is no published release carrying them. This is a pinned
-      # COMMIT rather than the branch name on purpose — a moving branch would
-      # silently change the tool driving every build here, and would also make
-      # the cache key below meaningless.
+      # A released version, from crates.io. This was pinned to a commit on the
+      # unmerged logos-co/scaffold#266 for two flags, and needs neither now:
       #
-      # Revert to `LGS_VERSION: "<next release>"` and a plain
-      # `cargo install logos-scaffold --version …` the moment #266 ships in one.
+      #   * `setup --inspector` selected `#bin-bundle-dir-inspector` and
+      #     classified it as the portable stack. This job no longer builds a
+      #     Basecamp bundle at all — see "Why the dev #app" below.
+      #   * `--print-output` on `build` is sugar for
+      #     `LOGOS_SCAFFOLD_PRINT_OUTPUT=1`, which `run_logged` reads on every
+      #     build path regardless of subcommand. Set as a job env var below.
       #
-      # If EVERY job in both workflows suddenly fails in `cargo install`, this
-      # is the first thing to check: the rev lives on an unmerged PR branch,
-      # kept alive only by that PR. A force-push plus a close, or the branch
-      # being deleted, makes it unfetchable. The fix is to re-pin to #266's
-      # current head, not to debug cargo.
-      #
-      # And re-pinning is not mechanical, which is the real reason this is a
-      # commit rather than the branch. #266 has moved three times now — twice
-      # in the session that last bumped this — and one of those moves REMOVED a
-      # feature this repo had already written down as fixed:
-      # `save_project_config`'s comment preservation was reverted out into
-      # `fix/preserve-scaffold-toml-comments`, so bumping the pin reintroduced
-      # `scaffold.toml` comment stripping. The branch was then squashed, which
-      # changes the sha without changing the code.
-      #
-      # So when you move this: check what the new commits DO, and re-run
-      # `lgs basecamp setup --help` / `build-portable --help` against the
-      # installed binary to confirm `--inspector` and `--print-output` survive.
-      # A same-branch commit is not automatically a superset of the old one.
-      LGS_REV: cd4fe509badf84929135aee73972bafee30d30e8
+      # Pinning to an open PR branch cost real time: #266 moved three times,
+      # and one move REVERTED a feature this repo had already documented as
+      # fixed (`save_project_config`'s comment preservation, pulled out into
+      # `fix/preserve-scaffold-toml-comments`), so bumping the pin silently
+      # reintroduced `scaffold.toml` comment stripping. A released version
+      # cannot do that.
+      LGS_VERSION: "0.3.1"
 
-      # TEMPORARY, and the same shape as LGS_REV above: a git commit rather
-      # than an npm version.
+      # The `--print-output` equivalent — see the note in ci.yml. Streams nix
+      # output into the step log instead of a `.scaffold/logs/` file on a
+      # runner about to be destroyed. Only `1` and `true` are truthy.
+      LOGOS_SCAFFOLD_PRINT_OUTPUT: "1"
+
+      # A published release again, not a git commit.
       #
-      # Published sitometres (0.1.0) refuses this bundle with "no Basecamp with
-      # the QML inspector compiled in" even though the inspector is there. Its
-      # `hasInspector()` probes `bin/LogosBasecamp` (a ~5 KB sh wrapper) and
-      # `bin/.LogosBasecamp` (absent), never `bin/.LogosBasecamp.elf`, which is
-      # what nix's dirBundler actually ships. That is the ONLY reason this job
-      # used to copy the bundle out of the store and symlink a second name
-      # beside the wrapper — a step now deleted, because this build probes the
-      # `.elf` sibling (and `-wrapped`, and resolves symlinks first).
+      # This was pinned to a fork commit for the inspector-probe bug: released
+      # sitometres refused the BUNDLE with "no Basecamp with the QML inspector
+      # compiled in" even though the inspector was there, because
+      # `hasInspector()` probed `bin/LogosBasecamp` (a ~5 KB sh wrapper) and
+      # `bin/.LogosBasecamp`, never the `bin/.LogosBasecamp.elf` that nix's
+      # dirBundler ships for a bundle. Filed as paradoxcomputer/sitometres#1.
       #
-      # Filed as paradoxcomputer/sitometres#1, fixed by #3, which is open. A
-      # pinned COMMIT, not the branch: a moving ref would silently change the
-      # tool that gates every spec here — exactly the hazard scaffold#266's
-      # mid-session force-push demonstrated for LGS_REV.
+      # The dev `#app` this job now runs ships `bin/.LogosBasecamp` — the
+      # spelling the released probe has always looked for — so the bug is not
+      # on this path at all. Verified by running the browse spec green on both
+      # 0.1.0 and 0.1.2 against the dev app before making this change.
       #
-      # `npx` on a git ref runs the package's `prepare` script, so the
-      # TypeScript is compiled on install; no published artefact is needed.
-      #
-      # Revert to `@paradoxcomputer/sitometres@<version>` the moment #3 ships
-      # in one. If that release also carries the probe fix, nothing else here
-      # changes — the workaround step is already gone.
-      SITOMETRES: "github:fryorcraken/sitometres#ab6b3ea20fa74bd480705856660defdbd4160fd9"
+      # Pin the VERSION, not a range or `latest`: a moving ref would silently
+      # change the tool that gates every spec here.
+      SITOMETRES: "@paradoxcomputer/sitometres@0.1.2"
 
     steps:
       # Action majors are the Node-24 ones. GitHub retired the Node 20 runtime,
@@ -260,21 +252,19 @@ jobs:
 
       # ONE source of truth for the Basecamp rev: `[repos.basecamp].pin`.
       #
-      # `lgs basecamp setup` takes no --rev — it reads that pin — so anything
-      # else naming the rev has to derive it rather than repeat it. The store
-      # cache below is keyed on it, which is what makes this load-bearing:
-      # a cache keyed on a rev the build does not use restores a store that
-      # cannot help, and the only symptom is that every run is slow.
+      # The Basecamp build step below consumes BASECAMP_REV, and the store
+      # cache is keyed on it, which is what makes this load-bearing: a cache
+      # keyed on a rev the build does not use restores a store that cannot
+      # help, and the only symptom is that every run is slow.
       #
-      # Three ordering constraints, all load-bearing:
+      # Two ordering constraints, both load-bearing:
       #   * AFTER the apt step, which installs tomlq — which is why that step
-      #     moved up to the top of the job rather than sitting beside the
-      #     bundle build it also serves.
+      #     sits at the top of the job rather than beside the build it also
+      #     serves.
       #   * BEFORE the cache step, which keys on what this exports.
-      #   * BEFORE `setup --inspector`, which rewrites scaffold.toml's `attr`
-      #     keys IN PLACE. Safe today because setup never touches `pin`, but
-      #     the read happening first is what makes that a non-question; a
-      #     reorder should be a deliberate choice, not an accident.
+      #
+      # A third used to apply — before `setup --inspector`, which rewrote
+      # scaffold.toml in place — and is gone with `setup` itself.
       # `tomlq` (from the `yq` package) reads the pin as the TOML value it is
       # rather than regexing the file.
       #
@@ -374,10 +364,8 @@ jobs:
           purge-prefixes: nix-ui-${{ runner.os }}-
           purge-created: 604800
 
-      # `lgs` builds the modules below AND builds Basecamp itself. logos-scaffold
-      # has no flake and no release binary, so `cargo install` is the documented
-      # install path — here from a git rev rather than crates.io, because this
-      # job needs `setup --inspector` and that is still unreleased (see LGS_REV).
+      # `lgs` builds the two modules below. logos-scaffold has no flake and no
+      # release binary, so `cargo install` is the documented install path.
       # Cache the binary, not `~/.cargo` — see the same pair of steps in
       # ci.yml for why (throwaway target dir, and not overlaying the runner's
       # own rust shims). Exact-match key, no restore-keys, on purpose.
@@ -386,99 +374,116 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/lgs
-          key: lgs-${{ runner.os }}-git-${{ env.LGS_REV }}
+          key: lgs-${{ runner.os }}-v${{ env.LGS_VERSION }}
 
       - name: Install logos-scaffold
         if: steps.lgs-cache.outputs.cache-hit != 'true'
-        run: cargo install --git https://github.com/logos-co/scaffold.git --rev ${{ env.LGS_REV }} logos-scaffold --locked
+        run: cargo install logos-scaffold --version ${{ env.LGS_VERSION }} --locked
 
-      # `lgs`, not raw `nix build`. `setup --inspector` selects
-      # `.#bin-bundle-dir-inspector` and — the part that matters and the reason
-      # this could not be done before scaffold#266 — classifies it as the
-      # PORTABLE stack, so `[repos.lgpm].attr` moves to `cli-portable` with it.
-      # Left as dev, lgpm would accept only `-dev` variants and Basecamp would
-      # decline to load both modules with one warning line, opening to an empty
-      # UI: exactly the silent failure `--variant linux-amd64` guards against
-      # further down.
+      # ─── Why the dev `#app`, and not the inspector bundle ──────────────────
       #
-      # The rev needs no flag: scaffold reads `[repos.basecamp].pin`, the same
-      # value the resolve step above turned into BASECAMP_REV. One source of
-      # truth, so there is nothing here to keep in step by hand.
+      # This job used to build `#bin-bundle-dir-inspector` through
+      # `lgs basecamp setup --inspector`, on the belief that it was the only
+      # Basecamp output with the QML inspector compiled in. It is not. Reading
+      # logos-basecamp's flake.nix at the pinned rev:
       #
-      # setup also builds lgpm and seeds the alice/bob profiles, neither of
-      # which this job uses. That is a few seconds against a build measured in
-      # minutes, and is the price of not hand-rolling the flake ref.
-      - name: Build Basecamp with the QML inspector
-        run: lgs basecamp setup --inspector
-
-      # setup records the built binary at a deterministic path in
-      # ~/.cache/logos-scaffold rather than a ./result symlink, and writes it
-      # to .scaffold/state/basecamp.state as `basecamp_bin=`. Read it from
-      # there rather than reconstructing the path — the "Run the spec" step
-      # below passes it to sitometres as --basecamp.
-      - name: Read where setup put the Basecamp binary
+      #   app                        `inherit logosQtMcp`, no enableInspector
+      #                              flag  ->  inspector ON
+      #   appDistributed             enableInspector = false, no logosQtMcp
+      #                              (feeds #bin-bundle-dir / appimage / macos)
+      #   appDistributedWithInspector enableInspector = true
+      #                              (feeds #bin-bundle-dir-inspector)
+      #
+      # The inspector is off in the SHIPPING outputs, which is what that flake
+      # comment says — not off in the dev build. Upstream's own inspector-driven
+      # `integration-test` and `shutdown-test` checks both use `appPkg = app`.
+      #
+      # Verified here rather than inferred, by the same probe sitometres uses
+      # (searching the binary for "[QmlInspector] Inspector server listening on
+      # port"):
+      #
+      #   #app                        bin/.LogosBasecamp       present
+      #   #bin-bundle-dir-inspector   bin/.LogosBasecamp.elf   present
+      #   #bin-bundle-dir  (shipping) bin/.LogosBasecamp.elf   ABSENT
+      #
+      # The shipping row is the control: it proves the probe discriminates
+      # rather than matching everything.
+      #
+      # Three things fall out of using the dev app, and they are why this is a
+      # simplification rather than a lateral move:
+      #
+      #   1. No `setup` at all. `setup` also built lgpm and seeded alice/bob
+      #      profiles this job never used, and it REWRITES scaffold.toml,
+      #      stripping every comment — which forced the "Resolve the pinned
+      #      Basecamp rev" step to run before it. That ordering constraint is
+      #      gone with it.
+      #   2. No `--variant` override. sitometres' `hostVariant()` defaults to
+      #      `linux-amd64-dev`, which is exactly what `.#lgx` produces. The
+      #      override existed ONLY because the bundle demands portable variants;
+      #      on this path the default is already correct.
+      #   3. No dev-vs-portable classification problem, which is the entire
+      #      subject of logos-co/scaffold#265 — wrong XDG subpath, wrong lgpm
+      #      variant. It only ever arose from choosing the bundle.
+      #
+      # `--basecamp` points straight at the nix out-link; nothing is copied.
+      # The `-o` out-link is the ONLY reason a raw `nix build` appears here:
+      # `lgs` has no verb that builds a Basecamp attr without also running
+      # `setup`'s profile seeding. The rev comes from BASECAMP_REV, which the
+      # resolve step read from `[repos.basecamp].pin` — still the one place it
+      # is written.
+      - name: Build Basecamp (dev, inspector included)
         run: |
           set -eu
-          # Parsed, not sourced. `. file` would execute it — and `basecamp_bin`
-          # is a path, so a value carrying $(...) would run. It also makes a
-          # missing key surface as a bare `unbound variable` from `set -u`,
-          # which is the least legible failure in the file at the exact moment
-          # someone bumps LGS_REV and the state format has moved under them.
-          # scaffold writes each key CONDITIONALLY (`if !state.pin.is_empty()`),
-          # so an absent key is a shape this really can hit.
-          state=.scaffold/state/basecamp.state
-          test -f "$state" || {
-            echo "::error::$state missing — lgs basecamp setup wrote no state"
-            exit 1
-          }
-          basecamp_bin=$(sed -n 's/^basecamp_bin=//p' "$state")
-          [ -n "$basecamp_bin" ] || {
-            echo "::error::$state has no 'basecamp_bin=' — has lgs changed its state format? (LGS_REV=$LGS_REV)"
-            exit 1
-          }
-          echo "basecamp_bin=$basecamp_bin"
-          test -x "$basecamp_bin"
-          echo "BASECAMP_BIN=$basecamp_bin" >> "$GITHUB_ENV"
+          nix build "github:logos-co/logos-basecamp/$BASECAMP_REV#app" \
+            -o result-basecamp --accept-flake-config
+          bin="$PWD/result-basecamp/bin/LogosBasecamp"
+          test -x "$bin"
+          echo "BASECAMP_BIN=$bin" >> "$GITHUB_ENV"
 
-      # `.#lgx-portable`, NOT `.#lgx` — and this is the opposite of what the
-      # target's name suggests, so it is worth being explicit.
+      # The inspector must actually be in there. Without this the failure is
+      # sitometres refusing the binary several steps later with "no Basecamp
+      # with the QML inspector compiled in" — or worse, a future Basecamp
+      # flipping `enableInspector` off for `#app` and this job silently losing
+      # the thing it exists to test. Same needle sitometres greps for, against
+      # the sibling ELF the nix wrapper execs.
+      - name: The build really has the QML inspector
+        run: |
+          set -eu
+          elf="$(dirname "$BASECAMP_BIN")/.LogosBasecamp"
+          test -f "$elf" || {
+            echo "::error::no .LogosBasecamp beside the wrapper — has the nix output layout changed?"
+            exit 1
+          }
+          grep -aq "\[QmlInspector\] Inspector server listening on port" "$elf" || {
+            echo "::error::#app has no QML inspector compiled in — sitometres cannot drive it"
+            exit 1
+          }
+          echo "ok: inspector present"
+
+      # `.#lgx` — the DEV variant, matching the dev Basecamp above. The two
+      # halves must agree: a dev Basecamp accepts `linux-amd64-dev` modules and
+      # a portable bundle accepts `[linux-x86_64, linux-amd64]`. Mismatch them
+      # and Basecamp declines to load the module with one warning line —
       #
-      # sitometres unpacks ONE platform variant from the .lgx, and defaults to
-      # `hostVariant()`, which is hardcoded to "<os>-<arch>-dev"
-      # (src/app/userdir.ts). That default is right for the dev app (`#app`) and
-      # wrong here: what this job runs is the BUNDLE, and the bundle only
-      # accepts the portable variants. Staging the dev build got as far as
-      # Basecamp refusing to load it —
+      #   Warning: module 'radicle' … was installed for variant '<x>' which is
+      #   not supported on this platform and will not be loadable
       #
-      #   Warning: module 'radicle' … was installed for variant 'linux-amd64-dev'
-      #   which is not supported on this platform and will not be loadable:
-      #   supported variants [linux-x86_64, linux-amd64].
+      # — after which the UI opens to nothing and the spec times out on its
+      # first step, with no hint in sitometres' own output as to why. That is
+      # the failure this pairing exists to avoid, and it is symmetrical: either
+      # half alone reproduces it.
       #
-      # — after which the UI opened to nothing and the spec timed out on its
-      # first step, with no hint in sitometres' own output as to why.
-      #
-      # So: build `.#lgx-portable` (verified with `tar tzf` to contain exactly
-      # `variants/linux-amd64`) and pass --variant to override the -dev default.
-      # Both halves are needed; either alone reproduces the failure above.
-      #
-      # `lgs basecamp build-portable` builds both modules in dependency order,
-      # derives the `--override-input radicle path:../radicle` itself by
-      # parsing radicle-ui/flake.nix, and collects the results into ONE
-      # directory — which is exactly what sitometres needs, since --app-dir is
-      # a single search root and browse.yaml declares `with: [radicle]`.
+      # `lgs basecamp build` builds both modules in dependency order, derives
+      # the `--override-input radicle path:../radicle` itself by parsing
+      # radicle-ui/flake.nix, and collects the results into ONE directory —
+      # which is what sitometres needs, since --app-dir is a single search root
+      # and browse.yaml declares `with: [radicle]`.
       #
       # No `basecamp setup` here: a build touches neither the basecamp binaries
       # nor the profiles, and `lgs basecamp docs` names CI explicitly as a
       # supported hand-authored-[modules]-table case.
-      #
-      # `--print-output` streams nix's output to the step log instead of
-      # tucking it into .scaffold/logs/ and printing a one-line status. That
-      # matters only when a build FAILS: without it the step says the
-      # derivation failed and nothing about why, and the log file it points at
-      # lives on a runner that is about to be destroyed. Restores what the raw
-      # `nix build -L` this replaced used to give.
-      - name: Build both modules (portable)
-        run: lgs basecamp build-portable --print-output
+      - name: Build both modules (dev)
+        run: lgs basecamp build --variant lgx
 
       # ---- the write spec only ------------------------------------------
       #
@@ -548,13 +553,13 @@ jobs:
       # prefix, the two details most likely to have broken it. There is
       # deliberately NO copy into dist/: that only ever existed to collect two
       # separate sub-flake result-* symlinks into one directory, and
-      # build-portable already does the collecting.
+      # `lgs basecamp build` already does the collecting.
       #
       # There was a "The built packages carry the variant the bundle accepts"
       # step here, asserting each .lgx contained variants/linux-amd64. Removed
       # deliberately: it was a diagnostic, not a gate — it could not fail a
-      # correct build, and `build-portable`'s whole job is that variant. The
-      # failure it guarded is written up above `Build both modules (portable)`,
+      # correct build, and the build's whole job is that variant. The
+      # failure it guarded is written up above `Build both modules (dev)`,
       # which is where a reader hitting it will look.
       - name: Run the spec
         # Bounded well inside the job's 120, so a spec that hangs fails HERE —
@@ -580,11 +585,13 @@ jobs:
           # never set it. The path cannot contain spaces — it is built from
           # $RUNNER_TEMP by the seed step above — so word splitting is safe
           # here in a way it would not be for an arbitrary value.
+          # No --variant: sitometres' hostVariant() default is
+          # `linux-amd64-dev`, which is exactly what `.#lgx` produces. The
+          # override was needed only for the portable bundle.
           npx --yes "$SITOMETRES" run "$SPEC" \
             --app radicle_ui \
             --app-dir "$APP_DIR" \
             --basecamp "$BASECAMP_BIN" \
-            --variant linux-amd64 \
             ${SPEC_ENV:-} \
             --strict \
             --json  "ui-results/${{ matrix.spec }}.json" \
