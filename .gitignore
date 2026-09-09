@@ -26,7 +26,7 @@ radicle-ui/tests/out.txt
 radicle-ui/tests/results.txt
 
 # release staging (ci.yml) — ui-tests.yml no longer stages here, it reads
-# .scaffold/basecamp/portable/ directly
+# .scaffold/basecamp/lgx/ directly
 dist/
 
 # UI test run outputs (ui-tests.yml)

@@ -200,36 +200,36 @@ all have an `lgs` verb, and reaching straight for `nix build` skips the part
 scaffold does for you — resolving each module's flake ref, ordering the two
 builds by dependency, and deriving the sibling `--override-input`.
 
-**Version: this repo currently needs an UNRELEASED build, not a crates.io
-release.** Install this and nothing else:
+**Version: a plain crates.io release.** Both CI workflows pin the same one in
+`LGS_VERSION`; install that:
 
 ```bash
-cargo install --git https://github.com/logos-co/scaffold.git \
-  --rev cd4fe509badf84929135aee73972bafee30d30e8 logos-scaffold --locked
+cargo install logos-scaffold --version <LGS_VERSION> --locked
 ```
 
-That is the same commit both CI workflows pin in `LGS_REV`, and it is a
-pinned **commit** rather than the branch: a moving ref would silently change
-the tool driving every build here.
+This repo was pinned to a commit on the unmerged
+[logos-co/scaffold#266](https://github.com/logos-co/scaffold/pull/266) for two
+flags, and needs neither now:
 
-Two things this repo depends on are on
-[logos-co/scaffold#266](https://github.com/logos-co/scaffold/pull/266), which
-is still open — `basecamp setup --inspector` (the whole reason the last raw
-`nix build` for Basecamp is gone) and `--print-output` on `basecamp build` /
-`build-portable`. **Neither exists in v0.3.1**, so installing the release and
-following the e2e sequence in [`docs/e2e.md`](docs/e2e.md) gets you an
-unrecognised-flag error on step 1.
+- `basecamp setup --inspector` selected the Basecamp bundle with the QML
+  inspector. The e2e layer no longer uses a bundle — the dev `#app` already
+  has the inspector. See [`docs/e2e.md`](docs/e2e.md).
+- `--print-output` on `basecamp build` is sugar for
+  `LOGOS_SCAFFOLD_PRINT_OUTPUT=1`, which `run_logged` reads on every build
+  path whatever the subcommand. Both workflows set the env var instead, which
+  works on the release.
 
-When #266 ships in a release, revert all three sites to
-`cargo install logos-scaffold --version <that release>` and put `LGS_VERSION`
-back in both workflows. Nothing else changes — the flags keep their names.
+**The lesson from that pin is worth keeping.** #266 moved three times while
+this repo tracked it, and one of those moves *reverted* a feature already
+written down here as fixed — `save_project_config`'s comment preservation was
+pulled out into a separate branch, so bumping the pin silently reintroduced
+`scaffold.toml` comment stripping. A released version cannot change under you;
+an open PR branch can, and did.
 
-For background on the last release: v0.3.0 moved the module table from
+For background on the release line: v0.3.0 moved the module table from
 `[basecamp.modules.*]` to the top-level `[modules.*]` this repo uses, and added
-`develop`, `build`, `run` and `paths`; v0.3.1 (2026-09-03) is eight fix commits
-on top. **The verb table below was written against released v0.3.1** and every
-verb in it still behaves the same on the pinned build — only `--inspector` and
-`--print-output` are additions.
+`develop`, `build`, `run` and `paths`; v0.3.1 is eight fix commits on top.
+**The verb table below was written against released v0.3.1.**
 
 Do not be misled by `version = "0.2.0"` at the top of `scaffold.toml`: that is
 the **file schema** version, not the CLI version, and `0.2.0` is what `lgs`
@@ -251,7 +251,8 @@ will notice anyway.
 | You want to | Run |
 |---|---|
 | build both modules, both variants | `lgs basecamp build --variant all` |
-| build just the portable artefacts (e2e, AppImage) | `lgs basecamp build-portable` |
+| build just the portable artefacts (AppImage, release) | `lgs basecamp build-portable` |
+| build just the dev artefacts (what the e2e layer runs) | `lgs basecamp build --variant lgx` |
 | check one module still compiles | `lgs basecamp build --variant lgx --module radicle_ui` |
 | install into the dev profiles | `lgs basecamp install` |
 | launch Basecamp for manual testing | `lgs basecamp launch alice` |
@@ -323,111 +324,88 @@ Scaffold#266 grew a `toml_edit`-based `save_project_config` that rewrote in
 place and preserved comments; its author then reverted that work into a
 separate PR (`fix/preserve-scaffold-toml-comments`) on the grounds that ~500
 lines of config-writer surgery had nothing to do with selecting a basecamp
-build. The revert is #266's current head, and it is what `LGS_REV` now pins —
-so the comment stripping is back, and only the inspector opt-in and
-`--print-output` remain.
+build. So the stripping is still live on the released version.
 
-Verified rather than assumed, on the pinned build: a `setup --inspector` run in
-a worktree removed 26 of `scaffold.toml`'s comment lines.
+Verified rather than assumed: a `setup` run in a worktree removed 26 of
+`scaffold.toml`'s comment lines.
+
+**Only `setup` does this, and only `install`/`launch` need `setup`** — no CI
+job runs it any more, and neither does the e2e layer. It bites during
+interactive work.
 
 **So: run `git diff scaffold.toml` after any `setup` and restore what it
 destroyed.** The comment block above `[basecamp.profiles.*]` says this itself.
 When `fix/preserve-scaffold-toml-comments` merges, this section reverts to
 "fixed".
 
-### The one thing `lgs` genuinely does not cover
+### The two things `lgs` genuinely does not cover
 
 **The core module's unit tests.** There is no verb for a flake's `checks`
-outputs, so that stays `nix build '.#checks…'`. That single raw `nix build` is
-legitimate and is not a sign you should hand-roll the rest.
+outputs, so that stays `nix build '.#checks…'`.
 
+**Building a Basecamp without seeding profiles.** The e2e layer needs the dev
+`#app` binary and nothing else; every `lgs` path to a Basecamp goes through
+`setup`, which also builds lgpm, seeds `alice`/`bob`, and rewrites
+`scaffold.toml`. So `docs/e2e.md` step 1 is a raw `nix build` to a local
+out-link.
+
+Both are legitimate and neither is a sign you should hand-roll the rest.
 Everything else has a verb. Use it.
 
-### Building the inspector Basecamp: `setup --inspector`
+### The Basecamp the e2e layer builds
 
-This used to be the second gap, and this file used to carry a long analysis of
-how close scaffold was to closing it. It is closed:
+**It is the dev `#app`, not a bundle.** The QML inspector is compiled *out* of
+the shipping outputs (`#bin-bundle-dir`, `#bin-appimage`, `#bin-macos-app`) and
+*in* to the dev build — upstream's own inspector-driven checks use `app`. This
+file previously asserted the opposite, and that error is what put the whole
+repo on an unmerged scaffold branch for `setup --inspector`. The evidence,
+including the control that proves the probe discriminates, is in
+[`docs/e2e.md`](docs/e2e.md).
 
-```bash
-lgs basecamp setup --inspector
-```
+**`[repos.basecamp].pin` is the single source of truth for the rev.**
+`ui-tests.yml` derives `BASECAMP_REV` from it with `tomlq` in the "Resolve the
+pinned Basecamp rev" step rather than carrying a literal. It used to carry one,
+and the divergence would have been invisible — the store cache would key on the
+stale rev, restore a store that cannot help, and recompile Basecamp on every
+run forever without anything failing.
 
-selects `.#bin-bundle-dir-inspector` **and classifies it as the portable
-stack**, which is the half that actually mattered. Scaffold decides
-dev-vs-portable from a list the inspector attr was missing from, so setting
-`[repos.basecamp].attr` by hand — which was expressible all along — would have
-built the right binary and then seeded profiles it cannot load: the wrong XDG
-subpath (`Logos/LogosBasecampDev`), and worse, `[repos.lgpm].attr = "cli"`
-against a portable bundle. Basecamp would then decline every module with one
-warning line and open to an empty UI, the silent-failure shape this repo has
-been bitten by repeatedly. `--inspector` moves both attrs together and
-persists them, so a later plain `setup` cannot silently drop the opt-in;
-`--no-inspector` reverts.
+Two ordering constraints on the resolve step: **after** the apt step (which
+installs `tomlq`), and **before** the cache step (which keys on what it
+exports). Note the runner's preinstalled `yq` is the **Go** one and has no
+`tomlq`; the apt `yq` is the Python one that does, so the install is not
+redundant.
 
-The rev needs no flag: scaffold reads `[repos.basecamp].pin` from
-`scaffold.toml`, and that pin is already the `aa237766…` the e2e layer wants.
-**That pin is the single source of truth for the rev** — `ui-tests.yml` derives
-its `BASECAMP_REV` from it with `tomlq` in the "Resolve the pinned Basecamp
-rev" step, rather than carrying its own literal.
-
-`ui-tests.yml` used to carry that literal, which was safe only while the
-workflow also did the build; once `setup` took that over, a hardcoded copy
-became a second source of truth for one fact, and the divergence would have
-been invisible — the store cache would key on the stale rev, restore a store
-that cannot help, and recompile Basecamp on every run forever without anything
-failing.
-
-Three ordering constraints on the resolve step, all load-bearing: it must run
-**after** the apt step (which installs `tomlq`), **before** the cache step
-(which keys on the value it exports), and **before** `setup --inspector`, which
-rewrites `scaffold.toml`'s `attr` keys in place. That last one is safe today
-because `setup` never touches `pin` — but it is why the read happens first, and
-a reorder would be a deliberate choice rather than an accident. Note the
-runner's preinstalled `yq` is the **Go** one and has no `tomlq`; the apt `yq`
-is the Python one that does, so the install is not redundant.
-
-**Where the binary lands.** Not a `./result` symlink — `setup` writes it to
-`~/.cache/logos-scaffold/basecamp/<pin>/app-result/` and records the path in
-`.scaffold/state/basecamp.state` as `basecamp_bin=`. Read it from there; do
-not reconstruct it, and do not `ls` the nix store to find it.
-
-**The sitometres probe workaround is still needed.** `app-result` is a nix
-out-link, so the bundle is still read-only and still has `.LogosBasecamp.elf`
-where the probe looks for `.LogosBasecamp` — verified by pointing `--basecamp`
-straight at it and getting "no Basecamp with the QML inspector compiled in".
-`lgs` changed where the bundle comes from, not what is inside it.
-
-**`setup` still strips `scaffold.toml` comments** on the pinned build — that
-fix was reverted back out of #266. `git diff scaffold.toml` after every `setup`
-and restore the `runtime_dir` / `sun_path` block; see the section on it above.
+**`setup` still strips `scaffold.toml` comments** on the released version.
+`git diff scaffold.toml` after every `setup` and restore the `runtime_dir` /
+`sun_path` block; see the section on it above.
 
 ### Upstream asks against logos-scaffold
 
-Two of the three this repo had filed are **closed by
-[logos-co/scaffold#266](https://github.com/logos-co/scaffold/pull/266)**, which
-is what `LGS_REV` pins; the third was closed and then reopened by #266's own
-revert:
+**This repo now runs entirely on released scaffold, and has one open ask.**
 
-- ~~Select the inspector bundle through scaffold~~ — filed as
-  [#265](https://github.com/logos-co/scaffold/issues/265), closed by `setup
-  --inspector`. The issue asked for a one-line addition to
-  `BASECAMP_PORTABLE_ATTRS`; the PR made it an explicit flag instead, on the
-  grounds that an attr name the user has to know and spell is a poor opt-in for
-  a deliberately-not-a-release output. It also moves `[repos.lgpm].attr` in
-  lockstep, which the one-line version would not have.
-- **`basecamp setup` should preserve `scaffold.toml` comments** — briefly
-  closed by #266, then reverted out of it into
-  `fix/preserve-scaffold-toml-comments`, so it is **open again** and the
-  stripping is live on the pinned build. See "`basecamp setup` strips the
-  comments from `scaffold.toml` — again" above.
-- ~~`basecamp build` should pass build logs through~~ — closed as
-  `--print-output` (reusing `install`'s existing flag name rather than adding
-  `--print-build-logs` as a second name for the same thing). Both workflows
-  pass it.
+- **`basecamp setup` should preserve `scaffold.toml` comments** — the one still
+  open. Briefly fixed inside #266, then reverted out into
+  `fix/preserve-scaffold-toml-comments`. See the section above.
+- ~~Select the inspector bundle through scaffold~~ —
+  [#265](https://github.com/logos-co/scaffold/issues/265), **withdrawn as
+  based on a false premise, not fixed.** It asked scaffold to classify
+  `bin-bundle-dir-inspector` as the portable stack, on the belief that it was
+  the only Basecamp output with the QML inspector. The dev `#app` has the
+  inspector too, so this repo needed no scaffold change at all — the whole
+  dev-vs-portable classification problem only arose from choosing the bundle.
+  The inspector-in-a-*bundle* case is still real for upstream (the
+  package-manager doctest, macOS `.app` integration tests); it was never real
+  here.
+- ~~`basecamp build` should pass build logs through~~ — moot. `--print-output`
+  landed on #266's branch, but the `LOGOS_SCAFFOLD_PRINT_OUTPUT=1` it sets is
+  read by `run_logged` on every build path in v0.3.1 already. Both workflows
+  set the env var.
 
-**The one still open is not a scaffold ask at all:** sitometres' inspector
-probe, which is why the e2e layer pins a git commit rather than a released
-version. See [`docs/e2e.md`](docs/e2e.md).
+**A cheap check worth repeating before filing anything upstream:** read the
+dependency's source for what you actually need. Both retracted asks above
+would have been avoided by ten minutes in `flake.nix` and `process.rs`, and
+between them they kept this repo pinned to an unmerged PR branch — through
+three force-pushes and one silent feature revert — for no gain.
 
 The remaining scaffold-shaped wish is small: nothing exposes a flake's `checks`
 outputs, so the core module's unit tests stay on raw `nix build`. Not filed —
@@ -698,10 +676,11 @@ structurally cannot see those.
 
 ## The end-to-end layer lives in `docs/e2e.md`
 
-Running a spec is two commands once the inspector Basecamp is built, but every
-flag in them is load-bearing and the failure modes are silent — a wrong
-`--variant` gets you a UI that opens to nothing and a timeout with no
-explanation. The sequence, the reason for each flag, how to write specs
+Running a spec is two commands once the Basecamp is built, but every flag in
+them is load-bearing and the failure modes are silent — pair a dev Basecamp
+with portable modules, or vice versa, and you get a UI that opens to nothing
+and a timeout with no explanation. The sequence, the reason for each flag, how
+to write specs
 (`state:` over `text:`, `objectName` on the clickable element, adding to the
 `ui-tests.yml` matrix), and the `RAD_HOME` requirement for `local.yaml` are all
 in [`docs/e2e.md`](docs/e2e.md). Read it before running or editing one.
@@ -723,8 +702,8 @@ you add a spec, add it to that matrix, or it is decoration. `write` is the odd
 one out: it needs a signable key, so the job seeds a throwaway profile for the
 run and hands it over as `RAD_HOME` — see [`docs/writes.md`](docs/writes.md).
 `ci.yml`'s schema check already globs `tests/ui/*.yaml` and needs no change.
-It builds Basecamp from source — the inspector-enabled bundle is not in the
-public binary cache — but a warm Nix store cache brings that down
+It builds Basecamp from source — nothing for the pinned rev is in the public
+binary cache, inspector or not — but a warm Nix store cache brings that down
 substantially. A fork PR, or the first run after `BASECAMP_REV` changes, pays
 for a cold cache.
 
@@ -771,19 +750,29 @@ tar's output.
 
 ### Does CI use `lgs`?
 
-**Yes — every module build in both workflows, and now the Basecamp build too.**
-Two raw `nix build` calls are left in CI, and neither is a preference:
-`ci.yml`'s core-module unit tests, because nothing exposes a flake's `checks`
-outputs; and the `release` job's `nix build …#lgx`, which fetches the `lgx` CLI
-that merges the per-platform packages — it is a tool this repo consumes, not a
-module build, and it comes from `logos-co/logos-package` exactly as the
-catalog's own action fetches it.
+**Yes — every module build in both workflows goes through `lgs`.** Three raw
+`nix build` calls are left in CI, and none is a preference:
+
+- `ci.yml`'s **core-module unit tests**, because nothing exposes a flake's
+  `checks` outputs.
+- the `release` job's **`nix build …#lgx`**, which fetches the `lgx` CLI that
+  merges the per-platform packages — a tool this repo consumes, not a module
+  build, and it comes from `logos-co/logos-package` exactly as the catalog's
+  own action fetches it.
+- `ui-tests.yml`'s **Basecamp build**, because every `lgs` route to a Basecamp
+  binary goes through `setup`, which also seeds profiles this job does not want
+  and rewrites `scaffold.toml`. See "The Basecamp the e2e layer builds" above.
+
+What `lgs` replaced:
 
 - **`ci.yml`'s `build` job**: four `nix build` calls became one
-  `lgs basecamp build --variant all --print-output`.
+  `lgs basecamp build --variant all`.
 - **`ui-tests.yml`**: two `nix build` calls became one
-  `lgs basecamp build-portable --print-output`, and sitometres now points
-  `--app-dir` straight at `.scaffold/basecamp/portable/`. The `rm -rf dist &&
-  mkdir dist && cp …` staging step is gone entirely.
-- **`ui-tests.yml`'s inspector Basecamp**: the last raw `nix build` for a
-  Basecamp became `lgs basecamp setup --inspector`. See "Building the inspector
+  `lgs basecamp build --variant lgx`, and sitometres points `--app-dir`
+  straight at `.scaffold/basecamp/lgx/`. The `rm -rf dist && mkdir dist &&
+  cp …` staging step is gone entirely.
+
+Both workflows set `LOGOS_SCAFFOLD_PRINT_OUTPUT=1` as a job-level env var
+rather than passing `--print-output`, which is not a flag on `build` in the
+released version — the env var is what the flag sets, and `run_logged` reads it
+on every build path.

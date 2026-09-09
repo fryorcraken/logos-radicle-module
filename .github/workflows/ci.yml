@@ -274,21 +274,33 @@ jobs:
       # a desync would silently serve an older binary under a key claiming the
       # new one. Keep in step with ui-tests.yml.
       #
-      # TEMPORARY: a git rev, not a crates.io version. `build --print-output`
-      # is from logos-co/scaffold#266, which is open, so no published release
-      # carries it. ui-tests.yml needs the same build for `setup --inspector`,
-      # and the two must stay on one rev — a job pair on different scaffold
-      # builds is exactly the desync this env var exists to prevent.
+      # A released version, from crates.io. Both workflows were pinned to a
+      # commit on the unmerged logos-co/scaffold#266 for two flags:
+      # `setup --inspector` and `--print-output` on `build`. Neither is needed
+      # any more:
       #
-      # Revert to `LGS_VERSION: "<next release>"` and a plain
-      # `cargo install logos-scaffold --version …` once #266 ships in one.
+      #   * `--inspector` selected the Basecamp bundle with the QML inspector
+      #     compiled in. The e2e layer no longer uses a bundle at all — the
+      #     dev `#app` already carries the inspector, which is what scaffold
+      #     builds by default. See ui-tests.yml.
+      #   * `--print-output` is a flag only on `install` in v0.3.1, but the
+      #     `LOGOS_SCAFFOLD_PRINT_OUTPUT=1` it is sugar for is read inside
+      #     `run_logged`, which every build path goes through. The env var
+      #     below is therefore the whole feature, on a released binary.
       #
-      # If EVERY job in both workflows suddenly fails in `cargo install`, this
-      # is the first thing to check: the rev lives on an unmerged PR branch,
-      # kept alive only by that PR. A force-push plus a close, or the branch
-      # being deleted, makes it unfetchable. The fix is to re-pin to #266's
-      # current head, not to debug cargo.
-      LGS_REV: cd4fe509badf84929135aee73972bafee30d30e8
+      # So this is a plain version again, and the pin that made both workflows
+      # hostage to an open PR branch is gone.
+      LGS_VERSION: "0.3.1"
+
+      # The `--print-output` equivalent, set for the whole job: stream nix's
+      # output into the step log instead of tucking it into .scaffold/logs/ and
+      # printing a one-line status. Matters only when a build FAILS — without
+      # it the step says the derivation failed and nothing about why, and the
+      # log file it names lives on a runner about to be destroyed.
+      #
+      # Only `1` and `true` are truthy to scaffold; `false`/`0`/`no` all
+      # correctly mean off.
+      LOGOS_SCAFFOLD_PRINT_OUTPUT: "1"
     steps:
       - uses: actions/checkout@v7
 
@@ -388,7 +400,7 @@ jobs:
       # Exact-match key with NO restore-keys, deliberately: a prefix match
       # would restore a different version's binary and the gate below would
       # then skip installing the version we actually pinned. Bumping
-      # LGS_REV starts a clean cache, which is the point.
+      # LGS_VERSION starts a clean cache, which is the point.
       #
       # Keyed on `matrix.variant`, NOT `runner.os`. `runner.os` is `Linux` for
       # both ubuntu-latest and ubuntu-24.04-arm, so an arch-blind key let the
@@ -401,7 +413,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/lgs
-          key: lgs-${{ matrix.variant }}-git-${{ env.LGS_REV }}
+          key: lgs-${{ matrix.variant }}-v${{ env.LGS_VERSION }}
 
       # Gated on the cache miss rather than using `--force`: on a hit there is
       # nothing to do, and `--force` would unconditionally rebuild. Without the
@@ -409,7 +421,7 @@ jobs:
       # exists in destination".
       - name: Install logos-scaffold
         if: steps.lgs-cache.outputs.cache-hit != 'true'
-        run: cargo install --git https://github.com/logos-co/scaffold.git --rev ${{ env.LGS_REV }} logos-scaffold --locked
+        run: cargo install logos-scaffold --version ${{ env.LGS_VERSION }} --locked
 
       # Unit tests for the core module's logic (URL building, ref resolution,
       # pagination, error shapes, local-profile detection).
@@ -458,13 +470,13 @@ jobs:
       # contributor's machine. It costs little, since the two share almost
       # every derivation.
       #
-      # `--print-output` streams nix's output into this step's log rather than
-      # writing it to `.scaffold/logs/` on a runner that is about to be
-      # destroyed. It only matters when a build fails — but that is the only
-      # time anyone reads it. Restores what `nix build -L` gave before the
-      # conversion to `lgs`.
+      # nix's output is streamed into this step's log rather than written to
+      # `.scaffold/logs/` on a runner about to be destroyed — via the job-level
+      # `LOGOS_SCAFFOLD_PRINT_OUTPUT=1`, since `build` grew no `--print-output`
+      # flag until after v0.3.1. The env var is what the flag sets anyway, and
+      # is read by `run_logged`, which every build path goes through.
       - name: Build both modules (dev + portable)
-        run: lgs basecamp build --variant all --print-output
+        run: lgs basecamp build --variant all
 
       # The `view` field must survive packaging: without it basecamp skips the
       # plugin silently. This is the check that would have caught the app
