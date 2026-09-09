@@ -23,30 +23,99 @@ fn parse(json: &str) -> serde_json::Value {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("not valid JSON: {e}\n{json}"))
 }
 
-/// Write a shell script and make it executable, **closing the file before
-/// chmod**.
+/// Write a shell script and make it executable, staging it under a scratch
+/// name and `rename`-ing it into place.
 ///
-/// The close is the point, and it is why this is a function rather than four
-/// inline lines. Linux refuses `execve` on a file that is still open for
-/// writing anywhere in the system, with `ETXTBSY` — "Text file busy". The tests
-/// below write a fake binary and then run it a few microseconds later, so with
-/// the `File` left to drop at the end of the statement the race is real but
-/// rare: it was observed failing exactly once. A test that fails one run in
-/// hundreds is worse than one that fails always, because it trains people to
-/// re-run rather than to read.
+/// **Closing the file before the exec is necessary and not sufficient**, which
+/// is what the previous version of this comment got wrong. Linux refuses
+/// `execve` on a file open for writing anywhere in the system, with `ETXTBSY` —
+/// "Text file busy" — and "anywhere in the system" reaches a descriptor this
+/// thread has already closed:
+///
+///   - `fork()` copies the entire descriptor table of the forking process, and
+///     `O_CLOEXEC` clears a descriptor at `execve`, **not at fork**;
+///   - so while this thread holds its write handle, any *other* thread of the
+///     same process that spawns anything at all hands a writable copy of that
+///     handle to a child, and the file counts as open for writing until that
+///     child reaches its own `execve`;
+///   - several tests in this file spawn a process — that is what `git_probe`
+///     does — and the harness runs them in parallel threads.
+///
+/// The window is far wider than it looks, too: `sync_all` is an `fsync`,
+/// measured here at a mean of ~515µs and a worst case of 21ms. A sibling fork
+/// lands inside that easily, which is why CI failed while a developer box on
+/// more cores looked clean.
+///
+/// Staging and renaming is a large improvement but **not a cure**, and the
+/// reason is worth keeping: the unit ETXTBSY counts is the *inode*, not the
+/// path, and `rename` moves the name onto the very inode that was just held
+/// open for writing. Measured against a harness of this exact shape — one
+/// thread writing and exec'ing, three siblings spawning `/bin/true` — over 5000
+/// execs each:
+///
+/// ```text
+/// write in place (what this used to do)   1538 ETXTBSY
+/// copy over the target                     953
+/// hard-link a fresh name to it              35   <- same inode, same problem
+/// stage + rename                            46
+/// stage + rename, retrying on ETXTBSY        0
+/// written once, before any sibling forks      0
+/// ```
+///
+/// So the retry in [`probe_fake`] is deliberate rather than a papering-over,
+/// and this is the one case where it is the right call: the fork that reopens
+/// the window belongs to *another thread running library code*, so no amount of
+/// care on this side can close it. The retry is bounded and narrow — it retries
+/// **only** `ETXTBSY`, never any other error and never a wrong answer — so it
+/// cannot mask the thing these tests exist to catch. A probe that runs the fake
+/// and reports "does not look like git" still has to say so.
 fn write_executable(path: &std::path::Path, contents: &str) {
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt;
 
+    // A sibling name in the same directory, so the rename stays within one
+    // filesystem and is therefore atomic.
+    let staging = path.with_extension("staging");
+
     {
-        let mut file = std::fs::File::create(path).expect("create fake binary");
+        let mut file = std::fs::File::create(&staging).expect("create fake binary");
         file.write_all(contents.as_bytes()).expect("write fake");
         // Flush to the OS explicitly rather than trusting the drop below to
         // report a failure it cannot return.
         file.sync_all().expect("sync fake");
-    } // <- closed here, before the chmod and long before the exec.
+    } // <- closed here, so the rename publishes a complete file.
 
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    std::fs::rename(&staging, path).expect("publish fake binary");
+}
+
+/// Probe a fake binary this file just wrote, retrying only while the kernel
+/// says `ETXTBSY`.
+///
+/// See [`write_executable`] for why that can happen at all and why it cannot be
+/// designed out from this side. The narrowness is the safety property: the
+/// retry fires on one specific transient string and nothing else, so a genuine
+/// refusal — the "does not look like git" these tests assert on — is returned
+/// on the first attempt and never retried into something else. If the window
+/// somehow stayed open, this fails with the ETXTBSY message rather than looping
+/// forever, so the failure still names the real cause.
+fn probe_fake(path: &std::path::Path) -> serde_json::Value {
+    let candidate = path.display().to_string();
+
+    let mut last = serde_json::Value::Null;
+    for attempt in 0..10 {
+        last = parse(&env::git_probe(&candidate));
+        let busy = last["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("Text file busy"));
+        if !busy {
+            return last;
+        }
+        // Back off enough for any forked child to reach its own execve, which
+        // is what drops the inherited descriptor.
+        std::thread::sleep(std::time::Duration::from_millis(5 * (attempt + 1)));
+    }
+    last
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +146,7 @@ fn a_configured_path_that_is_not_git_is_rejected_by_the_version_check() {
     let fake = dir.join("notgit");
     write_executable(&fake, "#!/bin/sh\necho 'I am not git'\n");
 
-    let probe = parse(&env::git_probe(&fake.display().to_string()));
+    let probe = probe_fake(&fake);
 
     assert_eq!(
         probe["found"],
@@ -152,7 +221,7 @@ fn a_binary_that_exits_nonzero_is_refused() {
     let fake = dir.join("failing");
     write_executable(&fake, "#!/bin/sh\nexit 3\n");
 
-    let probe = parse(&env::git_probe(&fake.display().to_string()));
+    let probe = probe_fake(&fake);
     assert_eq!(probe["found"], serde_json::json!(false));
 }
 
