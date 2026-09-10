@@ -93,12 +93,19 @@
 # stating up front because they are the ones a future edit is most likely to
 # weaken:
 #
-#   * Embedded asserts the not-implemented state AND `repoCount === 0`
-#     TOGETHER. Either alone is satisfied by a real bug; see the step.
+#   * Embedded asserts its home is non-empty AND DIFFERENT from the one Local
+#     was reading, captured a step earlier. Either alone is satisfied by a real
+#     bug — a non-empty home alone is exactly what the fall-through-to-RAD_HOME
+#     defect produced, and "different" alone is satisfied by the empty string,
+#     which is the inert behaviour rather than a working mode. See the steps.
 #   * `reposSayingNothing === false` is the blank-pane check. It is the one
 #     assertion here that is correct at any window size in any mode, and it is
 #     the only thing in any layer that can see a pane which renders nothing at
-#     all — `repoCount === 0` is exactly what a working empty node reports.
+#     all — `repoCount === 0` is exactly what a working empty node reports. It
+#     matters MORE since Embedded became startable: the not-implemented
+#     placeholder used to keep that pane populated no matter what, and an
+#     embedded home with no identity is now the first state in this app that
+#     legitimately has nothing to list.
 #
 # WHAT THIS LAYER STRUCTURALLY CANNOT COVER, so nobody re-derives it.
 #
@@ -398,25 +405,50 @@ steps:
 
   # ---- Embedded ------------------------------------------------------------
   #
-  # The reason this milestone exists. Embedded cannot start a node, and both
-  # halves of that have to hold: the segment must SAY so before it is chosen,
-  # and choosing it must show a not-implemented state rather than another
-  # node's repositories.
+  # The reason this milestone exists, and the section that changed most when the
+  # mode was turned on. It used to assert that Embedded could NOT start — that
+  # the segment said so before it was chosen, and that choosing it showed a
+  # not-implemented state. All three of those assertions failed the moment
+  # `startableModes()` gained the mode, which is what they were for.
   #
-  # `startableModes` is asserted first, and it is asserted as a SET rather than
-  # via `modeStartable`. The two answer different questions — "which modes can
-  # this build start?" against "can the mode in force start?" — and deriving
-  # one from the other is a bug this module shipped twice: in ANY startable mode
-  # (which `local`, in force here, is — as is `explore`, where the app starts)
-  # the boolean is true, so a picker deriving from it offered Embedded with no
-  # caveat whatever. The set is the only thing that can be true here BEFORE
-  # Embedded is selected.
-  - name: Embedded is marked unstartable before it is chosen
+  # What replaces them is the same question asked of a mode that now works:
+  # does choosing Embedded point the module at ITS OWN home, and does the screen
+  # explain itself rather than showing another node's data or nothing at all?
+  #
+  # `startableModes` is still asserted as a SET rather than via `modeStartable`,
+  # and that has not stopped mattering just because all three modes are in it.
+  # The two answer different questions — "which modes can this build start?"
+  # against "can the mode in force start?" — and deriving one from the other is
+  # a bug this module shipped twice. The set is what a picker draws from, and it
+  # is the only thing that can say anything about Embedded BEFORE it is chosen.
+  - name: Embedded is offered as a startable mode before it is chosen
     expect:
       state:
         - "root.capsRaw.indexOf('startableModes') >= 0"
-        - "JSON.parse(root.capsRaw).startableModes.indexOf('embedded') < 0"
+        - "JSON.parse(root.capsRaw).startableModes.indexOf('embedded') >= 0"
         - "JSON.parse(root.capsRaw).startableModes.indexOf('local') >= 0"
+
+  # Local's home is asserted here, while Local is still in force, so that the
+  # assertions after the switch have something concrete to be different FROM.
+  #
+  # sitometres has no cross-step variables — every `state:` is evaluated fresh
+  # against the live root — so this cannot be stashed in a JS local, and it must
+  # not be stashed on `root` either: assigning an undeclared property to a QML
+  # Item does not create one, so the comparison after the switch would silently
+  # be against `undefined` and pass whatever the module did. That is exactly the
+  # cannot-fail shape this repo keeps paying for.
+  #
+  # So the relationship is expressed structurally instead, in the two steps
+  # after the switch: the embedded home lives under this module's own data
+  # directory (`radicle-module/embedded-home`, which `embeddedHomeFor()` derives
+  # from XDG_DATA_HOME alone), and a Radicle home the USER manages never does.
+  # That holds against CI's seeded RAD_HOME and against a developer's own
+  # ~/.radicle equally, without either spec naming a machine-specific path.
+  - name: Local is reading a home that is not the module's own
+    expect:
+      state:
+        - "root.nodeHome !== ''"
+        - "root.nodeHome.indexOf('radicle-module/embedded-home') < 0"
 
   - name: select Embedded
     click: { objectName: "sourceToggle_embedded" }
@@ -433,31 +465,46 @@ steps:
         - "root.nodeMode === 'embedded'"
     timeout: 45s
 
-  # And the build still cannot start it, which is what makes the next
-  # assertion mean anything.
-  - name: and still cannot start it
+  - name: and the build can start it now
     expect:
-      state: "root.modeStartable === false"
+      state: "root.modeStartable === true"
 
-  # THE ASSERTION THIS SPEC EXISTS FOR, and it is a conjunction on purpose.
+  # THE ASSERTION THIS SECTION NOW EXISTS FOR.
   #
-  # Each term alone is satisfied by a bug:
-  #   * `reposNotImplemented` alone — a stale `localListRepos` reply issued in
-  #     Local passes every staleness guard in RepoList, because those compare
-  #     the method PREFIX and `local` and `embedded` share it. The attached
-  #     node's repositories then render underneath a not-implemented state that
-  #     is still perfectly true.
-  #   * `repoCount === 0` alone — equally true of a node that exists and holds
-  #     nothing, which is the false claim this state replaced.
+  # Embedded must be pointed at Basecamp's OWN home. Both halves are needed and
+  # neither is enough on its own:
   #
-  # Together they say: the screen explains itself, and it is not showing
-  # another node's data while doing so.
-  - name: Embedded shows the not-implemented state and NO repositories
+  #   * a non-empty home alone is satisfied by the old bug exactly, where
+  #     `embedded` fell through to the environment and reported the user's own
+  #     profile under a segment reading "Embedded";
+  #   * the path shape alone would be satisfied by an empty string, which is the
+  #     previous behaviour (inert) rather than a working mode.
+  #
+  # Together with the step before the switch — which asserted Local's home does
+  # NOT have this shape — they say the two modes read different homes, without
+  # either step naming a machine-specific path.
+  - name: Embedded points at the module's own home
     wait_for:
       state:
-        - "root.reposNotImplemented === true"
-        - "root.repoCount === 0"
+        - "root.nodeHome !== ''"
+        - "root.nodeHome.indexOf('radicle-module/embedded-home') >= 0"
     timeout: 45s
+
+  # No identity in it yet — this spec never runs the wizard, so the embedded
+  # home is empty. That is the ordinary state before setup, and asserting it
+  # pins the other direction of the isolation: the user's DID must not leak into
+  # a mode that has not created one.
+  #
+  # `local.yaml` runs against a seeded profile holding a real key, and the
+  # identity step earlier in this spec already asserted `root.nodeIdentity !== ''`
+  # in Local — so an empty one HERE can only mean the mode stopped reporting that
+  # profile's key, which is the property under test. Against a build with the
+  # fall-through bug this is non-empty and fails.
+  - name: and carries no identity from it
+    expect:
+      state:
+        - "root.nodeIdentity === ''"
+        - "root.repoCount === 0"
 
   # The blank-pane check, and the one assertion here that holds at any window
   # size, in any mode. The repository list went blank once with no rows, no
@@ -466,17 +513,27 @@ steps:
   # a working empty node reports. `reposSayingNothing` is read off the
   # placeholder items' own `visible`, so it can only be false when something is
   # genuinely rendered. See RepoList.sayingNothing.
+  #
+  # It matters MORE now, not less. While Embedded was unstartable the
+  # not-implemented state kept this pane populated whatever happened; that
+  # placeholder is gone, so an embedded home with no identity is the first state
+  # in this app that legitimately has nothing to list. If anything here is going
+  # to render nothing at all, it is this.
   - name: and it is not merely blank
-    expect:
+    wait_for:
       state: "root.reposSayingNothing === false"
+    timeout: 45s
 
-  # Nothing was asked of a node that does not exist. Fetching and then hiding
-  # the result is how the bug above returns — the reply would still be in
-  # flight, would still pass the prefix guard, and would still repopulate the
-  # model behind the placeholder.
-  - name: and nothing errored, because nothing was asked
+  # The not-implemented state must be GONE — it is now a false claim about a
+  # mode the module fully supports short of a node daemon.
+  #
+  # Asserted separately from the blank-pane check above because the two fail
+  # differently: this one catches a screen still saying "Embedded is not
+  # available in this version", which is a specific lie, while the one above
+  # catches a screen saying nothing at all.
+  - name: and no longer claims the mode is unimplemented
     expect:
-      state: "root.navError === ''"
+      state: "root.reposNotImplemented === false"
 
   # ---- back to the seed ---------------------------------------------------
   #
@@ -504,11 +561,23 @@ steps:
         - "root.navView === 'repos'"
     timeout: 30s
 
-  # Leaving Embedded must take its not-implemented state with it. Explore is
-  # startable, so the placeholder has to come down — and if it did not, the
-  # seed's repositories would be arriving behind a screen saying no node
-  # exists.
-  - name: and the not-implemented state is gone with it
+  # Leaving Embedded must actually leave it: the seed's repositories arrive, and
+  # they are not the embedded home's (which holds none) nor Local's.
+  #
+  # This step used to assert `reposNotImplemented === false`, which was a real
+  # assertion while Embedded was the mode that set it — the placeholder had to
+  # come down or the seed's repositories would arrive behind a screen saying no
+  # node exists. With all three modes startable that flag is false everywhere,
+  # so the assertion became one nothing can fail, and CLAUDE.md's rule is that a
+  # check which cannot fail is worth no more than one that cannot pass.
+  #
+  # What replaces it is the thing the step was really about: the switch
+  # RE-FETCHED, against the seed. `repoCount > 0` cannot be satisfied by the
+  # embedded home, which is empty, so this can only pass if leaving Embedded
+  # issued a fresh `remoteListRepos` and it landed.
+  - name: and the seed's repositories arrive
     wait_for:
-      state: "root.reposNotImplemented === false"
-    timeout: 30s
+      state:
+        - "root.repoCount > 0"
+        - "root.navError === ''"
+    timeout: 60s
