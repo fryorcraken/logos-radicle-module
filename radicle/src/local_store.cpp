@@ -163,6 +163,15 @@ std::string LocalStore::unavailableReason() const
     if (!m_available) {
         if (m_paths.home.empty())
             return "no Radicle home found (set RAD_HOME or HOME)";
+
+        // The caller may have supplied the sentence, because it knows something
+        // this class deliberately does not: which mode asked. The default below
+        // tells the user to run `rad auth`, which is right for a home they
+        // manage and wrong for the embedded one, where the answer is a wizard
+        // rather than a terminal. See NodePaths::absentProfileReason.
+        if (!m_paths.absentProfileReason.empty())
+            return m_paths.absentProfileReason;
+
         return "no Radicle profile at " + m_paths.home
              + " — install Radicle and run `rad auth` to browse local repositories";
     }

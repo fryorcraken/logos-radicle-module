@@ -26,6 +26,22 @@ class RadicleUi
     SLOT(QString getSettings())
     SLOT(QString setSetting(QString key, QString value))
 
+    // The embedded node's identity: what Basecamp's own Radicle home holds,
+    // and creating one in it. Source-neutral for the same reason settings are —
+    // they describe the module's own home, not either data source.
+    //
+    // Neither takes a home, deliberately: a home argument crossing this
+    // boundary would be a way for a VIEW to point key creation at the user's
+    // real ~/.radicle, and a sandboxed QML view is the last place that decision
+    // belongs. The path is the core module's to derive.
+    //
+    // Plumbed through now, ahead of the wizard that calls them, so that the
+    // wizard is a QML-only change. The alternative — adding the slot alongside
+    // the screen — would put a transport change and a UI change in one diff,
+    // and this pair is the boundary most worth reviewing on its own.
+    SLOT(QString getEmbeddedIdentity())
+    SLOT(QString createEmbeddedIdentity(QString alias, QString passphrase))
+
     // --- remote: proxied to a public seed, no local node needed ------------
     SLOT(QString remoteListRepos(QString query, int page, int perPage))
     SLOT(QString remoteGetRepo(QString rid))

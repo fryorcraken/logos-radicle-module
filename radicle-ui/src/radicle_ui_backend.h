@@ -32,6 +32,8 @@ public:
     QString setRemoteSeed(QString seedUrl) override;
     QString getSettings() override;
     QString setSetting(QString key, QString value) override;
+    QString getEmbeddedIdentity() override;
+    QString createEmbeddedIdentity(QString alias, QString passphrase) override;
 
     // Remote — proxied to a seed node over HTTPS
     QString remoteListRepos(QString query, int page, int perPage) override;

@@ -52,17 +52,26 @@ namespace {
 /// local profile, and silently reading one anyway would be the module ignoring
 /// an explicit choice.
 ///
-/// **Embedded yields no home either, and for a sharper reason.** Phase 2 owns
-/// the Basecamp-managed home an embedded node runs against; until it exists,
-/// the only two behaviours available are "inert" and "quietly whatever Local
-/// would have done". The second is not a lesser version of the feature — it is
-/// the exact failure this milestone is justified by. Embedded promises "a
-/// SEPARATE identity from any node you already run"; falling through to the
-/// environment gives the user their EXISTING node's DID in the chrome, their
-/// existing repositories, and writes enabled against them, all under a segment
-/// reading "Embedded". A mode that lies about which identity is in use is worse
-/// than one that does nothing, so this does nothing, visibly: `localAvailable`
-/// is false and `modeUnavailableReason` says why.
+/// **Embedded resolves a home of its own, and never reads the environment to
+/// find it.** `embeddedHomeFor()` derives it from Basecamp's per-profile XDG
+/// data dir alone — the same rule the settings file uses, so the two are
+/// separated per Basecamp profile by construction. It deliberately has no
+/// branch that could reach `RAD_HOME` or `$HOME/.radicle`.
+///
+/// That absence is the mode's whole promise made structural. Embedded means "a
+/// SEPARATE identity from any node you already run"; a resolution that could
+/// fall through to the environment would give the user their EXISTING node's
+/// DID in the chrome, their existing repositories, and writes enabled against
+/// them, all under a segment reading "Embedded" — and worse, would put two nodes
+/// on one git storage. This mode used to do exactly that, by falling through a
+/// bare `return`, which is why every mode is named explicitly below.
+///
+/// Note the home is resolved whether or not anything is there yet. An embedded
+/// home with no identity in it is not an error state — it is the state before
+/// the wizard has run — so `localAvailable` is false and
+/// `unavailableReason()` says so in words that fit this mode (see
+/// `NodePaths::absentProfileReason`), rather than telling a user whose whole
+/// reason for choosing Embedded is not owning `rad` to go and run `rad auth`.
 ///
 /// **Every mode that resolves a home is named explicitly, and the fall-through
 /// is the INERT case.** This comment used to claim the opposite was already
@@ -104,8 +113,27 @@ radicle::LocalStore storeForSettings(const radicle::SettingsStore& settings)
             // and is why that setting exists rather than being derived.
             "")};
 
-    if (mode == radicle::SettingsStore::kModeExplore
-        || mode == radicle::SettingsStore::kModeEmbedded)
+    if (mode == radicle::SettingsStore::kModeEmbedded) {
+        // The home comes from the XDG data dir alone — never from the
+        // environment — so this can never resolve to the user's own profile.
+        // The socket is resolved exactly as Local's is, which is the point of
+        // `resolveSocket` taking the home as its LAST resort rather than its
+        // first: Basecamp's data dir is far past the 108-byte cap, and
+        // $XDG_RUNTIME_DIR keeps the socket short regardless of how long the
+        // home is. See docs/M3-phase0-findings.md §6.
+        auto paths = radicle::resolvePathsFromEnv(
+            radicle::embeddedHomeFromEnv(),
+            settings.get(radicle::SettingsStore::kKeyRadSocket),
+            "");
+        paths.absentProfileReason =
+            "no embedded identity yet — Basecamp keeps its own Radicle home at "
+            + paths.home
+            + " and has not created an identity in it. This is a separate "
+              "identity from any Radicle node you already run.";
+        return radicle::LocalStore{std::move(paths)};
+    }
+
+    if (mode == radicle::SettingsStore::kModeExplore)
         return radicle::LocalStore{radicle::NodePaths{}};
 
     // Unknown, or known-but-unmapped. Inert.
@@ -389,6 +417,97 @@ std::string RadicleImpl::listKnownSeeds()
     // setRemoteSeed().
 
     return dump(nlohmann::json{{"items", items}});
+}
+
+// ===========================================================================
+// EMBEDDED IDENTITY
+//
+// Neither method takes a home. That is the safety property: a home parameter
+// would be a way for a caller to point KEY CREATION at the user's real
+// ~/.radicle, and no caller should ever want to. The path is resolved here,
+// from the XDG data dir alone.
+// ===========================================================================
+
+std::string RadicleImpl::getEmbeddedIdentity()
+{
+    const std::string home = radicle::embeddedHomeFromEnv();
+
+    if (home.empty()) {
+        return dump(nlohmann::json{
+            {"home",    ""},
+            {"exists",  false},
+            {"nodeId",  ""},
+            // Not an {"error":...} object: the question was answered, and the
+            // answer is that there is nowhere to put an identity. A caller has
+            // to render that as a blocked wizard step rather than as a failed
+            // call it might retry.
+            {"problem", "no data directory found for this module (set "
+                        "XDG_DATA_HOME or HOME), so there is nowhere to keep an "
+                        "embedded Radicle home"},
+        });
+    }
+
+    const auto probe =
+        nlohmann::json::parse(radicle::LocalReader::profileExists(home), nullptr, false);
+    const bool exists = !probe.is_discarded() && probe.value("exists", false);
+
+    // Read only when there is something to read. `nodeId` on an empty home
+    // reports its own "no key" reason, which would be a second, worse-worded
+    // answer to a question `exists` has already answered.
+    std::string nodeId;
+    if (exists) {
+        radicle::LocalReader reader{home};
+        const auto id = nlohmann::json::parse(reader.nodeId(), nullptr, false);
+        if (!id.is_discarded()) nodeId = id.value("nodeId", "");
+    }
+
+    return dump(nlohmann::json{
+        {"home",    home},
+        {"exists",  exists},
+        {"nodeId",  nodeId},
+        {"problem", ""},
+    });
+}
+
+std::string RadicleImpl::createEmbeddedIdentity(const std::string& alias,
+                                                const std::string& passphrase)
+{
+    const std::string home = radicle::embeddedHomeFromEnv();
+    if (home.empty()) {
+        return dump(radicle::makeError(
+            "no data directory found for this module (set XDG_DATA_HOME or "
+            "HOME), so there is nowhere to create an embedded Radicle home"));
+    }
+
+    // Every refusal — occupied home, half-created home, bad alias, relative
+    // path — is the backend's, and its messages are passed through verbatim
+    // rather than paraphrased. They name the consequence and the path to act
+    // on; a second opinion here could only drift from what is enforced.
+    const std::string reply = radicle::LocalReader::initProfile(home, alias, passphrase);
+
+    const auto parsed = nlohmann::json::parse(reply, nullptr, false);
+    if (parsed.is_discarded() || radicle::isError(parsed)) return reply;
+
+    // The new identity has to be visible without a restart, but ONLY if this
+    // instance is actually pointed at the embedded home. Rebuilding
+    // unconditionally would repoint a module sitting in Local at a home the
+    // user did not ask it to read — the same repointing `setSetting` does
+    // deliberately, done here as a side effect of an unrelated action.
+    //
+    // The mode is deliberately NOT switched. Choosing a mode is the user's, and
+    // moving the whole UI underneath someone who only meant to set an embedded
+    // node up for later is a control doing more than it said.
+    if (m_settings.get(radicle::SettingsStore::kKeyMode)
+        == radicle::SettingsStore::kModeEmbedded) {
+        m_local = storeForSettings(m_settings);
+        m_localReader = radicle::LocalReader(m_local.home());
+        m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
+        // Which identity is in force is exactly what this event announces, and
+        // it has just changed from none to one.
+        localAvailabilityChanged(getCapabilities());
+    }
+
+    return reply;
 }
 
 // ===========================================================================

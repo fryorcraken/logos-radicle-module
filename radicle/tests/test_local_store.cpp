@@ -80,6 +80,57 @@ LOGOS_TEST(the_unavailable_reason_names_the_path_it_looked_at)
     LOGOS_ASSERT_CONTAINS(store.unavailableReason(), home.dir);
 }
 
+LOGOS_TEST(a_caller_supplied_reason_replaces_the_run_rad_auth_advice)
+{
+    // The default wording tells the user to install Radicle and run `rad auth`.
+    // That is right for a home they manage and exactly wrong for the embedded
+    // one, whose whole premise is that they never do — so the caller, which
+    // knows which mode asked, can supply the sentence instead.
+    NodePaths paths;
+    paths.home = "/nowhere/embedded-home";
+    paths.absentProfileReason = "no embedded identity yet — set one up here";
+
+    LocalStore store{paths};
+    LOGOS_ASSERT_FALSE(store.available());
+    LOGOS_ASSERT_EQ(store.unavailableReason(),
+                    std::string("no embedded identity yet — set one up here"));
+    // And the advice it replaces is genuinely gone, not merely appended to.
+    LOGOS_ASSERT_TRUE(store.unavailableReason().find("rad auth") == std::string::npos);
+}
+
+LOGOS_TEST(without_a_supplied_reason_the_default_rad_auth_advice_still_stands)
+{
+    // The other half, and what makes the test above input-dependent: a store
+    // that ignored `absentProfileReason` and always said one thing would pass
+    // one of these two and fail the other. `local` mode must keep the advice
+    // that actually applies to it.
+    NodePaths paths;
+    paths.home = "/nowhere/user-home";
+
+    LocalStore store{paths};
+    LOGOS_ASSERT_FALSE(store.available());
+    LOGOS_ASSERT_CONTAINS(store.unavailableReason(), std::string("rad auth"));
+    LOGOS_ASSERT_CONTAINS(store.unavailableReason(), std::string("/nowhere/user-home"));
+}
+
+LOGOS_TEST(a_supplied_reason_is_not_used_when_a_profile_is_actually_there)
+{
+    // The reason answers "why is there no profile". A store that returned it
+    // regardless would report "no embedded identity yet" for a home that has
+    // one — which is the same class of lie, pointed the other way.
+    ScopedRadHome home("supplied-reason-available");
+    home.makeStorage();
+
+    NodePaths paths;
+    paths.home = home.dir;
+    paths.absentProfileReason = "no embedded identity yet";
+
+    LocalStore store{paths};
+    LOGOS_ASSERT_TRUE(store.available());
+    LOGOS_ASSERT_TRUE(store.unavailableReason().find("no embedded identity yet")
+                      == std::string::npos);
+}
+
 LOGOS_TEST(a_missing_node_socket_means_the_node_is_not_running)
 {
     ScopedRadHome home("no-socket");

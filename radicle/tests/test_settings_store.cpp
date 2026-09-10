@@ -337,18 +337,144 @@ LOGOS_TEST(all_three_modes_are_accepted)
     }
 }
 
-LOGOS_TEST(embedded_is_selectable_but_reported_as_not_startable)
+LOGOS_TEST(every_known_mode_is_startable_and_the_two_views_of_that_agree)
 {
-    // Phase 1 persists the choice; Phase 2 starts the daemon. The UI needs to
-    // be able to say so plainly rather than offering a control that silently
-    // does nothing.
-    LOGOS_ASSERT_TRUE(SettingsStore::isKnownMode(SettingsStore::kModeEmbedded));
-    LOGOS_ASSERT_FALSE(SettingsStore::modeIsStartable(SettingsStore::kModeEmbedded));
+    // Embedded joined the startable set when it gained a home to point at.
+    //
+    // Asserted through BOTH accessors on purpose. They are two views of one
+    // fact and the boolean is derived from the set — so a `modeIsStartable`
+    // that stopped consulting `startableModes` and hardcoded its own answer
+    // would still satisfy either assertion alone. Checking that the two agree
+    // for every known mode is what pins the derivation rather than the values.
+    for (const char* mode : {SettingsStore::kModeExplore,
+                             SettingsStore::kModeLocal,
+                             SettingsStore::kModeEmbedded}) {
+        LOGOS_ASSERT_TRUE(SettingsStore::isKnownMode(mode));
+        LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(mode));
 
-    // The other two are startable today, which is what makes the assertion
-    // above about Embedded specifically rather than about every mode.
-    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(SettingsStore::kModeLocal));
-    LOGOS_ASSERT_TRUE(SettingsStore::modeIsStartable(SettingsStore::kModeExplore));
+        bool inSet = false;
+        for (const auto& m : SettingsStore::startableModes())
+            if (m == mode) inSet = true;
+        LOGOS_ASSERT_TRUE(inSet);
+    }
+
+    // And the derivation is input-dependent, which is the half the loop above
+    // cannot show: a `modeIsStartable` returning true unconditionally would
+    // pass every assertion so far. An unknown mode must be unstartable.
+    LOGOS_ASSERT_FALSE(SettingsStore::modeIsStartable("turbo"));
+    LOGOS_ASSERT_EQ(SettingsStore::startableModes().size(), size_t(3));
+}
+
+// ---------------------------------------------------------------------------
+// The embedded home.
+//
+// Same input-dependence discipline as the settings path above it: every case
+// pins a DIFFERENT expected answer, so a resolver that ignored its arguments
+// cannot pass.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(the_embedded_home_follows_xdg_data_home_when_set)
+{
+    LOGOS_ASSERT_EQ(embeddedHomeFor("/xdg/data", "/home/u"),
+                    std::string("/xdg/data/radicle-module/embedded-home"));
+}
+
+LOGOS_TEST(the_embedded_home_falls_back_to_the_xdg_default_under_the_user_home)
+{
+    LOGOS_ASSERT_EQ(embeddedHomeFor("", "/home/u"),
+                    std::string("/home/u/.local/share/radicle-module/embedded-home"));
+}
+
+LOGOS_TEST(no_environment_at_all_yields_no_embedded_home)
+{
+    // Same reasoning as the settings path: an empty answer makes the caller
+    // report "nowhere to put an identity" rather than creating a permanent
+    // signing key at a path relative to nothing.
+    LOGOS_ASSERT_TRUE(embeddedHomeFor("", "").empty());
+}
+
+LOGOS_TEST(two_basecamp_profiles_get_two_embedded_homes)
+{
+    // The isolation that makes the embedded mode safe for two Basecamp
+    // profiles, and it is the SAME isolation the settings file already has,
+    // because both are derived from XDG_DATA_HOME by one rule.
+    const std::string alice = embeddedHomeFor("/profiles/alice/xdg-data", "/home/u");
+    const std::string bob   = embeddedHomeFor("/profiles/bob/xdg-data", "/home/u");
+
+    LOGOS_ASSERT_TRUE(alice != bob);
+    LOGOS_ASSERT_CONTAINS(alice, std::string("alice"));
+    LOGOS_ASSERT_CONTAINS(bob, std::string("bob"));
+}
+
+LOGOS_TEST(the_embedded_home_is_never_the_users_own_radicle_home)
+{
+    // **The assertion the whole mode rests on.** Embedded promises an identity
+    // separate from any node the user already runs; a home that could resolve
+    // to `~/.radicle` would hand it their real signing key and put two nodes on
+    // one git storage.
+    //
+    // Pinned as a property rather than as a literal path, so it survives a
+    // future change to where the home lives: whatever the answer is, it must
+    // not be the conventional Radicle home, and it must not be reachable from a
+    // user home when an XDG data dir was given.
+    LOGOS_ASSERT_TRUE(embeddedHomeFor("/xdg/data", "/home/u")
+                      != std::string("/home/u/.radicle"));
+    LOGOS_ASSERT_TRUE(embeddedHomeFor("", "/home/u")
+                      != std::string("/home/u/.radicle"));
+
+    // And with an XDG data dir in force, the user home does not appear in the
+    // answer at all — the only input it reads is the data dir. A resolver that
+    // consulted `$HOME` as well would fail this while passing every assertion
+    // above.
+    LOGOS_ASSERT_TRUE(embeddedHomeFor("/xdg/data", "/home/u").find("/home/u")
+                      == std::string::npos);
+}
+
+LOGOS_TEST(the_embedded_home_and_the_settings_file_are_siblings_not_the_same_path)
+{
+    // Two facts at once, and both matter.
+    //
+    // Siblings: they share a parent, which is what makes the per-profile
+    // separation of one the per-profile separation of the other rather than
+    // two rules that happen to agree today.
+    //
+    // Not the same path: an embedded home that landed ON the settings file
+    // would have `Home::new` trying to make a directory where a file is — and
+    // a `Profile::init` that ever succeeded there would put a signing key in
+    // the settings directory. Asserting they differ costs one line and rules
+    // out a whole class of copy-paste error in the shared derivation.
+    const std::string settings = settingsPathFor("/xdg/data", "/home/u");
+    const std::string home     = embeddedHomeFor("/xdg/data", "/home/u");
+
+    LOGOS_ASSERT_TRUE(settings != home);
+    LOGOS_ASSERT_CONTAINS(settings, std::string("/radicle-module/"));
+    LOGOS_ASSERT_CONTAINS(home, std::string("/radicle-module/"));
+}
+
+LOGOS_TEST(the_embedded_home_is_a_directory_a_socket_would_not_fit_under)
+{
+    // Not a limitation being accepted — the reason the design works, pinned so
+    // a future change cannot quietly reintroduce "the socket follows the home".
+    //
+    // Under Basecamp's real per-profile layout this directory is far past the
+    // 108-byte sun_path cap (Phase 0 measured 166 bytes), which is fine for a
+    // directory and fatal for a socket. `resolveSocket` therefore never derives
+    // the socket from the home when a runtime dir exists, and this asserts the
+    // two facts together: the home is long, and the socket resolved alongside
+    // it is short and does not contain it.
+    const std::string longXdg =
+        "/home/user/.local/share/logos/basecamp/profiles/alice/xdg-data-dir-with-a-long-name";
+    const std::string home = embeddedHomeFor(longXdg, "/home/user");
+
+    const NodePaths paths =
+        resolvePaths(home, "", "", "", "", "/run/user/1000", "alice");
+
+    LOGOS_ASSERT_EQ(paths.home, home);
+    LOGOS_ASSERT_TRUE(paths.socket.find(home) == std::string::npos);
+    LOGOS_ASSERT_TRUE(paths.socket.size() + 1 <= kSunPathMax);
+    // No problem reported: a home this long is not a problem, only a socket
+    // would be. If this ever fails, the socket has started following the home.
+    LOGOS_ASSERT_TRUE(paths.problem.empty());
 }
 
 LOGOS_TEST(a_git_path_that_does_not_exist_is_refused_and_named)

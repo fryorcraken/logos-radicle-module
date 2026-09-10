@@ -48,6 +48,25 @@ QString RadicleUiBackend::setSetting(QString key, QString value)
     return result;
 }
 
+QString RadicleUiBackend::getEmbeddedIdentity()
+{
+    // A plain read. Nothing changes, so nothing is refreshed.
+    return modules().radicle.getEmbeddedIdentity();
+}
+
+QString RadicleUiBackend::createEmbeddedIdentity(QString alias, QString passphrase)
+{
+    const QString result = modules().radicle.createEmbeddedIdentity(alias, passphrase);
+    // Refreshed for the same reason `setSetting` is, and it is not optional
+    // here: in Embedded mode this call takes the module from "no identity" to
+    // "an identity", which moves `localAvailable`, `canWriteLocal` and `nodeId`
+    // together. Without the refresh the wizard would report success while every
+    // screen bound to capabilities went on showing a module with no node —
+    // reading, to a user, as a wizard that did nothing.
+    setCapabilities(modules().radicle.getCapabilities());
+    return result;
+}
+
 // --- remote ----------------------------------------------------------------
 
 QString RadicleUiBackend::remoteListRepos(QString query, int page, int perPage)
