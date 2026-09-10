@@ -77,7 +77,7 @@
           src = ./rust-ffi;
           cargoDeps = fetchPkgs.rustPlatform.fetchCargoVendor {
             src = ./rust-ffi;
-            hash = "sha256-sbh9xX8T/NaCibhw4tQfppkODZHTKW1qOEmFg7WEkwc=";
+            hash = "sha256-K3wgWtIf0ALx+WXdCCyHuqmcsLvj5ZuHp9Ms3ZjZSYw=";
           };
           # libgit2-sys / libssh2-sys / openssl-sys need these to find system
           # libraries rather than vendoring their own copies.

@@ -311,6 +311,92 @@ public:
                                        const std::string& passphrase);
 
     // ======================================================================
+    // THE NODE — the daemon half of Embedded mode.
+    //
+    // These three are unlike every other method in this class: they leave
+    // something RUNNING behind. Everything else answers a question or writes a
+    // file and is finished; a started node is threads, a bound socket and open
+    // databases that outlive the call, the reply, and usually the screen the
+    // user was looking at.
+    //
+    // It runs IN THIS PROCESS — `radicle-node` linked as a library, not a
+    // spawned binary. That decision was spiked rather than assumed; see
+    // `docs/M3-phase0-findings.md` §3.
+    //
+    // **None of them takes a home or a socket**, for the same reason the
+    // identity pair above takes no home: those paths are the module's to
+    // resolve, and a caller-supplied one crossing the QtRO boundary would be a
+    // way for a sandboxed view to point a node at the user's own `~/.radicle`.
+    // `LocalStore` resolves them, exactly once, so the node, the read path's
+    // `localNodeRunning` probe and a write's announce step cannot end up on
+    // three different sockets — which they have, before.
+    // ======================================================================
+
+    /**
+     * Start the embedded node.
+     *
+     * -> {"started":true,"home":"…","socket":"…","nodeId":"did:key:z6Mk…",
+     *     "listening":[]}
+     * -> {"error":"…"}
+     *
+     * **Only in Embedded mode.** Refused in `local` — that node is the user's,
+     * and starting a second one against their home would put two nodes on one
+     * git storage — and in `explore`, which has no home at all. The refusal
+     * names the mode rather than failing obscurely.
+     *
+     * **An encrypted identity needs its passphrase here.** The node is handed a
+     * decrypted signing key when it is constructed, so there is no later moment
+     * at which one could be supplied. Phase 0 left this open as inference from
+     * `radicle-node`'s `main.rs`; it is now measured. An empty `passphrase` is
+     * correct — and the only correct value — for an identity created without
+     * one, which is what `createEmbeddedIdentity("", …)` produces.
+     *
+     * **The node binds no TCP port.** It can fetch from peers and announce to
+     * them, but peers **cannot fetch from it**. That is the right default for a
+     * desktop behind NAT — no port, no firewall rule, and no way to collide with
+     * a node the user already runs on 8776 — and it is a real limitation a view
+     * must state rather than imply away. `listening` reports it, empty today.
+     *
+     * **Returns only once the control socket answers.** A spawned thread is not
+     * a started node; reporting one would hand a view a success it then has to
+     * discover was false.
+     */
+    std::string startNode(const std::string& passphrase);
+
+    /**
+     * Stop the embedded node.
+     *
+     * -> {"stopped":bool[,"reason":"…"]} or {"error":"…"}
+     *
+     * Stopping a node that is not running is an **answer**, not an error: the
+     * caller has got what it asked for. An `{"error":…}` here means one WAS
+     * running and did not stop cleanly, which is worth surfacing — it may still
+     * hold its socket and storage, and the next start will say so.
+     */
+    std::string stopNode();
+
+    /**
+     * What the embedded node is doing.
+     *
+     * -> {"running":bool,"home":"…","socket":"…","serving":bool,"reason":"…"}
+     *
+     * **A view must read `serving`, not only `running`.** They answer different
+     * questions: `running` is the module's own bookkeeping — a node was started
+     * and its thread has not finished — while `serving` is a live probe of the
+     * control socket. They agree in every ordinary state, and the two moments
+     * they disagree are precisely the ones a user cannot otherwise account for:
+     * during startup, and after the node has failed internally.
+     *
+     * That second case is not hypothetical. The Rust side's panic guard reaches
+     * the FFI boundary, not the threads a running node spawns, and
+     * `Runtime::run` panics rather than returning an error when its worker pool
+     * or reactor fails. So a dead node leaves `running` true indefinitely, with
+     * the whole `local*` read path still answering normally because reads never
+     * touch the daemon. `serving` is the only field that notices.
+     */
+    std::string getNodeStatus();
+
+    // ======================================================================
     // REMOTE — proxied to a public seed over HTTPS.
     // No local node required. Public repos only. Read-only.
     // ======================================================================

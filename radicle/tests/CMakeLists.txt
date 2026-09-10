@@ -98,6 +98,7 @@ logos_test(
         ../src/local_store.cpp
         ../src/local_reader.cpp
         ../src/local_writer.cpp
+        ../src/embedded_node.cpp
         ../src/settings_store.cpp
         # Not just an incidental link target: test_http_client.cpp exercises
         # this file's pure isGenuineTimeout()/applyHttpOutcome() directly.

@@ -1,5 +1,11 @@
 #include "radicle_impl.h"
 
+// Included here rather than in the header: `EmbeddedNode` is all-static, so
+// nothing in this class's declaration mentions it, and a header include would
+// put the node's boundary in the dependency graph of every file that reads the
+// module's contract.
+#include "embedded_node.h"
+
 #include <nlohmann/json.hpp>
 
 #include <utility>
@@ -549,6 +555,108 @@ std::string RadicleImpl::createEmbeddedIdentity(const std::string& alias,
     }
 
     return reply;
+}
+
+// ===========================================================================
+// THE NODE
+//
+// The daemon half of Embedded. Every path resolution these need has already
+// been done by `m_local` — which is the point: the node, the read path's
+// `localNodeRunning` probe and a write's announce step all have to be on one
+// socket, and the way to guarantee that is for exactly one thing to resolve it.
+// ===========================================================================
+
+std::string RadicleImpl::startNode(const std::string& passphrase)
+{
+    const auto mode = m_settings.get(radicle::SettingsStore::kKeyMode);
+
+    // **Embedded only, and the two refusals below are different in kind.**
+    //
+    // `local` names a node the module did not create and does not own. Starting
+    // a second one against that home would put two nodes on one git storage,
+    // which is the corruption hazard the whole isolation design exists to
+    // prevent — and unlike most of this module's guards, the user's own daemon
+    // may well already be running there, so this is not even the exotic case.
+    // Their node is started the way they started it.
+    //
+    // `explore` has no home at all — that is its definition — so there is
+    // nothing to start a node in. Reported separately because the fix differs:
+    // one is "your node is already yours to run", the other is "pick a mode that
+    // has a node".
+    if (mode == radicle::SettingsStore::kModeLocal) {
+        return dump(radicle::makeError(
+            "the '" + mode + "' mode uses a Radicle node you run yourself, so "
+            "this module does not start it. Two nodes writing one storage is "
+            "the failure this separation exists to prevent. Switch to '"
+            + radicle::SettingsStore::kModeEmbedded
+            + "' for a node Basecamp runs, or start your own node as usual."));
+    }
+    if (mode != radicle::SettingsStore::kModeEmbedded) {
+        return dump(radicle::makeError(
+            "the '" + mode + "' mode has no Radicle node — it browses a seed "
+            "over HTTP. Switch to '" + radicle::SettingsStore::kModeEmbedded
+            + "' to run one."));
+    }
+
+    // Both paths come from the store, which resolved them when the mode was
+    // selected. Re-deriving either here would be the second opinion this module
+    // has already been bitten by.
+    //
+    // A path problem is reported BEFORE the attempt, because the one that
+    // actually happens — a socket over the 108-byte cap — surfaces from the
+    // crate as "path must be shorter than SUN_LEN", naming neither the path nor
+    // the limit. `pathsProblem` names all three.
+    if (!m_local.pathsProblem().empty())
+        return dump(radicle::makeError(m_local.pathsProblem()));
+
+    // A home with no identity cannot run a node, and the sentence for that is
+    // the mode's own — "no embedded identity yet", not "run `rad auth`". It is
+    // already carried on the paths for exactly this kind of reuse.
+    if (!m_local.available())
+        return localUnavailable(m_local);
+
+    const std::string reply =
+        radicle::EmbeddedNode::start(m_local.home(), m_local.socket(), passphrase);
+
+    // A node coming up changes `localNodeRunning`, which is part of what a view
+    // renders the source control from — so the change is announced rather than
+    // waiting for the next poll. Announced only on success: a failed start
+    // changed nothing, and emitting anyway would make every failed attempt look
+    // like a state transition.
+    const auto parsed = nlohmann::json::parse(reply, nullptr, false);
+    if (!parsed.is_discarded() && !radicle::isError(parsed))
+        localAvailabilityChanged(getCapabilities());
+
+    return reply;
+}
+
+std::string RadicleImpl::stopNode()
+{
+    // Deliberately NOT gated on the mode, unlike `startNode`.
+    //
+    // The asymmetry is the point: a node that is running needs to be stoppable
+    // whatever the settings now say. A user who starts an embedded node and then
+    // switches to Local would otherwise have a running node and no control that
+    // can reach it — the settings changed, the node did not. Refusing here would
+    // make a mode switch a way to strand a daemon.
+    const std::string reply = radicle::EmbeddedNode::stop();
+
+    const auto parsed = nlohmann::json::parse(reply, nullptr, false);
+    // Announced when something actually stopped. `stopped:false` means there was
+    // nothing running, which is not a transition and must not read as one.
+    if (!parsed.is_discarded() && parsed.value("stopped", false))
+        localAvailabilityChanged(getCapabilities());
+
+    return reply;
+}
+
+std::string RadicleImpl::getNodeStatus()
+{
+    // Ungated for the same reason `stopNode` is, plus one of its own: this is
+    // the call a view polls to render progress, and a status that refused to
+    // answer outside Embedded would leave a UI unable to explain a node it can
+    // see is still running.
+    return radicle::EmbeddedNode::status();
 }
 
 // ===========================================================================
