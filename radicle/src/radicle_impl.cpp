@@ -114,17 +114,58 @@ radicle::LocalStore storeForSettings(const radicle::SettingsStore& settings)
             "")};
 
     if (mode == radicle::SettingsStore::kModeEmbedded) {
-        // The home comes from the XDG data dir alone — never from the
-        // environment — so this can never resolve to the user's own profile.
+        const std::string home = radicle::embeddedHomeFromEnv();
+
+        // **An unresolvable embedded home is inert, and this guard is the whole
+        // of that.** It is not defensive tidiness — without it this mode aliases
+        // the user's own profile, which is the exact failure the mode exists to
+        // prevent.
+        //
+        // The mechanism is a composition, which is why it survived review of
+        // each half. `embeddedHomeFor()` reads only the XDG data dir and returns
+        // "" when neither XDG_DATA_HOME nor HOME is set — correct in isolation,
+        // and pinned by `no_environment_at_all_yields_no_embedded_home`. But an
+        // empty `configuredHome` is exactly what `resolveHome()` treats as "not
+        // configured", so it falls through to RAD_HOME and then to
+        // $HOME/.radicle. Passing the empty string straight in therefore hands
+        // Embedded whatever node the environment names.
+        //
+        // An earlier comment here claimed the home "comes from the XDG data dir
+        // alone — never from the environment — so this can never resolve to the
+        // user's own profile". True of `embeddedHomeFor()`; false of this call,
+        // and false in the one direction that matters. That is the same shape as
+        // step 1's `Keystore::init` claim: a load-bearing comment asserting a
+        // safety property the code does not have is worse than no comment,
+        // because a reader who trusts it stops checking.
+        //
+        // Reachable wherever HOME is not propagated but RAD_HOME is — a
+        // misconfigured `[basecamp.env]`, shell inheritance, a future
+        // profile-launch regression. `scaffold.toml` always sets XDG_DATA_HOME
+        // today, but that makes the bug improbable rather than impossible, and
+        // the structural argument must not rest on it implicitly.
+        //
+        // `getEmbeddedIdentity()` and `createEmbeddedIdentity()` already guard
+        // this same emptiness explicitly; this was the one path that did not.
+        if (home.empty()) {
+            radicle::NodePaths paths;
+            paths.absentProfileReason =
+                "no embedded Radicle home could be resolved — this module keeps "
+                "it under the Basecamp profile's data directory, and neither "
+                "XDG_DATA_HOME nor HOME is set, so there is nowhere to put one.";
+            return radicle::LocalStore{std::move(paths)};
+        }
+
+        // The home is passed explicitly, so `resolveHome()` returns it rather
+        // than consulting the environment at all — which is only true because
+        // of the guard above.
+        //
         // The socket is resolved exactly as Local's is, which is the point of
         // `resolveSocket` taking the home as its LAST resort rather than its
         // first: Basecamp's data dir is far past the 108-byte cap, and
         // $XDG_RUNTIME_DIR keeps the socket short regardless of how long the
         // home is. See docs/M3-phase0-findings.md §6.
         auto paths = radicle::resolvePathsFromEnv(
-            radicle::embeddedHomeFromEnv(),
-            settings.get(radicle::SettingsStore::kKeyRadSocket),
-            "");
+            home, settings.get(radicle::SettingsStore::kKeyRadSocket), "");
         paths.absentProfileReason =
             "no embedded identity yet — Basecamp keeps its own Radicle home at "
             + paths.home

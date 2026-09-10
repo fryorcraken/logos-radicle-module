@@ -121,6 +121,35 @@ struct ScopedXdgDataHome {
     }
 };
 
+/// Unsets one environment variable for the duration of a test, and restores it.
+///
+/// The fixtures above all SET things, which is why the gap this closes survived:
+/// every Embedded test used `ScopedXdgDataHome` and `ScopedRadHome` together, so
+/// `embeddedHomeFromEnv()` was never empty and the fall-through it enables was
+/// never driven. The one input combination that reaches the bug — no
+/// `XDG_DATA_HOME`, no `HOME`, but a `RAD_HOME` — cannot be built out of
+/// fixtures that only add variables.
+struct ScopedUnsetEnv {
+    std::string name;
+    std::string previous;
+    bool hadPrevious = false;
+
+    explicit ScopedUnsetEnv(const char* variable)
+        : name(variable)
+    {
+        if (const char* old = std::getenv(variable)) {
+            previous = old;
+            hadPrevious = true;
+        }
+        ::unsetenv(variable);
+    }
+
+    ~ScopedUnsetEnv()
+    {
+        if (hadPrevious) ::setenv(name.c_str(), previous.c_str(), 1);
+    }
+};
+
 /// A scripted fake transport for SeedClient, matching test_seed_client.cpp's
 /// FakeSeed. Kept local to this file (rather than shared) for the same reason
 /// test_local_writer.cpp duplicates `take()`: each file owning its own fixture
@@ -770,6 +799,95 @@ LOGOS_TEST(embedded_mode_does_not_alias_the_existing_local_profile)
     LOGOS_ASSERT_TRUE(embeddedHome != home.dir);
     LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
     LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());
+}
+
+LOGOS_TEST(embedded_with_no_resolvable_home_is_inert_rather_than_aliasing_rad_home)
+{
+    // **The aliasing bug, reached through the one input combination every other
+    // Embedded test here structurally cannot drive.**
+    //
+    // `embeddedHomeFor()` returns "" when neither XDG_DATA_HOME nor HOME is set
+    // — correct, and pinned in test_settings_store.cpp. But an empty
+    // `configuredHome` is precisely what `resolveHome()` reads as "not
+    // configured", so it falls through to RAD_HOME. Passing that empty string
+    // into `resolvePathsFromEnv()` therefore pointed Embedded at the user's own
+    // profile: the exact failure this mode exists to prevent, arriving through
+    // a composition where each half is individually correct.
+    //
+    // Every other Embedded test uses ScopedXdgDataHome AND ScopedRadHome
+    // together, so `embeddedHomeFromEnv()` is never empty in them and the
+    // fall-through is unreachable. That is why the bug survived: not a missing
+    // assertion, a missing INPUT.
+    //
+    // RAD_HOME is set to a real, readable profile, so a fall-through would
+    // produce `localAvailable: true` and a populated home — loudly wrong rather
+    // than subtly so.
+    ScopedRadHome home("embedded-no-xdg");
+    home.makeStorage();
+    ScopedUnsetEnv noXdg("XDG_DATA_HOME");
+    ScopedUnsetEnv noHome("HOME");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("embedded-no-xdg")});
+
+    // `local` first, and asserted, so this test cannot pass against a module
+    // that never resolves any home at all. Without it every assertion below is
+    // satisfied by a build where all three modes are inert.
+    impl.setSetting("mode", "local");
+    LOGOS_ASSERT_EQ(parse(impl.getCapabilities())["radHome"].get<std::string>(), home.dir);
+
+    // setSetting rebuilds the store through storeForSettings(), which is the
+    // function under test.
+    impl.setSetting("mode", "embedded");
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
+
+    // THE assertion. Not merely "empty" — specifically not RAD_HOME's value,
+    // which is what the fall-through produces. Both are checked because they
+    // fail differently: a home that is empty is inert, and a home that is
+    // someone else's is the aliasing bug.
+    LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>() != home.dir);
+    LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());
+
+    // And it says why, rather than going blank. The message must not be the
+    // dangling "...Radicle home at " that concatenating an empty home produced.
+    const std::string reason = caps["writeUnavailableReason"].get<std::string>();
+    LOGOS_ASSERT_FALSE(reason.empty());
+    LOGOS_ASSERT_CONTAINS(reason, std::string("XDG_DATA_HOME"));
+    LOGOS_ASSERT_TRUE(reason.find("home at  ") == std::string::npos);
+}
+
+LOGOS_TEST(the_embedded_identity_methods_refuse_when_no_home_can_be_resolved)
+{
+    // The same emptiness through the two methods that already guarded it. Kept
+    // beside the test above so the three paths that must agree are read
+    // together — `storeForSettings()` was the odd one out, and a future edit
+    // that re-introduced the gap in any one of them fails here.
+    ScopedRadHome home("embedded-methods-no-xdg");
+    home.makeStorage();
+    ScopedUnsetEnv noXdg("XDG_DATA_HOME");
+    ScopedUnsetEnv noHome("HOME");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("embedded-methods")});
+
+    // The read reports a problem rather than an error: the question was
+    // answered, and the answer is that there is nowhere to put an identity.
+    const auto probe = parse(impl.getEmbeddedIdentity());
+    LOGOS_ASSERT_TRUE(probe["home"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(probe["exists"].get<bool>());
+    LOGOS_ASSERT_FALSE(probe["problem"].get<std::string>().empty());
+
+    // The write refuses outright, and creates nothing anywhere — least of all
+    // in the profile RAD_HOME names.
+    const auto created = parse(impl.createEmbeddedIdentity("tester", ""));
+    LOGOS_ASSERT_TRUE(created.contains("error"));
+
+    struct stat st{};
+    LOGOS_ASSERT_TRUE(::stat((home.dir + "/keys").c_str(), &st) != 0);
 }
 
 LOGOS_TEST(embedded_with_no_identity_yet_does_not_tell_the_user_to_run_rad_auth)
