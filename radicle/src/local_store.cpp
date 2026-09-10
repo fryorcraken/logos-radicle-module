@@ -161,8 +161,21 @@ void LocalStore::detect()
 std::string LocalStore::unavailableReason() const
 {
     if (!m_available) {
+        // The caller's sentence wins over BOTH defaults below, and the ordering
+        // is deliberate: it is supplied only by a caller that knows which mode
+        // asked, which is strictly more than this class knows in either case.
+        //
+        // It used to sit after the empty-home check, which made it unreachable
+        // for exactly the case that needed it most — Embedded with no data
+        // directory to put a home in, where the generic "set RAD_HOME or HOME"
+        // is advice for a mode the user did not choose and names the very
+        // variable Embedded must never follow. See NodePaths::absentProfileReason.
+        if (!m_paths.absentProfileReason.empty())
+            return m_paths.absentProfileReason;
+
         if (m_paths.home.empty())
             return "no Radicle home found (set RAD_HOME or HOME)";
+
         return "no Radicle profile at " + m_paths.home
              + " — install Radicle and run `rad auth` to browse local repositories";
     }

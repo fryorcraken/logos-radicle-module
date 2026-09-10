@@ -6,10 +6,12 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <string>
 #include <sys/stat.h>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -95,6 +97,17 @@ struct ScopedXdgDataHome {
 
     ~ScopedXdgDataHome()
     {
+        // Remove the whole scratch data dir, not just the environment override.
+        //
+        // Needed since the embedded home lives under here: a test that creates
+        // an identity leaves a real keystore behind, and the NEXT run of the
+        // same test would find its home occupied and be refused — a suite that
+        // passes once and then fails for ever, for a reason that looks nothing
+        // like the change that caused it. The directories under TMPDIR are
+        // named per test, so this removes only what this fixture made.
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+
         if (hadPrevious) ::setenv("XDG_DATA_HOME", previous.c_str(), 1);
         else             ::unsetenv("XDG_DATA_HOME");
     }
@@ -105,6 +118,35 @@ struct ScopedXdgDataHome {
         ::mkdir((dir + "/radicle-module").c_str(), 0755);
         std::ofstream out(dir + "/radicle-module/settings.json", std::ios::trunc);
         out << contents;
+    }
+};
+
+/// Unsets one environment variable for the duration of a test, and restores it.
+///
+/// The fixtures above all SET things, which is why the gap this closes survived:
+/// every Embedded test used `ScopedXdgDataHome` and `ScopedRadHome` together, so
+/// `embeddedHomeFromEnv()` was never empty and the fall-through it enables was
+/// never driven. The one input combination that reaches the bug — no
+/// `XDG_DATA_HOME`, no `HOME`, but a `RAD_HOME` — cannot be built out of
+/// fixtures that only add variables.
+struct ScopedUnsetEnv {
+    std::string name;
+    std::string previous;
+    bool hadPrevious = false;
+
+    explicit ScopedUnsetEnv(const char* variable)
+        : name(variable)
+    {
+        if (const char* old = std::getenv(variable)) {
+            previous = old;
+            hadPrevious = true;
+        }
+        ::unsetenv(variable);
+    }
+
+    ~ScopedUnsetEnv()
+    {
+        if (hadPrevious) ::setenv(name.c_str(), previous.c_str(), 1);
     }
 };
 
@@ -580,28 +622,47 @@ LOGOS_TEST(set_setting_refuses_a_git_path_that_does_not_exist_and_names_it)
                           std::string("/definitely/not/here/git"));
 }
 
-LOGOS_TEST(capabilities_report_the_active_mode_and_whether_it_can_start)
+LOGOS_TEST(capabilities_report_the_active_mode_and_that_every_mode_can_start)
 {
+    // This test used to assert the opposite for Embedded — not startable, with
+    // a reason naming a later milestone — and it FAILED when Embedded gained a
+    // home, which is exactly what it was for. It is kept rather than deleted
+    // because the property it pins is unchanged: capabilities must report the
+    // mode actually in force and whether THAT mode can start, per mode.
+    //
+    // The `modeUnavailableReason` assertion is the part that carries the
+    // change. It must be empty for a startable mode: it is what `SourceToggle`
+    // and `ModePicker` render as a caveat, so a leftover sentence would put
+    // "this build cannot start the selected mode" under a mode that now can.
     ScopedRadHome home("caps-mode");
+    ScopedXdgDataHome xdg("caps-mode");
     const auto path = scratchSettingsPath("caps-mode");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
-    // Local: startable today.
-    impl.setSetting("mode", "local");
-    auto caps = parse(impl.getCapabilities());
-    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("local"));
-    LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
-    LOGOS_ASSERT_TRUE(caps["modeUnavailableReason"].get<std::string>().empty());
+    for (const char* mode : {"explore", "local", "embedded"}) {
+        impl.setSetting("mode", mode);
+        const auto caps = parse(impl.getCapabilities());
+        LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string(mode));
+        LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
+        LOGOS_ASSERT_TRUE(caps["modeUnavailableReason"].get<std::string>().empty());
+    }
 
-    // Embedded: selectable and persisted, but NOT startable until Phase 2, and
-    // the reason has to say so rather than leaving a view to guess. Different
-    // expected answers per mode, so a capabilities call that hardcoded either
-    // one would fail here.
-    impl.setSetting("mode", "embedded");
-    caps = parse(impl.getCapabilities());
-    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
-    LOGOS_ASSERT_FALSE(caps["modeStartable"].get<bool>());
-    LOGOS_ASSERT_FALSE(caps["modeUnavailableReason"].get<std::string>().empty());
+    // Input-dependent, and the reason this is not vacuous: a `modeStartable`
+    // stuck at true would satisfy the loop above. A mode this build cannot
+    // interpret must still report false, with a sentence.
+    //
+    // Driven through a settings FILE rather than `setSetting`, because
+    // `setSetting` validates and would refuse — which is the point: the only
+    // way an unknown mode reaches capabilities is off disk.
+    xdg.writeSettings("{\"mode\":\"turbo\"}");
+    RadicleImpl fromDisk;
+    const auto caps = parse(fromDisk.getCapabilities());
+    // `load()` sanitises an unknown mode to explore, so what capabilities
+    // report is a startable mode — which is itself the property under test:
+    // there is no reachable state in which `mode` names something unstartable.
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("explore"));
+    LOGOS_ASSERT_TRUE(caps["modeStartable"].get<bool>());
+    LOGOS_ASSERT_FALSE(SettingsStore::modeIsStartable("turbo"));
 }
 
 LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_one)
@@ -620,7 +681,15 @@ LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_on
     // Asserted in the DEFAULT (`local`) state on purpose: the buggy derivation
     // was correct in every other state, so a test that first switched to
     // embedded would have passed against it.
+    //
+    // Embedded is now IN the set, and this test failed when it joined — which
+    // is what it was written to do. The field it pins is unchanged and still
+    // needed: `modeStartable` is one boolean about one mode, and a picker
+    // drawing three rows cannot derive three answers from it. That stays true
+    // whether the set is two entries or three, and it is what a fourth mode
+    // would rely on.
     ScopedRadHome home("caps-startable-set");
+    ScopedXdgDataHome xdg("caps-startable-set");
     const auto path = scratchSettingsPath("caps-startable-set");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
@@ -642,9 +711,20 @@ LOGOS_TEST(capabilities_report_which_modes_are_startable_not_just_the_current_on
 
     LOGOS_ASSERT_TRUE(has("local"));
     LOGOS_ASSERT_TRUE(has("explore"));
-    // The whole point: embedded is absent even while the current mode IS
-    // startable, so a picker can annotate that row before it is chosen.
-    LOGOS_ASSERT_FALSE(has("embedded"));
+    LOGOS_ASSERT_TRUE(has("embedded"));
+
+    // The set is reported, not invented: it must agree exactly with the store's
+    // own answer, element for element. This is what keeps the field a view of
+    // `startableModes()` rather than a second list `getCapabilities` maintains
+    // — the drift that would let the UI and the module disagree about which
+    // modes work, with nothing failing.
+    LOGOS_ASSERT_EQ(startable.size(), SettingsStore::startableModes().size());
+    for (const auto& m : SettingsStore::startableModes())
+        LOGOS_ASSERT_TRUE(has(m.c_str()));
+
+    // And it contains nothing else — an unknown mode must not appear, or the
+    // agreement above could be satisfied by a superset.
+    LOGOS_ASSERT_FALSE(has("turbo"));
 }
 
 LOGOS_TEST(the_startable_set_does_not_change_with_the_selected_mode)
@@ -677,19 +757,21 @@ LOGOS_TEST(embedded_mode_does_not_alias_the_existing_local_profile)
     // arriving through the mode picker itself.
     //
     // Embedded promises "a SEPARATE identity from any node you already run".
-    // Before this, `storeForSettings` special-cased only `explore`, so embedded
-    // fell through to the same env resolution as `local` — a user who selected
-    // it got their EXISTING node's DID in the chrome, their existing
-    // repositories, and writes enabled against them, all under a segment
-    // reading "Embedded".
+    // `storeForSettings` once special-cased only `explore`, so embedded fell
+    // through to the same env resolution as `local` — a user who selected it
+    // got their EXISTING node's DID in the chrome, their existing repositories,
+    // and writes enabled against them, all under a segment reading "Embedded".
     //
-    // Phase 2 owns the embedded home. Until it lands the correct behaviour is
-    // INERT, not aliased: no home, so localAvailable is false and nothing of
-    // the existing profile leaks through.
-    ScopedRadHome home("caps-embedded-inert");
+    // Embedded now resolves a home of its OWN, from the XDG data dir alone. So
+    // the assertion is no longer "no home" — it is the stronger and more
+    // durable "a DIFFERENT home, and specifically not the one RAD_HOME names".
+    // The weaker version would pass against a resolver that returned empty for
+    // every mode, which is exactly what it used to be asserting.
+    ScopedRadHome home("caps-embedded-own-home");
     home.makeStorage();
+    ScopedXdgDataHome xdg("embedded-own-home");
 
-    const auto path = scratchSettingsPath("embedded-inert");
+    const auto path = scratchSettingsPath("embedded-own-home");
     auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
 
     // `local` first, to prove the profile IS visible from this environment —
@@ -704,9 +786,356 @@ LOGOS_TEST(embedded_mode_does_not_alias_the_existing_local_profile)
     const auto caps = parse(impl.getCapabilities());
 
     LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
+
+    // A home of its own, under this Basecamp profile's data dir.
+    const std::string embeddedHome = caps["radHome"].get<std::string>();
+    LOGOS_ASSERT_FALSE(embeddedHome.empty());
+    LOGOS_ASSERT_CONTAINS(embeddedHome, xdg.dir);
+    LOGOS_ASSERT_EQ(embeddedHome, embeddedHomeFor(xdg.dir, ""));
+
+    // And emphatically NOT the user's. This is the assertion that carries the
+    // mode: RAD_HOME names a real, readable profile in this test, and Embedded
+    // must not be pointed at it.
+    LOGOS_ASSERT_TRUE(embeddedHome != home.dir);
+    LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());
+}
+
+LOGOS_TEST(embedded_with_no_resolvable_home_is_inert_rather_than_aliasing_rad_home)
+{
+    // **The aliasing bug, reached through the one input combination every other
+    // Embedded test here structurally cannot drive.**
+    //
+    // `embeddedHomeFor()` returns "" when neither XDG_DATA_HOME nor HOME is set
+    // — correct, and pinned in test_settings_store.cpp. But an empty
+    // `configuredHome` is precisely what `resolveHome()` reads as "not
+    // configured", so it falls through to RAD_HOME. Passing that empty string
+    // into `resolvePathsFromEnv()` therefore pointed Embedded at the user's own
+    // profile: the exact failure this mode exists to prevent, arriving through
+    // a composition where each half is individually correct.
+    //
+    // Every other Embedded test uses ScopedXdgDataHome AND ScopedRadHome
+    // together, so `embeddedHomeFromEnv()` is never empty in them and the
+    // fall-through is unreachable. That is why the bug survived: not a missing
+    // assertion, a missing INPUT.
+    //
+    // RAD_HOME is set to a real, readable profile, so a fall-through would
+    // produce `localAvailable: true` and a populated home — loudly wrong rather
+    // than subtly so.
+    ScopedRadHome home("embedded-no-xdg");
+    home.makeStorage();
+    ScopedUnsetEnv noXdg("XDG_DATA_HOME");
+    ScopedUnsetEnv noHome("HOME");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("embedded-no-xdg")});
+
+    // `local` first, and asserted, so this test cannot pass against a module
+    // that never resolves any home at all. Without it every assertion below is
+    // satisfied by a build where all three modes are inert.
+    impl.setSetting("mode", "local");
+    LOGOS_ASSERT_EQ(parse(impl.getCapabilities())["radHome"].get<std::string>(), home.dir);
+
+    // setSetting rebuilds the store through storeForSettings(), which is the
+    // function under test.
+    impl.setSetting("mode", "embedded");
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("embedded"));
+
+    // THE assertion. Not merely "empty" — specifically not RAD_HOME's value,
+    // which is what the fall-through produces. Both are checked because they
+    // fail differently: a home that is empty is inert, and a home that is
+    // someone else's is the aliasing bug.
+    LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>() != home.dir);
     LOGOS_ASSERT_TRUE(caps["radHome"].get<std::string>().empty());
     LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
     LOGOS_ASSERT_FALSE(caps["canWriteLocal"].get<bool>());
+
+    // And it says why, rather than going blank. The message must not be the
+    // dangling "...Radicle home at " that concatenating an empty home produced.
+    const std::string reason = caps["writeUnavailableReason"].get<std::string>();
+    LOGOS_ASSERT_FALSE(reason.empty());
+    LOGOS_ASSERT_CONTAINS(reason, std::string("XDG_DATA_HOME"));
+    LOGOS_ASSERT_TRUE(reason.find("home at  ") == std::string::npos);
+}
+
+LOGOS_TEST(the_embedded_identity_methods_refuse_when_no_home_can_be_resolved)
+{
+    // The same emptiness through the two methods that already guarded it. Kept
+    // beside the test above so the three paths that must agree are read
+    // together — `storeForSettings()` was the odd one out, and a future edit
+    // that re-introduced the gap in any one of them fails here.
+    ScopedRadHome home("embedded-methods-no-xdg");
+    home.makeStorage();
+    ScopedUnsetEnv noXdg("XDG_DATA_HOME");
+    ScopedUnsetEnv noHome("HOME");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("embedded-methods")});
+
+    // The read reports a problem rather than an error: the question was
+    // answered, and the answer is that there is nowhere to put an identity.
+    const auto probe = parse(impl.getEmbeddedIdentity());
+    LOGOS_ASSERT_TRUE(probe["home"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(probe["exists"].get<bool>());
+    LOGOS_ASSERT_FALSE(probe["problem"].get<std::string>().empty());
+
+    // The write refuses outright, and creates nothing anywhere — least of all
+    // in the profile RAD_HOME names.
+    const auto created = parse(impl.createEmbeddedIdentity("tester", ""));
+    LOGOS_ASSERT_TRUE(created.contains("error"));
+
+    struct stat st{};
+    LOGOS_ASSERT_TRUE(::stat((home.dir + "/keys").c_str(), &st) != 0);
+}
+
+LOGOS_TEST(embedded_with_no_identity_yet_does_not_tell_the_user_to_run_rad_auth)
+{
+    // A user chooses Embedded precisely because they do not have `rad`. Telling
+    // them to install it and run `rad auth` is advice for the mode they did not
+    // pick, and it arrives at the one moment they are most likely to believe
+    // the module is broken.
+    //
+    // The assertion is on both halves — the wrong advice is absent AND the
+    // right explanation is present — because a reason that went empty would
+    // satisfy the first alone, and an empty reason is the "blank pane" failure
+    // this repo has shipped before.
+    ScopedRadHome home("caps-embedded-reason");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("embedded-reason");
+
+    const auto path = scratchSettingsPath("embedded-reason");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+
+    // Local first, and asserted, because the `rad auth` advice must SURVIVE
+    // there. Without this the test passes against a build that deleted the
+    // sentence outright, which would strand every user who really does need it.
+    impl.setSetting("mode", "local");
+    // A home with storage but no key: available, so the reason comes from the
+    // write probe rather than from the absent-profile path. Use a home with no
+    // storage instead to reach the sentence under test.
+    const auto localCaps = parse(impl.getCapabilities());
+    LOGOS_ASSERT_TRUE(localCaps["localAvailable"].get<bool>());
+
+    impl.setSetting("mode", "embedded");
+    const auto caps = parse(impl.getCapabilities());
+    const std::string reason = caps["writeUnavailableReason"].get<std::string>();
+
+    LOGOS_ASSERT_FALSE(reason.empty());
+    LOGOS_ASSERT_TRUE(reason.find("rad auth") == std::string::npos);
+    // It names the home, so a user can see WHERE the identity would go, and
+    // states the consequence the whole mode turns on.
+    LOGOS_ASSERT_CONTAINS(reason, caps["radHome"].get<std::string>());
+    LOGOS_ASSERT_CONTAINS(reason, std::string("separate identity"));
+}
+
+LOGOS_TEST(the_rad_auth_advice_survives_for_a_local_home_with_no_profile)
+{
+    // The other direction of the test above, as its own case because it needs a
+    // different environment: `local` pointed at a home with NO storage is
+    // exactly the user who should be told to install Radicle. A change that
+    // replaced the default wording everywhere would pass the embedded test and
+    // fail here.
+    ScopedRadHome home("caps-local-no-profile-advice");
+    // Deliberately no makeStorage().
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("local-advice")});
+
+    impl.setSetting("mode", "local");
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_FALSE(caps["localAvailable"].get<bool>());
+    LOGOS_ASSERT_CONTAINS(caps["writeUnavailableReason"].get<std::string>(),
+                          std::string("rad auth"));
+}
+
+// ---------------------------------------------------------------------------
+// The embedded identity: reading what is there, and creating it.
+// ---------------------------------------------------------------------------
+
+LOGOS_TEST(the_embedded_identity_reports_the_home_and_that_nothing_is_there_yet)
+{
+    ScopedRadHome home("embedded-identity-empty");
+    home.makeStorage();                 // a REAL profile in the environment...
+    ScopedXdgDataHome xdg("embedded-identity-empty");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("emb-id-empty")});
+
+    const auto out = parse(impl.getEmbeddedIdentity());
+
+    LOGOS_ASSERT_EQ(out["home"].get<std::string>(), embeddedHomeFor(xdg.dir, ""));
+    // ...which must NOT be reported as the embedded one. This is the assertion
+    // that makes the reply about the embedded home rather than about whatever
+    // profile happens to be reachable.
+    LOGOS_ASSERT_TRUE(out["home"].get<std::string>() != home.dir);
+    LOGOS_ASSERT_FALSE(out["exists"].get<bool>());
+    LOGOS_ASSERT_TRUE(out["nodeId"].get<std::string>().empty());
+    LOGOS_ASSERT_TRUE(out["problem"].get<std::string>().empty());
+}
+
+LOGOS_TEST(creating_the_embedded_identity_makes_one_the_module_can_then_report)
+{
+    // The whole round trip: create, and see the same identity come back through
+    // the read path. Asserting the node id MATCHES is what distinguishes a real
+    // creation from a reply invented and never written.
+    ScopedRadHome home("embedded-identity-create");
+    ScopedXdgDataHome xdg("embedded-identity-create");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("emb-id-create")});
+
+    LOGOS_ASSERT_FALSE(parse(impl.getEmbeddedIdentity())["exists"].get<bool>());
+
+    const auto created = parse(impl.createEmbeddedIdentity("tester", ""));
+    LOGOS_ASSERT_FALSE(created.contains("error"));
+    LOGOS_ASSERT_TRUE(created["created"].get<bool>());
+    const std::string nid = created["nodeId"].get<std::string>();
+    LOGOS_ASSERT_FALSE(nid.empty());
+    LOGOS_ASSERT_EQ(created["home"].get<std::string>(), embeddedHomeFor(xdg.dir, ""));
+
+    const auto after = parse(impl.getEmbeddedIdentity());
+    LOGOS_ASSERT_TRUE(after["exists"].get<bool>());
+    // The SAME identity, not merely some identity: a read path pointed at a
+    // different home would report `exists:false`, and one that invented an id
+    // would report a different string.
+    LOGOS_ASSERT_EQ(after["nodeId"].get<std::string>(), nid);
+}
+
+LOGOS_TEST(creating_an_embedded_identity_never_touches_the_users_own_home)
+{
+    // The irreversible failure, and the only one worth a test of its own: a
+    // creation that resolved the user's `~/.radicle` would refuse (their
+    // keystore exists) or, worse, overwrite it.
+    //
+    // RAD_HOME points at a scratch home with no profile — so if creation read
+    // it, a profile would appear THERE and the assertion below would catch it.
+    // That is the input-dependent form: the two homes are different and only
+    // one of them may gain a key.
+    ScopedRadHome home("embedded-create-isolation");
+    ScopedXdgDataHome xdg("embedded-create-isolation");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("emb-iso")});
+
+    const auto created = parse(impl.createEmbeddedIdentity("tester", ""));
+    LOGOS_ASSERT_TRUE(created["created"].get<bool>());
+
+    struct stat st{};
+    LOGOS_ASSERT_TRUE(::stat((home.dir + "/keys").c_str(), &st) != 0);
+    LOGOS_ASSERT_TRUE(::stat((home.dir + "/config.json").c_str(), &st) != 0);
+    // And the key really did land in the embedded home, or the assertion above
+    // is satisfied just as well by a creation that failed entirely.
+    LOGOS_ASSERT_TRUE(
+        ::stat((embeddedHomeFor(xdg.dir, "") + "/keys/radicle.pub").c_str(), &st) == 0);
+}
+
+LOGOS_TEST(a_second_embedded_identity_is_refused_and_names_the_consequence)
+{
+    // No force, ever: the signing key IS the identity. The refusal is asserted
+    // on its WORDING because the `radicle` crate refuses a second init too, so
+    // "it errored" is equally true with this module's guard deleted.
+    ScopedRadHome home("embedded-create-twice");
+    ScopedXdgDataHome xdg("embedded-create-twice");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("emb-twice")});
+
+    const auto first = parse(impl.createEmbeddedIdentity("tester", ""));
+    const std::string original = first["nodeId"].get<std::string>();
+    LOGOS_ASSERT_FALSE(original.empty());
+
+    const auto second = parse(impl.createEmbeddedIdentity("someone-else", ""));
+    LOGOS_ASSERT_TRUE(second.contains("error"));
+    LOGOS_ASSERT_CONTAINS(second["error"].get<std::string>(),
+                          std::string("would overwrite its signing key"));
+
+    // The identity on disk is untouched — which is what the refusal is FOR. A
+    // guard that errored after rewriting the keystore passes the check above.
+    LOGOS_ASSERT_EQ(parse(impl.getEmbeddedIdentity())["nodeId"].get<std::string>(),
+                    original);
+}
+
+LOGOS_TEST(the_passphrase_reaches_the_backend_and_the_outcome_is_reported)
+{
+    // The wizard's passphrase must actually arrive. A module that dropped the
+    // argument would create an unencrypted key and report `encrypted:false`,
+    // which is why both directions are asserted against two separate homes:
+    // one answer for every input proves nothing.
+    ScopedRadHome home("embedded-passphrase");
+
+    ScopedXdgDataHome plain("embedded-pass-plain");
+    {
+        auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                    SettingsStore{scratchSettingsPath("emb-plain")});
+        const auto out = parse(impl.createEmbeddedIdentity("tester", ""));
+        LOGOS_ASSERT_FALSE(out["encrypted"].get<bool>());
+    }
+
+    ScopedXdgDataHome sealed("embedded-pass-sealed");
+    {
+        auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                    SettingsStore{scratchSettingsPath("emb-sealed")});
+        const auto out =
+            parse(impl.createEmbeddedIdentity("tester", "correct horse battery"));
+        LOGOS_ASSERT_TRUE(out["encrypted"].get<bool>());
+    }
+}
+
+LOGOS_TEST(creating_the_identity_in_embedded_mode_makes_the_node_readable_at_once)
+{
+    // Without the rebuild in createEmbeddedIdentity, this instance's
+    // LocalReader still points at the home as it was — no profile — and the
+    // user sees the wizard succeed while the app goes on saying there is no
+    // identity, until a restart. The failure is silent and reads as "creating
+    // the identity did nothing".
+    ScopedRadHome home("embedded-live-rebuild");
+    ScopedXdgDataHome xdg("embedded-live-rebuild");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("emb-live")});
+    impl.setSetting("mode", "embedded");
+
+    LOGOS_ASSERT_FALSE(parse(impl.getCapabilities())["localAvailable"].get<bool>());
+
+    const auto created = parse(impl.createEmbeddedIdentity("tester", ""));
+    LOGOS_ASSERT_TRUE(created["created"].get<bool>());
+
+    const auto caps = parse(impl.getCapabilities());
+    LOGOS_ASSERT_TRUE(caps["localAvailable"].get<bool>());
+    // The identity the module now reports is the one just created, read back
+    // through the capabilities path rather than echoed from the creation reply.
+    LOGOS_ASSERT_EQ(caps["nodeId"].get<std::string>(),
+                    created["nodeId"].get<std::string>());
+}
+
+LOGOS_TEST(creating_the_identity_does_not_repoint_a_module_that_is_in_local_mode)
+{
+    // The other side of the rebuild: it must be conditional. Creating an
+    // embedded identity is a legitimate thing to do while browsing your own
+    // node — setting it up for later — and it must not silently swap which node
+    // the app is reading.
+    ScopedRadHome home("embedded-create-from-local");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("embedded-create-from-local");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("emb-from-local")});
+    impl.setSetting("mode", "local");
+    LOGOS_ASSERT_EQ(parse(impl.getCapabilities())["radHome"].get<std::string>(), home.dir);
+
+    LOGOS_ASSERT_TRUE(parse(impl.createEmbeddedIdentity("tester", ""))["created"].get<bool>());
+
+    const auto caps = parse(impl.getCapabilities());
+    // Still Local, still the user's home. And the mode is unchanged: creating
+    // an identity is not choosing a mode.
+    LOGOS_ASSERT_EQ(caps["mode"].get<std::string>(), std::string("local"));
+    LOGOS_ASSERT_EQ(caps["radHome"].get<std::string>(), home.dir);
+
+    // But the identity really was created — otherwise this test passes against
+    // a build where createEmbeddedIdentity does nothing at all.
+    LOGOS_ASSERT_TRUE(parse(impl.getEmbeddedIdentity())["exists"].get<bool>());
 }
 
 LOGOS_TEST(a_persisted_mode_this_build_does_not_know_does_not_alias_the_local_profile)

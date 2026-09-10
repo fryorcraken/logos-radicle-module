@@ -32,6 +32,24 @@ struct NodePaths {
     /// Empty when the paths are usable; otherwise a sentence naming what is
     /// wrong, suitable for showing a user verbatim.
     std::string problem;
+
+    /// What to tell the user when the home holds no profile — or "" to use
+    /// `LocalStore`'s own default wording.
+    ///
+    /// **This is a field rather than a `mode` parameter on `LocalStore`, and
+    /// that is deliberate.** The default sentence ends "install Radicle and run
+    /// `rad auth` to browse local repositories", which is correct advice for a
+    /// home the user manages and exactly wrong for the embedded one — a mode
+    /// whose entire premise is that you never run `rad auth`, and whose empty
+    /// home is not a misconfiguration but the state before the wizard has run.
+    ///
+    /// Teaching `LocalStore` about modes would put the mode vocabulary in a
+    /// class that is otherwise about paths, and would mean every future mode
+    /// edits a switch inside it. Carrying the sentence with the paths keeps
+    /// `LocalStore` answering exactly one question — "is there a profile at this
+    /// path, and what do I say if not" — while the mode-specific half is decided
+    /// once, where the mode is already known (`storeForSettings`).
+    std::string absentProfileReason;
 };
 
 /// The `sun_path` capacity for a Unix domain socket on Linux, NUL included.

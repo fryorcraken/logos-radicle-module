@@ -45,6 +45,33 @@ void makeParentDirs(const std::string& path)
     }
 }
 
+/// This module's own directory under Basecamp's per-profile XDG data dir.
+///
+/// Both module-owned paths — the settings file and the embedded home — are
+/// derived from this one function rather than each spelling out the base, so
+/// they cannot come to disagree about which Basecamp profile they belong to.
+/// That agreement is the whole reason the embedded home is safe to place here:
+/// it inherits the per-profile separation the settings file already has, and it
+/// inherits it by construction rather than by two functions being kept in step.
+///
+/// Empty when nothing can be resolved, which both callers propagate rather than
+/// substituting a plausible-looking path relative to nothing.
+std::string moduleDataDir(const std::string& xdgDataHome,
+                          const std::string& userHome)
+{
+    // XDG's own fallback, which is also what Basecamp uses to derive its
+    // per-profile data dir. Following the same rule is what keeps two Basecamp
+    // profiles apart without this module knowing anything about Basecamp's
+    // directory layout: whatever XDG_DATA_HOME the profile was launched with is
+    // the one this lands under.
+    std::string base = xdgDataHome;
+    if (base.empty()) {
+        if (userHome.empty()) return {};
+        base = userHome + "/.local/share";
+    }
+    return base + "/radicle-module";
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -54,22 +81,27 @@ void makeParentDirs(const std::string& path)
 std::string settingsPathFor(const std::string& xdgDataHome,
                             const std::string& userHome)
 {
-    // XDG's own fallback, which is also what Basecamp uses to derive its
-    // per-profile data dir. Following the same rule is what keeps two Basecamp
-    // profiles' settings apart without this module knowing anything about
-    // Basecamp's directory layout: whatever XDG_DATA_HOME the profile was
-    // launched with is the one this lands under.
-    std::string base = xdgDataHome;
-    if (base.empty()) {
-        if (userHome.empty()) return {};
-        base = userHome + "/.local/share";
-    }
-    return base + "/radicle-module/settings.json";
+    const std::string dir = moduleDataDir(xdgDataHome, userHome);
+    if (dir.empty()) return {};
+    return dir + "/settings.json";
 }
 
 std::string settingsPathFromEnv()
 {
     return settingsPathFor(envOr("XDG_DATA_HOME", ""), envOr("HOME", ""));
+}
+
+std::string embeddedHomeFor(const std::string& xdgDataHome,
+                            const std::string& userHome)
+{
+    const std::string dir = moduleDataDir(xdgDataHome, userHome);
+    if (dir.empty()) return {};
+    return dir + "/embedded-home";
+}
+
+std::string embeddedHomeFromEnv()
+{
+    return embeddedHomeFor(envOr("XDG_DATA_HOME", ""), envOr("HOME", ""));
 }
 
 // ---------------------------------------------------------------------------
@@ -88,15 +120,32 @@ bool SettingsStore::isKnownMode(const std::string& mode)
 
 std::vector<std::string> SettingsStore::startableModes()
 {
-    // Embedded is selectable and persisted, but its node lifecycle is Phase 2.
-    // Reporting it as not-startable is what lets the UI say so plainly instead
-    // of offering a control that silently does nothing.
+    // All three. Embedded joined this list when `embeddedHomeFor()` gave it a
+    // home to point at — and the two had to land together, which is worth
+    // recording because they look separable.
     //
-    // THIS list is the single source of truth: `modeIsStartable` is derived
+    // The whole UI derives from this list: `RepoList.notImplemented`,
+    // `SourceToggle`'s per-segment marker and caption, `ModePicker`'s per-row
+    // caveat and `SourceState.modeStartable` all read it rather than comparing
+    // against the word "embedded" — which was itself a deliberate Phase 1
+    // change, so that this line would be the only edit. Adding the mode here
+    // BEFORE it had a home would therefore have told all four screens at once
+    // that Embedded is startable, while `storeForSettings()` still handed it no
+    // home: a repository list fetching against nothing, a segment with no
+    // caveat, and a wizard-shaped hole where the identity should be. That is the
+    // identity confusion `storeForSettings()`'s Embedded paragraph exists to
+    // prevent, arriving one layer up.
+    //
+    // "Startable" here means the mode resolves a home this module owns and can
+    // create an identity into — NOT that a node daemon runs. The daemon is step
+    // 3 (`radicle-node`, +111 crates and a vendor rehash) and nothing in this
+    // list claims otherwise; `localNodeRunning` is the field that answers that,
+    // and it is a live socket probe rather than a build fact.
+    //
+    // THIS list stays the single source of truth: `modeIsStartable` is derived
     // from it below rather than repeating the condition, so the boolean and the
-    // set cannot drift into disagreeing, and Phase 2 adds `kModeEmbedded` here
-    // and nowhere else.
-    return {kModeExplore, kModeLocal};
+    // set cannot drift into disagreeing.
+    return {kModeExplore, kModeLocal, kModeEmbedded};
 }
 
 bool SettingsStore::modeIsStartable(const std::string& mode)

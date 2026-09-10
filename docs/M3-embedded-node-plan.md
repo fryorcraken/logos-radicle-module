@@ -382,13 +382,15 @@ Recorded so Phase 2 does not re-litigate them:
   [`rust-ffi.md`](rust-ffi.md). `PATH` is the only channel reaching all six
   spawn sites and writing it is process-global, so it happens once at init. The
   settings UI states this rather than implying the change is immediate.
-- **Embedded is selectable and persisted, but reported as not startable.**
-  `getCapabilities().modeStartable` is false for it with a reason naming the
-  milestone, and the mode row says so. Hiding it would misrepresent the module
-  as never intending to support it; offering it silently would be a control
-  that does nothing. When Phase 2 lands the daemon,
-  `SettingsStore::modeIsStartable()` is the one line that changes — the UI
-  derives its state from capabilities and needs no edit.
+- **Embedded was selectable and persisted, but reported as not startable**, with
+  a reason naming the milestone, and the mode row said so. Hiding it would have
+  misrepresented the module as never intending to support it; offering it
+  silently would have been a control that does nothing. **The prediction that
+  `SettingsStore::startableModes()` would be the one line that changes held
+  exactly** — step 2 turned the mode on by adding one entry, and edited no QML
+  at all. Which is also the trap it left: a change that touches no view can
+  break no view test, so a green QML suite proved nothing about the mode being
+  on. `tst_embedded_real.qml` exists to close that.
 - **`explore` means no local home at all**, not "`local` with the local parts
   hidden". A user who chose it has said they do not want this module touching a
   local profile, so `LocalStore` is built with empty paths and
@@ -417,7 +419,7 @@ actually binds the socket, should revisit whether the profile name can be
 plumbed through.
 
 **Phase 2 — embedded lifecycle.** Wizard, `Profile::init`, start/stop, the
-config panel's read-only half. **In progress; step 1 below has landed.**
+config panel's read-only half. **In progress; steps 1 and 2 below have landed.**
 
 The three are separable, and the order below is chosen by what it costs the
 *build* rather than by what reads best as a feature. The dividing line is
@@ -447,25 +449,65 @@ room. `resolvePaths()` split home and socket resolution into pure functions,
 The awkwardness CLAUDE.md's "make the change easy" rule looks for is not
 present, because the previous phase removed it on purpose.
 
-**Step 2 is where the ordering constraint bites.** `startableModes()` is the
-one line that turns Embedded on, and `tst_embedded.qml` pins that the whole UI
-derives from it — the not-implemented state, the list request, the paging.
-Adding `kModeEmbedded` there before there is a home to point at would make
-every one of those derive to "startable" against a mode that still has no
-profile, which is the identity-confusion failure `storeForSettings()`'s
-Embedded paragraph exists to prevent. So the home comes first and the flag
-comes with it, in one commit.
+**Step 2 was where the ordering constraint bit, and it held.** `startableModes()`
+is the one line that turns Embedded on, and `tst_embedded.qml` pinned that the
+whole UI derives from it — the not-implemented state, the list request, the
+paging. Adding `kModeEmbedded` there before there was a home to point at would
+have made every one of those derive to "startable" against a mode with no
+profile, which is the identity-confusion failure `storeForSettings()`'s Embedded
+paragraph exists to prevent. So the home and the flag landed together.
 
-Two things step 1 deliberately does **not** do, both waiting on step 2:
+Four things step 2 settled, recorded because a later step could otherwise
+re-open them:
 
-- **No module method.** `radicle_impl.h` gains nothing yet, because a wizard
+- **The embedded home is `<XDG data dir>/radicle-module/embedded-home`**,
+  derived by the same `moduleDataDir()` the settings file uses. Sharing that
+  derivation is what makes the per-Basecamp-profile separation of one the
+  separation of the other, by construction rather than by two functions kept in
+  step. `embeddedHomeFor()` reads only the data dir — never `RAD_HOME`, never
+  `$HOME/.radicle` — so there is no branch by which Embedded could reach the
+  user's own profile. That absence is the mode's promise made structural, and
+  `the_embedded_home_is_never_the_users_own_radicle_home` pins it.
+- **The 108-byte cap does not constrain the home, only the socket**, and this is
+  the fact that makes the placement safe rather than reckless. §6's measurement
+  (166 bytes under Basecamp's layout) is far over the cap for a socket and
+  entirely ordinary for a directory — and `resolveSocket()` already prefers
+  `$XDG_RUNTIME_DIR` precisely so a long home cannot reach it. The constraint
+  that killed "the socket follows the home" is the one that makes "the home
+  lives wherever it likes" work.
+- **"Startable" means the mode resolves a home this module can work against —
+  not that a daemon runs in it.** That distinction had to be made explicit, or
+  `startableModes()` would have stayed false for Embedded until step 3 and the
+  UI would have kept saying "not implemented" about a mode that fully works
+  short of a node. Whether a daemon answers is `localNodeRunning`, a live socket
+  probe with a different lifetime: this set is a build fact and never moves at
+  runtime.
+- **`LocalStore` did not learn about modes.** It gained a
+  `NodePaths::absentProfileReason` instead, because the default sentence ends
+  "run `rad auth`" — right for a home the user manages, exactly wrong for the
+  mode whose premise is that they never do. Putting a mode switch inside
+  `LocalStore` would have moved mode vocabulary into a class about paths and
+  made every future mode edit it; carrying the sentence with the paths keeps the
+  mode-specific decision where the mode is already known.
+
+Step 2 added the two module methods step 1 deliberately deferred —
+`getEmbeddedIdentity()` and `createEmbeddedIdentity(alias, passphrase)` — and
+plumbed both through `radicle_ui.rep`, so **step 4's wizard is a QML-only
+change** exactly as the table says. Neither takes a home, which is a safety
+property rather than a convenience: a home argument crossing the QtRO boundary
+would be a way for a sandboxed view to point key creation at the user's real
+`~/.radicle`.
+
+Two things step 1 deliberately did **not** do, both of which step 2 then did:
+
+- **No module method.** `radicle_impl.h` gained nothing, because a wizard
   cannot call this until there is an embedded home to create *into*, and that
-  path is step 2's to define. Exposing an RPC method whose only sensible
+  path was step 2's to define. Exposing an RPC method whose only sensible
   argument does not exist yet would be API written against a caller nobody can
   write.
-- **Embedded stays unstartable.** Creating an identity is not running a node,
-  and reporting the mode as startable before step 3 would be the same lie one
-  layer down.
+- **Embedded stayed unstartable.** Not because creating an identity is not
+  running a node — step 2 settled that "startable" was never about the daemon —
+  but because a mode with no home of its own genuinely could not start.
 
 **Phase 3 — writes.** Folds in M2.2a (issues, comments, labels) now that a
 signer and passphrase flow exist. M2.2's own open question — "does this

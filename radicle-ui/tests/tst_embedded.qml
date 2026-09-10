@@ -3,7 +3,24 @@ import QtTest
 import "../src/qml" as Ui
 
 /*
- * Embedded must show "not implemented", never a repository list.
+ * A mode the build cannot start must show "not implemented", never a
+ * repository list.
+ *
+ * ## Read this before assuming the file is about Embedded
+ *
+ * It uses Embedded as its worked example, because that is the mode the
+ * behaviour was written for and the one that shipped the bug. **Embedded is now
+ * startable** — it has a Basecamp-owned home and creates its own identity — so
+ * every test below drives the fixture's `startableModes` to say otherwise, and
+ * that is not a stale fixture: the property under test is "what does this screen
+ * do about a mode the BACKEND reports as unstartable", and that question needs
+ * an unstartable mode to ask it of.
+ *
+ * The behaviour is not dead code waiting for a mode to break. It is the state
+ * the screen holds during the window before the first `getCapabilities` reply
+ * settles, and it is what a fourth mode — or a build where one of the three
+ * cannot run — inherits without a line of new UI. `tst_embedded_real.qml`
+ * covers the other half: that Embedded, being startable now, actually lists.
  *
  * ## The bug this pins
  *
