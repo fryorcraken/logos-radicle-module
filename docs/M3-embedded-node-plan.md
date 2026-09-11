@@ -1,10 +1,21 @@
 # M3 — An embedded Radicle node, set up from inside Basecamp
 
-Status: **plan.** Which phases have landed is a `git log` question, not a
-sentence to maintain here — this line used to claim "Phases 1-3 are not
-started" while Phase 1 had shipped, which is the failure mode CLAUDE.md's
-"Keeping this file true" section is about. Each phase heading below carries its
-own state, and those headings are edited when the phase merges.
+> **Superseded as the forward-looking document by
+> [`docs/PLAN.md`](PLAN.md).** What is still to build, and the constraints that
+> bind it, moved there when this repo adopted the spec-driven flow; PLAN.md is
+> what the role agents read, and it is the only one of the two that is kept
+> current.
+>
+> **This file is kept as research, and is no longer edited as phases merge.**
+> Its value is that every technical claim names where it came from, so a claim
+> in PLAN.md can be re-verified here rather than re-derived. Where the two
+> disagree, PLAN.md is the live one — and the phase status lines below are
+> frozen at the day this was superseded. Ask `git log` instead.
+
+Status: **research, superseded.** Which phases have landed is a `git log`
+question, not a sentence to maintain here — this line used to claim "Phases 1-3
+are not started" while Phase 1 had shipped, which is the failure mode CLAUDE.md's
+"Keeping this file true" section is about.
 
 Every technical claim below was checked against the `radicle 0.25.1` source
 vendored in `~/.cargo/registry`, the crates.io API, and the local docs

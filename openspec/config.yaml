@@ -1,0 +1,45 @@
+# OpenSpec's built-in workflow: proposal → specs → design → tasks.
+#
+# `design.md`'s **Decisions** section is where a change's reasoning lives — it
+# asks for "key technical choices with rationale (why X over Y?)... alternatives
+# considered for each decision", which is what an ADR is for. A separate ADR
+# artifact would duplicate it; what canonical ADRs add beyond this is lifecycle
+# (numbering, immutability, superseded-by chains), which this project does not
+# need.
+#
+# Reasoning never goes in a spec: a spec is a behaviour contract, and prose
+# rationale in one is prose nobody maintains.
+#
+# See `.claude/agents/README.md` for the document model and the role agents.
+schema: spec-driven
+
+# Shown to the AI when it creates any artifact. Kept to what a writer needs in
+# order to place a requirement in the right module and the right test layer —
+# the rest is in CLAUDE.md, which the agents are told to read.
+context: |
+  Two modules in one git repo, published to the Logos catalog:
+  `radicle/` (core — all HTTP, JSON, filesystem and FFI, C++ plus a Rust
+  staticlib under `radicle/rust-ffi/`) and `radicle-ui/` (QML view, which
+  forwards everything to core). The split is forced: Basecamp sandboxes the QML
+  engine, so a view cannot fetch or read anything itself. Both modules carry the
+  same version and CI asserts it.
+
+  The API names its source explicitly rather than hiding it: `remote*` proxies
+  to a seed node over HTTP, `local*` reads this machine's Radicle home through
+  the Rust staticlib. Every method returns a JSON string, and failures are
+  always `{"error":"..."}` — never a partial success.
+  `radicle/src/radicle_impl.h` is the full contract.
+
+  Where behaviour belongs, and therefore which layer can test it:
+  - Logic that needs no view belongs in the core module — testable without Qt.
+  - What one QML file decides on its own is a component test.
+  - Wiring (a signal that never arrived, a call a view forgot to make) is only
+    visible to the end-to-end sitometres specs; component tests structurally
+    cannot see it.
+
+  Writing to a repository happens on the local node only, and every write
+  affordance is gated on `getCapabilities().canWriteLocal` — never on
+  `localAvailable`, because a profile can exist while its key stays locked.
+
+  Conventions: RFC 2119 MUST / MUST NOT for requirements. Prose is British
+  English, wrapped at 79 columns, and states what a command cannot answer.

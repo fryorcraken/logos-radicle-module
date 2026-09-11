@@ -3,23 +3,34 @@
 ## Where to look for what
 
 This file is the always-relevant part: how to build and run things, the test
-layers, and the traps that have bitten changes here. Three areas have their own
-file, because they only matter when you are doing that specific thing. **Read
-them when the trigger applies, not otherwise:**
+layers, and the traps that have bitten changes here. The areas below have their
+own file, because they only matter when you are doing that specific thing.
+**Read them when the trigger applies, not otherwise:**
 
 | Read | When |
 |---|---|
+| [`docs/PLAN.md`](docs/PLAN.md) | **Before any design decision.** What is not built yet, and the constraints that bind it. Read it from `origin/main`. |
+| [`.claude/agents/README.md`](.claude/agents/README.md) | **Before starting a change.** The spec-driven flow: which document answers which question, and the role agents. |
 | [`docs/rust-ffi.md`](docs/rust-ffi.md) | Touching `radicle/rust-ffi/`, the `local*` read path, or `flake.nix`'s per-system handling |
 | [`docs/writes.md`](docs/writes.md) | Touching the `local*` **write** path — `cobwrite.rs`, `LocalWriter`, the composers — or adding a write action |
 | [`docs/e2e.md`](docs/e2e.md) | Running, adding to, or debugging a sitometres spec (`radicle-ui/tests/ui/*.yaml`) |
 
-`docs/` also holds the design and planning documents those link to:
-`M2.2-write-actions-design.md` (shipped), `M2.2-write-features-proposal.md`,
-and `M3-embedded-node-plan.md` with `M3-phase0-findings.md` beside it. **M3 is
-under way, and which of its phases have landed is a `git log` question** — the
-plan document's own phase headings carry that, and this line deliberately does
-not repeat them. It used to say "not started", which was true when written and
-false two merges later.
+**Changes go through the spec-driven flow** — an OpenSpec change under
+`openspec/changes/<name>/`, written and reviewed by the role agents in
+`.claude/agents/`. A shipped change's proposal, design and tasks are archived
+under `openspec/changes/archive/`, which is where a past decision is found;
+`openspec/specs/` is the live behaviour contract. The CLI is not installed
+globally — run it as `npx @fission-ai/openspec@latest <command>`.
+
+`docs/` also holds background documents: `M2.2-write-actions-design.md`
+(shipped), `M2.2-write-features-proposal.md`, and `M3-embedded-node-plan.md`
+with `M3-phase0-findings.md` beside it. **Those two M3 files are frozen
+research, superseded as the forward-looking document by `docs/PLAN.md`** — they
+are kept because they cite the crate source line by line, so a claim can be
+re-verified rather than re-derived, and they are no longer edited as phases
+merge. Which phases have landed is a `git log` question; this line deliberately
+does not repeat it, because it used to say "not started", which was true when
+written and false two merges later.
 
 ### Keeping this file true
 
@@ -141,7 +152,7 @@ each one costs the user a manual approval click. What that means in practice:
 | `lgs …`, `git …`, `nix build …` | a glob, a loop, a `VAR=value` prefix |
 | `gh api …`, `gh pr …`, `gh run …` | the same with `--jq` appended |
 | the test scripts, by absolute path | `sh <relative-path>` |
-| | reading a path under `/nix/store` |
+| `npx @fission-ai/openspec@latest …` | reading a path under `/nix/store` |
 
 Four that catch people repeatedly:
 
