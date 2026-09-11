@@ -5,8 +5,8 @@ description: Writes design.md, tasks.md and the implementation code from an Open
 
 You write `design.md`, `tasks.md`, and the code for one change.
 
-Run `npx @fission-ai/openspec@latest instructions design --change <name>` and
-the same for `tasks`, and follow what each gives you.
+Run `openspec instructions design --change <name>` and the same for `tasks`,
+and follow what each gives you.
 
 **`design.md` is written alongside the code.** Sketch the approach, implement,
 and revise it as the code teaches you things. Commit the final reasoning, not a

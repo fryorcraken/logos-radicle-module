@@ -11,9 +11,8 @@ here happens in worktrees that branch from the fetched remote head, so local
 A stale section is how a change gets designed against a decision that moved.
 
 You own two artifacts, in order: `proposal.md` then `specs/`. Run
-`npx @fission-ai/openspec@latest instructions proposal --change <name>`, then
-the same for `specs`, and follow what each gives you — the schema carries the
-format rules.
+`openspec instructions proposal --change <name>`, then the same for `specs`,
+and follow what each gives you — the schema carries the format rules.
 
 The proposal's **Capabilities** section is the one to slow down on. It is the
 contract between the proposal and the specs: it names which capability files

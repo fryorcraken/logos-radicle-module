@@ -257,9 +257,18 @@ and write the signing key **unencrypted**, matching `ssh-keygen` and the
 `radicle` crate's own passphrase handling. A non-empty `passphrase` MUST
 encrypt the key.
 
-The reply MUST report the outcome as `encrypted`, derived from what was done
-rather than echoed from the input, so a caller states what happened instead of
-assuming the input was honoured.
+The reply MUST report `encrypted`, and it MUST agree with whether the key on
+disk is encrypted.
+
+As shipped, `encrypted` is computed from the input (`!passphrase.is_empty()`)
+and the same value selects the passphrase passed to `Profile::init`, so the
+two cannot disagree in this code — but the field is not an observation of what
+was written. A future change that made key creation fall back to an
+unencrypted key on any path would satisfy the letter of this requirement while
+reporting `encrypted: true` over an unencrypted key. What closes that is the
+signability requirement below, which is checked against the key rather than
+against the input; an earlier draft of this requirement asserted the field was
+"derived from what was done", which the code does not do.
 
 An unencrypted key MUST be immediately signable: the module's write path MUST
 be able to load a signer with no prompt. An encrypted key MUST NOT be signable

@@ -6,9 +6,9 @@ the agents. Nothing here is custom tooling — subagents already give isolated
 context windows, per-role models and tool limits, which is what per-role
 separation needs.
 
-The CLI is not installed globally. Run it with
-`npx @fission-ai/openspec@latest <command>`, or install it if you use it often;
-`openspec --help` lists the surface.
+The CLI is `openspec`, from the npm package `@fission-ai/openspec`
+(`npm install -g @fission-ai/openspec`). `openspec --help` lists the surface.
+Note the bare `openspec` package on npm is an unrelated placeholder at 0.0.0.
 
 ## The documents, and what each is for
 

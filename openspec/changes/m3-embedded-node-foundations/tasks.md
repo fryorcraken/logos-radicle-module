@@ -111,10 +111,32 @@ a change whose premise is that it has none.
 
 ## 5. Review
 
-- [ ] 5.1 Run `spec-test-reviewer` against the specs and the existing tests —
+- [x] 5.1 Run `spec-test-reviewer` against the specs and the existing tests —
       it reads the spec and tests but not the implementation, which is what
       makes it able to see a test that pins what was built rather than what was
-      asked for
+      asked for. **The agent stalled part-way through its mutation run and was
+      stopped**; it had produced one finding, and its pending mutation was
+      completed by hand rather than abandoned:
+      - **The spec was wrong, not the code.** `embedded-identity` asserted that
+        the reply's `encrypted` is "derived from what was done rather than
+        echoed from the input". `profileinit.rs:332` computes it as
+        `!passphrase.is_empty()` — an echo. This is the aspiration-instead-of-
+        description failure a retrospective spec is most prone to, and it is
+        the spec that was corrected, since this change has no code edits
+      - **Mutation run to settle it, and the tests hold.** Forcing
+        `Profile::init` to take `None` for the passphrase — reporting
+        `encrypted: true` over an unencrypted key — turns
+        `a_passphrase_encrypts_the_key_and_reports_it` red with
+        `canWrite: true` where `false` was expected. 13 passed, 1 failed. The
+        test survives the echo because it asserts through `can_write` against
+        the key on disk rather than against the reported flag. Tree restored
+        and verified clean
+- [ ] 5.1b Re-run `spec-test-reviewer` on the remaining three capabilities.
+      Only `embedded-identity` was reached before the stall, so
+      `module-settings`, `source-modes` and `node-paths` have had no
+      spec-versus-test pass. Split it one capability per agent — the single
+      agent stalled on a whole-change scope, and mutation runs are slow enough
+      that four narrow passes will finish where one broad one did not
 - [x] 5.2 Run `design-reviewer` against `design.md`, the code and
       `docs/PLAN.md`; verify it reports on decisions taken in code but not
       recorded. Findings acted on in this change, since all were artifact
