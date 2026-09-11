@@ -100,6 +100,14 @@ a change whose premise is that it has none.
 - [ ] 4.9 Write up `setSetting("mode", …)` failure being wholly unspecified
       and untested: nothing says what the segment shows when the write is
       refused, or when capabilities return a mode the user did not pick
+- [ ] 4.10 Consider making **mutation evidence a standing field in Decisions
+      entries** — "removing this guard turns exactly these tests red". The
+      commit messages carry it for nearly every decision and `design.md`
+      migrated it for only one (`resolveSocket`'s profile argument). It is
+      what stops a future reader deleting a guard, and it is the most
+      perishable thing in a commit message. A change to
+      `.claude/agents/dev-writer.md` and the `design-reviewer`'s "what a good
+      Decisions entry contains" list, not to this change
 
 ## 5. Review
 
@@ -107,9 +115,26 @@ a change whose premise is that it has none.
       it reads the spec and tests but not the implementation, which is what
       makes it able to see a test that pins what was built rather than what was
       asked for
-- [ ] 5.2 Run `design-reviewer` against `design.md`, the code and
+- [x] 5.2 Run `design-reviewer` against `design.md`, the code and
       `docs/PLAN.md`; verify it reports on decisions taken in code but not
-      recorded
+      recorded. Findings acted on in this change, since all were artifact
+      edits rather than behaviour changes:
+      - **`design.md` had inherited Phase 1's false seed-persistence claim**
+        from the commit message. Corrected in place and recorded *as* a
+        correction, because a silent fix would hide the propagation the
+        archive exists to stop
+      - Added four unrecorded decisions: the spike's removal from the lock
+        (cargo vendoring is feature-blind, and the probe's `.txt` suffix is
+        load-bearing because cargo auto-discovers `examples/*.rs`); the
+        announce socket threaded as a parameter rather than read from the
+        environment; `absentProfileReason` travelling with the paths rather
+        than teaching `LocalStore` about modes; and the policy of keeping
+        unreachable safety branches on purpose
+      - Moved the announce-socket trap into `writes.md`, where whoever edits
+        `cobwrite.rs` will look, rather than leaving it only in an archived
+        design document
+      - Shed PLAN.md's third copy of the six-spawn-sites reasoning down to a
+        pointer at `rust-ffi.md`, which owns it
 - [ ] 5.3 Act on findings, routing each to the artifact that owns it, and
       re-run only the reviewers whose findings led to changes
 - [ ] 5.4 `openspec archive m3-embedded-node-foundations`, taking the sync

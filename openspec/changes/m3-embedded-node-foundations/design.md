@@ -117,8 +117,24 @@ point.
 and a setting can still go stale after it was validated (a git binary can be
 removed later).
 
-**A side effect worth naming:** the chosen seed now survives a restart, which it
-did not before — `setRemoteSeed` previously mutated an in-memory field.
+**A claim to correct rather than migrate.** Phase 1's commit message records
+that the chosen seed now survives a restart. **It does not, and this document
+repeated the error once before review caught it** — which is exactly the
+propagation the archive exists to stop, so it is recorded here rather than
+quietly fixed.
+
+What shipped is two paths to one field with different properties.
+`setRemoteSeed` probes the seed and rolls back to the last known-good on
+failure, but never writes the settings store; `setSetting("remoteSeed", …)`
+persists but validates shape only, deliberately keeping a network round trip off
+a settings write. The seed picker calls the first. So Phase 1 delivered the
+store, not the wiring, and nothing states which path is authoritative.
+
+The fix is not in this change — it is a behaviour change, and this change has
+none by construction. It is written up in `tasks.md` §4.1. Whoever takes it
+should decide the ownership question rather than just adding a store write: a
+probe on every settings write is the thing `setSetting` was explicitly designed
+to avoid.
 
 ### The git path is one `PATH` write at init, and restart-to-apply
 
@@ -247,6 +263,83 @@ Radicle home into the embedded one, and do not offer to import the user's
 existing secret key. Both sound helpful; both risk corrupting a real identity or
 duplicating a key across two nodes writing one storage. A user who wants their
 existing identity should choose `local`.
+
+### The spike was dropped from the lock, and its probe parked as `.txt`
+
+**Chosen:** after Phase 0 answered its questions, the `node-spike` feature and
+its two optional dependencies were **removed** rather than kept behind a feature
+flag, and the probe was kept as
+`docs/M3-phase0-probe_node_runtime.rs.txt`.
+
+**The constraint:** "the default build compiles none of it" was true of cargo
+and false of Nix. Cargo's vendoring is **feature-blind** — Nix vendors every
+lock entry regardless of features — so a dormant optional dependency still costs
+every build ~111 crates for code nothing links.
+
+**The `.txt` suffix is load-bearing, not a naming accident.** Cargo
+auto-discovers `examples/*.rs`, so the same file under `rust-ffi/examples/`
+would have to compile, which would put `radicle-node` back in `Cargo.lock` and
+undo the removal. This is exactly the shape of constant someone renames while
+tidying; the file's own header states it, and it is restated here because a
+header is not where anyone looks before a rename.
+
+**What it costs:** the probe cannot be run without restoring the feature and
+copying the file back, which its header documents step by step.
+
+### The socket is threaded into the write path, not read from the environment
+
+**Chosen:** `announce()` takes the resolved socket as a parameter.
+
+**The constraint:** it previously hardcoded `<home>/node/control.sock`, so
+against any node with a relocated socket the announce silently went nowhere —
+invisible by construction, because an unannounced write is legitimately not an
+error, so nothing surfaced.
+
+**Alternatives:** *honour `RAD_SOCKET` from the environment* was tried and
+rejected, and the reason is the sharp one: nothing propagates the module's
+`radSocket` **setting** into the environment, so the store and the writer would
+have disagreed by default on any machine with a runtime dir. A fix that works
+only when the value happens to come from the environment is a fix that fails
+exactly where the setting exists to help.
+
+**What it costs:** one more parameter threaded through the write path, which is
+the price of the store and the writer being unable to disagree.
+
+This one belongs in [`writes.md`](../../../docs/writes.md) as well, because it
+is a trap for the next person touching `cobwrite.rs`, and an archived design
+document is not where they will look.
+
+### `absentProfileReason` travels with the paths, not with the mode
+
+**Chosen:** `NodePaths` carries the sentence explaining why no profile is
+available.
+
+**The constraint:** the default sentence ends "run `rad auth`", which is right
+for a home the user manages and exactly wrong for the mode whose whole premise
+is that they never do.
+
+**Alternative:** *teach `LocalStore` about modes* — rejected because it would
+put mode vocabulary inside a class about paths, and make every future mode edit
+it. Carrying the sentence with the paths keeps the mode-specific decision where
+the mode is already known.
+
+### Unreachable branches are kept on purpose, with stated reasons
+
+**Chosen:** at least three branches are deliberately unreachable today and kept:
+`SourceState.current`'s fall-through to `remote`, `NodeIdentity`'s
+minimum-width elide mechanism after its only caller went away, and
+`modeUnavailableReason`'s sentence-building for a mode that cannot currently be
+unstartable.
+
+**Why record it as a pattern:** individually, each reads as dead code and
+invites deletion. The reason each was kept is that the cost is one condition
+and the failure it guards against is silent — a misattributed node identity, an
+unreadable control. Stating it once, here, is what makes the three legible as a
+policy rather than three oversights.
+
+**What it costs:** coverage tools and reviewers will keep finding them. That is
+the trade, and `modeUnavailableReason`'s future is an open question in
+`tasks.md` §4.7 rather than a settled one.
 
 ### Ordering: the dependency cost is its own commit
 

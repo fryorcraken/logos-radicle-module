@@ -126,13 +126,13 @@ change nobody has written yet.
 
 **`git` the binary is a runtime dependency, and it is load-bearing.** Radicle's
 local git transport does not implement pack protocol in-process — it spawns
-`git`. So any push into Radicle storage needs the binary. This is invisible on a
+`git`, so any push into Radicle storage needs the binary. This is invisible on a
 dev box and fatal in a sandboxed bundle, which makes it the single most likely
-cause of "works on my machine, mysteriously broken for a user". There are **six
-bare-name spawn sites** across `radicle` and `radicle-node`, so there is no one
-spawn path to wrap, and `GIT_EXEC_PATH` is not an option — it names git's helper
-directory rather than the binary, and the node's own sites `env_clear()` and
-re-admit only `PATH`.
+cause of "works on my machine, mysteriously broken for a user". ~~Why `PATH` is
+the only channel that reaches it~~ — acted on and shipped; the six spawn sites,
+why `GIT_EXEC_PATH` is not an option, and the process-global ordering constraint
+are in [`rust-ffi.md`](rust-ffi.md), which is where the next person to touch
+that code will look.
 
 **Whether `git` is available inside a shipped Basecamp bundle is still open.**
 Testable now, and worth testing early, since it constrains every write feature.
