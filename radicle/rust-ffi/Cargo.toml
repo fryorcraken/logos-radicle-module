@@ -12,6 +12,53 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 radicle = "0.25"
+# The node daemon, linked as a library and driven in-process — NOT spawned as a
+# binary. Phase 0 established that `Runtime::init`/`run` + `Handle::shutdown` is
+# a real start/stop lifecycle and that every process-global act (signal
+# installation, the logger, the panic hook, `exit()`) lives in radicle-node's
+# own `main.rs` rather than in the library. See docs/M3-phase0-findings.md §3.
+#
+# `default-features = false` is load-bearing, not tidiness: `systemd` is a
+# DEFAULT feature, and a node that talks to a service manager which is not
+# supervising it is the one configuration this build must never produce. With
+# it off, `radicle-systemd` is not in the dependency graph at all — which is the
+# check to run (`cargo tree -e normal -i radicle-systemd`) rather than trusting
+# this comment.
+#
+# It turns off the whole default set, not only systemd, and the rest is worth
+# naming rather than discovering. The set is
+# `[backtrace, i2p, systemd, structured-logger, socket2, tor]`, and of those:
+#
+#  - `tor` and `i2p` are the real narrowing — this node reaches peers over plain
+#    TCP alone and cannot dial an onion or i2p address. Acceptable for a first
+#    embedded node, which is outbound-only anyway, but a feature to re-add
+#    deliberately rather than a gap to be surprised by.
+#  - `backtrace` and `structured-logger` concern radicle-node's own binary
+#    diagnostics, which an embedder does not use — this crate installs no logger
+#    and no panic hook, by design.
+#  - `socket2` tunes socket options; its absence costs nothing observable here.
+#
+# It resolves the same `radicle 0.25.1` this crate already pins, so there is one
+# `radicle`, one `git2` and one `libgit2-sys` in the graph. Two copies would
+# mean two libgit2 statics and incompatible handle types across the FFI
+# boundary, which is why that is worth re-checking on any version bump.
+#
+# **This dependency is the whole cost of M3 Phase 2 step 3**, and it is not the
+# compile: `flake.nix` vendors every `Cargo.lock` entry regardless of features,
+# so adding this and `radicle-signals` grew the lock by ~111 packages (~35 of
+# them the `gix-*` family radicle-fetch uses for the wire protocol) and
+# invalidated the vendor hash. Bumping that hash is a required part of any
+# change here — `cargo build`/`clippy`/`test` are all blind to it.
+radicle-node = { version = "0.21.1", default-features = false }
+# Only for the `Signal` enum, which `Runtime::init` takes a `Receiver` of.
+# radicle-node does not re-export it, so it has to be named directly.
+#
+# **`radicle_signals::install()` must never be called from this crate.** That is
+# the `sigaction` call, and it is process-global: this staticlib is linked into
+# Basecamp, whose signal disposition is not ours to change. The library half of
+# radicle-node calls it nowhere — only its `main.rs` does — and the channel
+# being caller-supplied is exactly what makes an embedded node possible.
+radicle-signals = "0.12.1"
 serde_json = "1"
 # `radicle::git::raw` re-exports only part of git2 — `Delta` and `Sort`, which
 # the diff and commit-log reads need, are crate-private there. Depending on

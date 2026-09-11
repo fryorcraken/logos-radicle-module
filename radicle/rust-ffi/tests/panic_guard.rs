@@ -528,6 +528,112 @@ fn the_identity_entry_points_are_guarded_too() {
     }
 }
 
+/// The node entry points are guarded too.
+///
+/// These are the newest `extern "C"` functions in the crate, and this file only
+/// earns its claim to be an inventory of every one of them if it keeps up. The
+/// bug it exists for was an entry point that forgot `guarded`, and the most
+/// likely place for that to recur is whatever was added last.
+///
+/// **The guard's reach is narrower here than anywhere else in this file, and
+/// that is worth stating rather than leaving implied.** `guarded` catches a
+/// panic in the `radicle_node_*` frame; it has no reach into the reactor, worker
+/// pool or control listener that a *started* node spawns. So what this test
+/// covers is the boundary, not the node — which is the whole extent of what
+/// `guarded` was ever able to promise, and `node.rs`'s module docs say so.
+///
+/// Every input below must FAIL to start a node. That is deliberate for the same
+/// reason `the_identity_entry_points_are_guarded_too` never creates an identity:
+/// a successful start here would leave a real node running in the test binary,
+/// bound to a real socket, for every later test to trip over.
+#[test]
+fn the_node_entry_points_are_guarded_too() {
+    let missing_home = c("/nonexistent/definitely/not/a/radicle/home");
+    let relative = c("relative/not/absolute");
+    let traversal = c("../../../etc/passwd");
+    let socket = c("/nonexistent/definitely/not/a/socket/dir/x.sock");
+    // Past the 108-byte sun_path cap, which must be reported rather than
+    // reaching `bind` as an OS error naming neither the path nor the limit.
+    let long_socket = c(&format!("/tmp/{}.sock", "x".repeat(120)));
+    let pass = c("");
+
+    for (label, out) in [
+        (
+            "node_start(missing home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_start(
+                    missing_home.as_ptr(),
+                    socket.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "node_start(relative home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_start(
+                    relative.as_ptr(),
+                    socket.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "node_start(traversal-shaped home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_start(
+                    traversal.as_ptr(),
+                    socket.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "node_start(over-long socket)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_start(
+                    missing_home.as_ptr(),
+                    long_socket.as_ptr(),
+                    pass.as_ptr(),
+                )
+            }),
+        ),
+        (
+            // All NULL — the shape `read_str` maps to "", and the one a C caller
+            // produces most easily by mistake.
+            "node_start(all NULL)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_start(
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            }),
+        ),
+    ] {
+        assert_is_error_json(label, &out);
+    }
+
+    // `stop` and `status` answer with a documented shape rather than an error
+    // object when nothing is running — "no node" is an answer to the question,
+    // not a failure to answer it — so the property asserted is that shape.
+    let stopped = call(|| radicle_local_ffi::radicle_node_stop());
+    let v: serde_json::Value = serde_json::from_str(&stopped)
+        .unwrap_or_else(|e| panic!("node_stop: reply was not JSON: {e}\n{stopped}"));
+    assert!(
+        v["stopped"].is_boolean(),
+        "node_stop must answer the question asked: {stopped}"
+    );
+
+    let status = call(|| radicle_local_ffi::radicle_node_status());
+    let v: serde_json::Value = serde_json::from_str(&status)
+        .unwrap_or_else(|e| panic!("node_status: reply was not JSON: {e}\n{status}"));
+    assert!(
+        v["running"].is_boolean() && v["serving"].is_boolean(),
+        "node_status must always report both halves of the state: {status}"
+    );
+}
+
 /// `radicle_free_string(NULL)` is a documented no-op. Worth pinning because
 /// the C++ `take()` helper calls it on every reply, and a crash here would be
 /// a crash on the happy path.

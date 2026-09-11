@@ -17,10 +17,19 @@ Basecamp a view onto that network.
 - **Local — your own node.** If you already run Radicle on this machine, this
   reads `~/.radicle` directly: your private repositories included, and it
   works offline. Switch branches, including every peer's, not just your own.
-- **Embedded — a node Basecamp runs itself.** Offered, and marked in the
-  control as something this build cannot start yet: it is the next milestone,
-  not a working mode. Picking it explains what it will do rather than quietly
-  failing.
+- **Embedded — a node Basecamp runs itself, in its own home.** Basecamp keeps a
+  Radicle home of its own, separate from any `~/.radicle` you already have, and
+  can create an identity in it and run a node against it without `rad` and
+  without a terminal. **The screens for setting that up are not built yet**, so
+  in this build Embedded browses that home but does not yet offer you a way to
+  create the identity or start the node — the machinery is there and the wizard
+  is the next milestone.
+
+  Worth knowing before it arrives, because it is the thing most likely to
+  surprise: an embedded node is **a new identity**, not your existing one. Your
+  repositories are not in its storage and your allow-listed key is not its key —
+  it joins your network the way a new machine would, which is why it can never
+  touch the profile you already run.
 
 **And two things beyond plain browsing:**
 

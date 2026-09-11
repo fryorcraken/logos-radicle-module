@@ -137,10 +137,14 @@ std::vector<std::string> SettingsStore::startableModes()
     // prevent, arriving one layer up.
     //
     // "Startable" here means the mode resolves a home this module owns and can
-    // create an identity into — NOT that a node daemon runs. The daemon is step
-    // 3 (`radicle-node`, +111 crates and a vendor rehash) and nothing in this
-    // list claims otherwise; `localNodeRunning` is the field that answers that,
-    // and it is a live socket probe rather than a build fact.
+    // create an identity into — NOT that a node daemon is running in it. That
+    // distinction outlived the milestone that prompted it: the daemon has since
+    // shipped (`radicle-node` is linked and `startNode` runs one), and this list
+    // still says nothing about whether one is up. It cannot: this is a build
+    // fact that never changes at runtime, while whether a node is running flips
+    // whenever someone starts or stops it. `getCapabilities().localNodeRunning`
+    // and `getNodeStatus()` are the fields that answer that, and both are live
+    // probes.
     //
     // THIS list stays the single source of truth: `modeIsStartable` is derived
     // from it below rather than repeating the condition, so the boolean and the

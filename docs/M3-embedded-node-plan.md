@@ -411,15 +411,35 @@ Recorded so Phase 2 does not re-litigate them:
   fixed-height bar, where `z` cannot lift an item over another parent's later
   sibling, so it rendered as an unreadable sliver.
 
-**Still open, deliberately:** the module is not told which Basecamp profile it
-runs under, so the socket falls back to an unscoped `radicle.sock` and two
-profiles sharing a runtime dir would collide. `radSocket` is the escape hatch,
-and is why that setting exists rather than being derived — but Phase 2, which
-actually binds the socket, should revisit whether the profile name can be
-plumbed through.
+**Still open, and step 3 — which actually binds the socket — revisited it as
+Phase 1 asked.** The module is still not told which Basecamp profile it runs
+under, so the socket falls back to an unscoped `radicle.sock` and two profiles
+sharing a runtime dir would collide. `radSocket` remains the escape hatch, and
+is why that setting exists rather than being derived.
+
+What binding the socket changed is the *severity*, in both directions, and
+neither was obvious before there was a node:
+
+- **Worse than it looked.** Until step 3 the collision was two readers probing
+  one path — harmless, since neither owns it. Now one profile's node *binds*
+  it, so the second profile's node fails to start against a socket that is
+  simply in use, with an error about the socket rather than about profiles.
+- **Bounded more tightly than it looked.** The two nodes cannot corrupt each
+  other's storage, because `embeddedHomeFor()` derives the home from
+  `XDG_DATA_HOME` — which Basecamp sets per profile — so the homes were already
+  separate by construction. A socket collision is a failed start, not two
+  writers on one storage, and that is the failure this whole design is written
+  against.
+
+So it stays open rather than being fixed here: the fix is plumbing a profile
+name through Basecamp's module context, which is a change to the host rather
+than to this module, and the consequence is now a loud failure with an escape
+hatch instead of a silent one.
 
 **Phase 2 — embedded lifecycle.** Wizard, `Profile::init`, start/stop, the
-config panel's read-only half. **In progress; steps 1 and 2 below have landed.**
+config panel's read-only half. **In progress; steps 1, 2 and 3 below have
+landed. Step 4 — the wizard and config panel — is what remains, and it is
+QML-only.**
 
 The three are separable, and the order below is chosen by what it costs the
 *build* rather than by what reads best as a feature. The dividing line is
@@ -489,6 +509,124 @@ re-open them:
   `LocalStore` would have moved mode vocabulary into a class about paths and
   made every future mode edit it; carrying the sentence with the paths keeps the
   mode-specific decision where the mode is already known.
+
+**Step 3 paid the dependency cost the table predicted, exactly.** `Cargo.lock`
+grew by the ~111 packages Phase 0 measured (count it with
+`grep -c '^\[\[package\]\]' radicle/rust-ffi/Cargo.lock` rather than trusting a
+number here) — and the
+vendor hash in `radicle/flake.nix` went stale and had to be re-pinned. Both were
+predicted, and the sequence still bears repeating because `cargo build`, `cargo
+clippy` and `cargo test` were all green while the Nix build was broken: the gate
+that sees a lock change is `nix build '.#checks.x86_64-linux.unit-tests'`, and
+nothing else is.
+
+The three graph facts Phase 0 said to re-check on any version bump were
+re-checked and all hold — one `radicle 0.25.1`, one `git2`, one `libgit2-sys`,
+and `radicle-systemd` absent from the graph entirely. They are commands rather
+than claims, which is the point:
+
+```text
+cargo tree -e normal -i radicle-systemd   # must NOT match any package
+cargo tree -e normal -i radicle           # must print ONE radicle subtree
+cargo tree -e normal -i libgit2-sys       # must print ONE, under one git2
+```
+
+**Do not measure the size cost on the `.a`.** Phase 0 explains why and it caught
+this again here: the staticlib archive carries every object file whether or not
+anything references it, so it grows far more than the link does. The number that
+matters is the built artefact — `.scaffold/basecamp/lgx/01-radicle.lgx` after
+`lgs basecamp build --variant lgx`, compared against the same file built from
+`main`. Phase 0's linked measurement was +7.05 MB.
+
+Six things step 3 settled, three of which the plan had left open:
+
+- **The passphrase is needed at START, and this is now measured rather than
+  inferred.** The plan and the findings both reasoned "probably at start" from
+  `main.rs`'s flow and explicitly kept the question open. The type signature
+  settles it: `Runtime::init` takes a `SigningKey` — the *decrypted* private
+  half — so the key must be readable before the node exists and there is no
+  later point at which a passphrase could be supplied.
+  `an_encrypted_profile_cannot_start_without_its_passphrase_and_can_with_it`
+  drives both directions, which is what distinguishes "the passphrase is
+  required" from "the node never starts" and from "the passphrase is ignored".
+  The consequence for step 4: **an encrypted identity cannot start unattended**,
+  so the wizard's passphrase step is choosing between an unencrypted key and a
+  node the user unlocks on every launch. That is a real trade to state on
+  screen, and it is now a demonstrable one.
+- **`Profile::load()` is not usable here, and that is a safety property rather
+  than an inconvenience.** It calls `profile::home()`, which reads `RAD_HOME`
+  and then `$HOME/.radicle` — so a node started through it could be aimed at the
+  user's own profile by an environment this module never set. `node.rs` builds
+  `Home::load` + `Config::load` + the keystore read directly instead, mirroring
+  what `local::open_storage` already does and for the same reason. Embedded's
+  promise has to hold structurally, not because nothing happened to export a
+  variable.
+
+  **`Home::load`, not `Home::new`** — and this sentence named the wrong one
+  twice, in two documents, before review caught it. `Home::new` *creates* the
+  home and all four subdirectories when they are missing
+  (`profile.rs:586-602`), which is right for `init_profile`, whose job is to
+  make a home, and wrong for starting a node: against a typo'd path it would
+  silently leave an empty Radicle home on disk and then fail with "no signing
+  key", reporting the second problem after causing the first. Pinned by
+  `starting_against_a_home_with_no_identity_says_so`, which drives a bare
+  directory and a keystore-less home separately because the two take different
+  routes to their errors.
+- **The node's fingerprint check lives in `main.rs`, not the library**, so an
+  embedder that does not perform it silently drops a guard the real daemon has.
+  It is worth having here specifically because of what it catches: a signing key
+  swapped under an existing home, which is this module's standing
+  identity-confusion failure arriving from the one direction the mode's
+  structural guarantees do not cover — the home stays put and the *key* moves.
+  `a_home_that_changes_its_signing_key_is_refused` pins it, verified by mutation.
+- **"Running" and "serving" are two questions and both are reported.**
+  `getNodeStatus()` carries both because the panic boundary does not reach a
+  running node: `guarded()` catches a panic in the FFI frame, while the reactor,
+  worker pool and control listener are threads `radicle-node` spawns, and
+  `Runtime::run` ends with `.unwrap()` on two of them (`runtime.rs:300-301`). So
+  a node can be **half-dead with nothing reporting it** — a panicked reactor
+  while the whole `local*` read path answers normally, because reads never touch
+  the daemon. Bookkeeping alone would say `running` forever; only a live socket
+  probe notices. This narrows `docs/rust-ffi.md`'s "every panic in this crate is
+  caught at a known boundary" invariant, and that is written down in both places
+  rather than left for someone to discover.
+- **`stopNode` and `getNodeStatus` are deliberately NOT mode-gated, while
+  `startNode` is.** A node that is running must be stoppable whatever the
+  settings now say — otherwise switching mode is a way to strand a daemon with
+  no control that can reach it. Status is ungated for the same reason plus one
+  of its own: it is what a view polls, and one that refused outside Embedded
+  would leave a UI unable to explain a node it can see is still running.
+- **The two `startNode` refusals say different things on purpose.** `local` is
+  "that node is yours to run, and a second one on your storage is the hazard
+  this separation exists to prevent"; `explore` is "this mode has no node at
+  all". One generic "wrong mode" would be cheaper and would leave the user's
+  next action unclear in both cases.
+
+One thing step 3 deliberately did **not** do: touch any QML. The three slots are
+plumbed through `radicle_ui.rep` and forwarded in `radicle_ui_backend.cpp`, so
+step 4's wizard and config panel remain a QML-only change — the same discipline
+step 2 applied to the identity pair, and for the same reason.
+
+**One gap step 3 leaves open, named rather than papered over: nothing stops the
+node when the module goes away.** `stopNode()` is the only stop path, and it is
+a call a user makes. The module contract has no shutdown or unload hook, and a
+destructor on `RadicleImpl` is not obviously safe to add — this module is
+`"interface": "universal"`, so its dispatch table is derived by scanning the
+header's `public:` section, and a public member matching the class name is
+exactly the shape that once made the generator emit `lidlImpl().RadicleImpl()`
+(see `setDependenciesForTest`'s comment). A `~RadicleImpl()` may or may not trip
+the same scan; nobody has tried, and guessing in a commit that also links 111
+crates would be two unrelated risks in one diff.
+
+What that means in practice is bounded rather than alarming: the node's threads
+live in Basecamp's process, so when Basecamp exits they go with it. The
+unhandled case is a module *unloaded* while the host keeps running, where the
+node would keep serving with nothing able to stop it. Phase 0 flagged the
+neighbouring half of this — that a Basecamp module being unloaded has no way to
+join a thread, so "stopped" needs a definition that does not rely on joining,
+which is why `stop()` is bounded by a timeout and abandons rather than blocks.
+Step 4 should decide whether the destructor is safe, since it is the step that
+owns the lifecycle UI.
 
 Step 2 added the two module methods step 1 deliberately deferred —
 `getEmbeddedIdentity()` and `createEmbeddedIdentity(alias, passphrase)` — and
@@ -581,13 +719,20 @@ one-line answers are here so this list stays readable.
 - **`git` availability inside a shipped Basecamp bundle.** Still open.
   Testable now, and worth testing early since it constrains all write
   features — now with six spawn sites behind it rather than one.
-- Whether the node needs the passphrase at *start* or only at *sign* time —
-  determines whether the wizard can start a node without prompting. Phase 0
-  only exercised an *unencrypted* key, which starts with no prompt.
-  `main.rs:291-325` reads the secret key up front and fails if it cannot,
-  which suggests "at start" — but that is inference from the binary's flow,
-  not a measurement, so **the question about starting stays open** until step 3
-  links the runtime and tries it.
+- ~~Whether the node needs the passphrase at *start* or only at *sign* time.~~
+  **RESOLVED by step 3: at start, and it is now measured rather than inferred.**
+  `Runtime::init` takes a `SigningKey` — the decrypted private half — as a
+  parameter, so the key must be readable before the node exists and there is no
+  later point at which a passphrase could be supplied. The inference from
+  `main.rs:291-325` was right; the type signature is what makes it a fact.
+  `tests/node_lifecycle.rs` drives both directions (refused without, starts
+  with) plus a wrong passphrase, because any one of the three alone passes
+  against an implementation that is broken in a different way.
+
+  **So an encrypted embedded profile cannot start unattended**, and the wizard's
+  passphrase step is therefore a choice between an unencrypted key on disk and a
+  node the user unlocks on every launch. That is the trade to state on screen —
+  and, unlike when this list was written, one the module can demonstrate.
 
   What Phase 2 step 1 *did* settle is the neighbouring half, which was being
   assumed rather than measured: an encrypted profile really is unusable for
