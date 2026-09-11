@@ -511,7 +511,9 @@ re-open them:
   mode-specific decision where the mode is already known.
 
 **Step 3 paid the dependency cost the table predicted, exactly.** `Cargo.lock`
-went from 208 packages to **319** — the same +111 Phase 0 measured — and the
+grew by the ~111 packages Phase 0 measured (count it with
+`grep -c '^\[\[package\]\]' radicle/rust-ffi/Cargo.lock` rather than trusting a
+number here) — and the
 vendor hash in `radicle/flake.nix` went stale and had to be re-pinned. Both were
 predicted, and the sequence still bears repeating because `cargo build`, `cargo
 clippy` and `cargo test` were all green while the Nix build was broken: the gate
@@ -555,10 +557,21 @@ Six things step 3 settled, three of which the plan had left open:
   than an inconvenience.** It calls `profile::home()`, which reads `RAD_HOME`
   and then `$HOME/.radicle` — so a node started through it could be aimed at the
   user's own profile by an environment this module never set. `node.rs` builds
-  `Home::new` + `Config::load` + the keystore read directly instead, mirroring
+  `Home::load` + `Config::load` + the keystore read directly instead, mirroring
   what `local::open_storage` already does and for the same reason. Embedded's
   promise has to hold structurally, not because nothing happened to export a
   variable.
+
+  **`Home::load`, not `Home::new`** — and this sentence named the wrong one
+  twice, in two documents, before review caught it. `Home::new` *creates* the
+  home and all four subdirectories when they are missing
+  (`profile.rs:586-602`), which is right for `init_profile`, whose job is to
+  make a home, and wrong for starting a node: against a typo'd path it would
+  silently leave an empty Radicle home on disk and then fail with "no signing
+  key", reporting the second problem after causing the first. Pinned by
+  `starting_against_a_home_with_no_identity_says_so`, which drives a bare
+  directory and a keystore-less home separately because the two take different
+  routes to their errors.
 - **The node's fingerprint check lives in `main.rs`, not the library**, so an
   embedder that does not perform it silently drops a guard the real daemon has.
   It is worth having here specifically because of what it catches: a signing key

@@ -178,7 +178,25 @@ fn a_node_that_cannot_bind_reports_failure_and_registers_nothing() {
     // A start that fails must leave no node behind, or the module is
     // permanently unstartable after one bad socket: the next `start` would be
     // refused by a corpse and `status` would report a node that never existed.
-    // That cleanup is `start_inner`'s failure branch, and this is what covers it.
+    //
+    // **This covers `Runtime::init`'s own error return, NOT `start_inner`'s
+    // `!up` cleanup branch** — an earlier version of this comment claimed the
+    // latter, and review disproved it by putting a `panic!` in that branch and
+    // watching this test stay green. An unbindable path fails inside `init`,
+    // which returns before a `Node` is ever built, so there is nothing to clean
+    // up on this path.
+    //
+    // **No test in this file reaches that branch, and that is a property of the
+    // code rather than a gap to fill.** Getting there needs a node whose `init`
+    // SUCCEEDED — so the socket is bound and answering, since `init` binds it
+    // (`runtime.rs:249`) — and which then stops answering within
+    // `START_TIMEOUT`. No input to `start` produces that: every way to make a
+    // start fail from outside fails earlier, inside `init`. It is the half-dead
+    // shape, and it arrives from a panicking reactor rather than from anything a
+    // caller passes. Verified the same way: a `panic!` in the branch leaves the
+    // whole suite green, including
+    // `a_failed_start_leaves_no_node_registered_behind_it`, which was written
+    // for it and does not reach it either.
     //
     // **What this does NOT cover is the wait for the socket**, and that is worth
     // stating because it is what the test was originally written for and does
@@ -351,6 +369,253 @@ fn a_second_start_is_refused_while_one_is_running() {
         assert_eq!(status["serving"], serde_json::json!(true));
 
         stop_and_forget();
+    });
+}
+
+#[test]
+fn two_concurrent_starts_leave_exactly_one_node_and_never_overwrite_the_other() {
+    // **The test the sequential one cannot be.**
+    // `a_second_start_is_refused_while_one_is_running` starts, then starts
+    // again — so the second call always finds a fully registered node and takes
+    // the refusal branch. It is structurally blind to the window that matters:
+    // the "already running" check releases the lock before `Runtime::init`,
+    // which then spends real time opening SQLite and git storage, so two calls
+    // can BOTH pass that check while the slot is empty and both arrive at the
+    // registration together.
+    //
+    // Registering with a bare `*locked() = Some(node)` loses that race silently:
+    // assigning into the `Option` drops whatever was there, `Node` has no `Drop`,
+    // and the displaced node's reactor, worker pool and bound socket are
+    // detached with nothing able to stop them — two nodes on one git storage,
+    // which is the exact hazard the single-slot design exists to prevent. That
+    // was a real bug on this branch, found in review.
+    //
+    // Two threads, two different sockets against one home, so both can get past
+    // `bind` and actually contend for the slot — with one socket they would
+    // serialize on `AlreadyRunning` and the race would never be reached.
+    let _slot = NODE_SLOT.lock().unwrap_or_else(|e| e.into_inner());
+    stop_and_forget();
+
+    let (Some(sock_a), Some(sock_b)) = (short_socket("race-a"), short_socket("race-b")) else {
+        eprintln!("SKIPPED race: no directory short enough for a 108-byte socket path");
+        return;
+    };
+
+    let fx = init_profile("node-race");
+    let home = fx.home();
+
+    // **Repeated, because one round detects the bug only probabilistically.**
+    // Whether the two calls actually overlap at the registration is up to the
+    // scheduler: measured against the buggy assignment, a single round caught it
+    // roughly two times in three. A test that finds a real bug 67% of the time
+    // is a flaky gate in both directions — it would also go green on a branch
+    // that reintroduced the overwrite.
+    //
+    // Rounds are cheap (a start/stop pair is ~100 ms) and independent, so a
+    // handful takes the miss probability to negligible while keeping every
+    // round's assertion exact.
+    let (a, b) = (sock_a.display().to_string(), sock_b.display().to_string());
+    let (mut ra, mut rb) = (serde_json::Value::Null, serde_json::Value::Null);
+    let mut started_at_least_once = false;
+
+    for _ in 0..6 {
+        let (home_a, home_b) = (home.clone(), home.clone());
+        let (sa, sb) = (a.clone(), b.clone());
+        let ta = std::thread::spawn(move || node::start(&home_a, &sa, ""));
+        let tb = std::thread::spawn(move || node::start(&home_b, &sb, ""));
+
+        ra = parse(&ta.join().expect("thread a panicked"));
+        rb = parse(&tb.join().expect("thread b panicked"));
+
+        // Checked every round rather than only after the last, so the failure
+        // names the round that actually broke.
+        let (a_won, b_won) = (
+            ra["started"] == serde_json::json!(true),
+            rb["started"] == serde_json::json!(true),
+        );
+        started_at_least_once |= a_won || b_won;
+        assert!(
+            !(a_won && b_won),
+            "two concurrent starts must never both succeed — that is two nodes \
+             on one git storage; got a={ra} b={rb}"
+        );
+
+        // Leave the slot empty for the next round.
+        stop_and_forget();
+    }
+
+    // **The assertion above is "never both", deliberately not "exactly one".**
+    //
+    // Demanding exactly one was the first version and it is flaky, for a reason
+    // worth recording: the two calls share a home, so the loser can legitimately
+    // be refused by something other than the slot — SQLite contention on the
+    // node databases, or the fingerprint file — and which refusal arrives first
+    // is up to the scheduler. Asserting a particular loser message therefore
+    // tests the scheduler, not the code. "Never both" is the property that
+    // actually matters, and it is exact.
+    //
+    // At least one start must actually have succeeded, or the test proved
+    // nothing: a run in which every start failed satisfies "never both" while
+    // exercising none of the registration. This is the guard against the test
+    // passing for the wrong reason.
+    assert!(
+        started_at_least_once,
+        "no round produced a winner, so nothing about the registration was \
+         exercised; last round was a={ra} b={rb}"
+    );
+
+    // And after all of it, nothing is left bound on EITHER socket. This is the
+    // assertion that sees the leak directly: a node dropped rather than shut
+    // down keeps its socket, so the loser's path would still answer.
+    assert!(
+        !socket_is_live(&sock_a.display().to_string())
+            && !socket_is_live(&sock_b.display().to_string()),
+        "after stopping, neither racing socket may still be bound — a node that \
+         was dropped rather than shut down would still be listening"
+    );
+}
+
+/// Whether anything accepts a connection on `path`.
+///
+/// Mirrors what `node::status`'s `serving` does, deliberately: the point of the
+/// assertion above is that a leaked node is still reachable, which is exactly
+/// what a bare connect detects.
+fn socket_is_live(path: &str) -> bool {
+    std::os::unix::net::UnixStream::connect(path).is_ok()
+}
+
+#[test]
+fn running_and_serving_are_answered_independently() {
+    // **The distinction the whole `status` design rests on, and it was
+    // untested.** Review established by mutation that replacing EITHER field
+    // with a constant left the suite green: every other test observes them only
+    // when both are genuinely true, or when the slot is empty and an earlier
+    // branch returns. So thirty-five lines of doc comment justifying the bare
+    // `connect` probe, and `embedded_node.h`'s instruction that "a view must
+    // read `serving`, not just `running`", rested on nothing a test could see.
+    //
+    // The state that separates them is the half-dead shape the module is
+    // written around: the bookkeeping says a node is there while the socket
+    // says otherwise. It is reached here by removing the socket out from under
+    // a running node — the reactor and workers carry on, our `JoinHandle` is
+    // still unfinished, and nothing can reach it. That is exactly what a
+    // panicked control listener looks like from outside, and it is the only way
+    // to produce it without a seam in `node.rs` that exists only for the test.
+    with_socket("halfdead", |socket| {
+        let fx = init_profile("node-halfdead");
+
+        let started = parse(&node::start(&fx.home(), socket, ""));
+        assert_eq!(started["started"], serde_json::json!(true), "{started}");
+
+        // Both true is the ordinary state, asserted so the two assertions below
+        // are a CHANGE rather than a coincidence — without this the test would
+        // pass against a `serving` that was always false.
+        let healthy = parse(&node::status());
+        assert_eq!(healthy["running"], serde_json::json!(true));
+        assert_eq!(healthy["serving"], serde_json::json!(true));
+
+        // Take the socket away. The node keeps running; nothing can talk to it.
+        std::fs::remove_file(socket).expect("could not remove the control socket");
+
+        let half_dead = parse(&node::status());
+        assert_eq!(
+            half_dead["running"],
+            serde_json::json!(true),
+            "the thread has not finished, so bookkeeping must still say running: {half_dead}"
+        );
+        assert_eq!(
+            half_dead["serving"],
+            serde_json::json!(false),
+            "nothing is listening any more, so the live probe must say not serving: {half_dead}"
+        );
+
+        // And the disagreement is explained rather than left for the user to
+        // account for. This is the field that turns "everything looks fine and
+        // nothing reaches the network" into something actionable.
+        assert!(
+            !half_dead["reason"].as_str().unwrap_or_default().is_empty(),
+            "a running-but-not-serving node must say why: {half_dead}"
+        );
+
+        stop_and_forget();
+    });
+}
+
+#[test]
+fn a_started_node_reports_the_identity_that_is_actually_in_the_keystore() {
+    // `nodeId` was asserted only as `starts_with("did:key:")`, which a hardcoded
+    // constant satisfies — verified by mutation in review. The fixture uses a
+    // fixed seed on purpose (`Seed::new([7u8; 32])`, so failures reproduce), so
+    // the DID is deterministic and can be compared against the one the read path
+    // reports for the same home.
+    //
+    // Comparing the two rather than hardcoding a literal is what makes this
+    // input-dependent: it fails against a constant, and it also fails if the
+    // node were ever started as an identity other than the home's own — which is
+    // the identity confusion this whole milestone exists to prevent.
+    with_socket("whichid", |socket| {
+        let fx = init_profile("node-whichid");
+
+        let from_keystore = parse(&radicle_local_ffi::env::node_id(&fx.home()));
+        let expected = from_keystore["nodeId"]
+            .as_str()
+            .expect("the fixture profile must have a readable node id");
+
+        let started = parse(&node::start(&fx.home(), socket, ""));
+        assert_eq!(started["started"], serde_json::json!(true), "{started}");
+        assert_eq!(
+            started["nodeId"].as_str().unwrap_or_default(),
+            expected,
+            "a started node must report the identity its home actually holds"
+        );
+
+        stop_and_forget();
+    });
+}
+
+#[test]
+fn a_failed_start_leaves_no_node_registered_behind_it() {
+    // A start that fails against an ALREADY-BOUND socket — a stale socket file,
+    // or a second Basecamp — must register nothing, so the next start is not
+    // refused by a node that never existed.
+    //
+    // **This was written to cover `start_inner`'s `!up` cleanup branch and does
+    // not reach it**, which is worth recording rather than quietly leaving: a
+    // `panic!` in that branch leaves this test green. `Runtime::init` binds the
+    // socket last (`runtime.rs:249`), so an occupied path fails inside `init`
+    // just as a nonexistent directory does, before any `Node` exists. See the
+    // longer note in `a_node_that_cannot_bind_reports_failure_and_registers_
+    // nothing` for why that branch is unreachable from outside at all.
+    //
+    // It earns its place anyway, on the plainer property in its name: the
+    // occupied-socket path is the one a user actually hits, and it is a
+    // different code path from the missing-directory one even though both land
+    // in `init`.
+    with_socket("occupied", |socket| {
+        let fx = init_profile("node-occupied");
+
+        // Occupy the path ourselves and keep the listener alive for the call.
+        let _squatter =
+            std::os::unix::net::UnixListener::bind(socket).expect("could not bind the test socket");
+
+        let reply = parse(&node::start(&fx.home(), socket, ""));
+        assert!(
+            reply["started"].is_null(),
+            "a start against an occupied socket must not report success: {reply}"
+        );
+
+        // The assertion the mutation survived: the slot must be empty.
+        let status = parse(&node::status());
+        assert_eq!(
+            status["running"],
+            serde_json::json!(false),
+            "a failed start must register nothing: {status}"
+        );
+
+        // And a stop afterwards reports "nothing was running" rather than
+        // finding a corpse — the user-visible consequence of the same fact.
+        let stopped = parse(&node::stop());
+        assert_eq!(stopped["stopped"], serde_json::json!(false));
     });
 }
 

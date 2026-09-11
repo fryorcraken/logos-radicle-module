@@ -114,6 +114,16 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// takes.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long [`verify_fingerprint`] waits for a concurrently-written fingerprint
+/// file to finish being written before believing it disagrees.
+///
+/// Short because the write it waits on is a handful of bytes with no fsync — it
+/// settles within microseconds in practice — and because everything it covers
+/// happens inside one process. It exists at all because the alternative is a
+/// **false identity mismatch**, which is the most alarming error this module
+/// emits and the last one that should ever fire spuriously.
+const FINGERPRINT_SETTLE: Duration = Duration::from_millis(500);
+
 /// A running node, and the two independent ways to stop it.
 struct Node {
     /// The home it was started against, so [`status`] can report which node this
@@ -148,6 +158,16 @@ impl Node {
     /// and the caller has still lost its handle on it — this consumes `self`
     /// precisely so that a `Node` cannot be discarded without going through
     /// here.
+    ///
+    /// **`Node` deliberately has no `Drop` impl, and cannot easily be given
+    /// one.** Making the invariant structural that way is the obvious next move
+    /// and it does not compile: `Handle::shutdown` takes `self` by value
+    /// (`handle.rs:355`), so the `self.handle.shutdown()` below is a partial move
+    /// out of `self`, which Rust permits only for a type that is not `Drop`.
+    /// Anyone reaching for `impl Drop for Node` will hit that here, and the
+    /// answer is that the guarantee is maintained by review instead: every path
+    /// that gives up a `Node` calls this method, and the one line that once
+    /// assigned over the slot instead was a bug found in review.
     ///
     /// **That is the point of this being a method rather than inline code in
     /// [`stop`].** `Runtime::init` spawns the reactor and the whole worker pool
@@ -484,6 +504,30 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
     };
 
     let socket_path = PathBuf::from(socket);
+
+    // **`init` failing leaks whatever it had already built, and there is nothing
+    // this caller can do about it.** Worth naming here rather than leaving the
+    // bare `?` below to read as safe, because the comment block that follows
+    // starts "from here on the runtime must be shut down on every path" — which
+    // is true, and could be misread as saying `init`'s own failure is handled.
+    //
+    // `Runtime::init` builds in order: reactor (`runtime.rs:226`), worker pool
+    // (`:234`), then `bind` (`:249`) — the socket LAST. Nothing in radicle-node
+    // implements `Drop` for `Runtime`, `Reactor`, `Pool` or `ControlSocket` (the
+    // crate's only `impl Drop` is in its own test helper). So a failure at the
+    // bind step drops a running reactor and a full worker pool, detaching them,
+    // and `init` returns `Err` without handing back anything to stop them with.
+    //
+    // Reachable, and this suite exercises it:
+    // `a_node_that_cannot_bind_reports_failure_and_registers_nothing` passes a
+    // socket path in a directory that does not exist, and leaks a reactor and
+    // pool into the test binary every run. That test cannot see the leak — a
+    // leaked-but-unregistered runtime satisfies every assertion it makes — which
+    // is why this is recorded rather than tested.
+    //
+    // Fixing it needs an upstream change: `init` would have to clean up on its
+    // own error paths, or expose the partly-built runtime. Not something to
+    // paper over locally.
     let runtime = radicle_node::runtime::Runtime::init(
         radicle_home,
         config,
@@ -551,7 +595,62 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
         }
     }
 
-    *locked() = Some(node);
+    // Register, and refuse rather than overwrite if someone got here first.
+    //
+    // **A bare `*locked() = Some(node)` is a bug, and a subtle one.** Assigning
+    // into the `Option` DROPS whatever was there, and `Node` has no `Drop`
+    // impl — so the displaced node's reactor, worker pool and bound socket are
+    // detached with nothing left to stop them. That is precisely the leak
+    // `Node::shut_down` exists to make impossible, and its doc comment claims
+    // "every path that gives up a `Node` calls this": an assignment here would
+    // make that claim false.
+    //
+    // The window is real. The "already running" check above releases the lock
+    // before `Runtime::init`, which then spends a long time opening SQLite and
+    // git storage and spawning the pool. Two `startNode` calls can both pass the
+    // check while the slot is empty — nothing serializes them on the C++ side —
+    // and the second to arrive here would overwrite the first, leaving two nodes
+    // running against one git storage. That is the exact hazard the single-slot
+    // shape is supposed to prevent, reintroduced by the one line that does not
+    // go through it.
+    //
+    // So the slot is claimed under the same lock that inspects it, and a loser
+    // shuts its own runtime down rather than displacing the winner's.
+    {
+        let mut guard = locked();
+        match guard.as_ref() {
+            Some(other) if other.thread.as_ref().is_some_and(|t| !t.is_finished()) => {
+                let (other_home, other_socket) = (other.home.clone(), other.socket.clone());
+                drop(guard);
+                // Ours never became the process's node, so ours is the one that
+                // goes. Reported as the same "already running" refusal, because
+                // from the caller's side that is exactly what happened.
+                let cleanup = node.shut_down().err().unwrap_or_default();
+                return Err(format!(
+                    "a node is already running for {other_home} on {other_socket} \
+                     — stop it before starting another. This module runs at most \
+                     one node, because two nodes writing one git storage is the \
+                     failure the embedded mode exists to prevent.{}",
+                    if cleanup.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (stopping this attempt's node reported: {cleanup})")
+                    }
+                ));
+            }
+            _ => {
+                // Empty, or holding a node whose thread has finished. Replacing a
+                // finished one is safe — `run()` returned, so there is nothing
+                // left to stop — and taking it out here rather than dropping it
+                // in place keeps the "never drop a Node" rule literal.
+                let finished = guard.replace(node);
+                drop(guard);
+                if let Some(finished) = finished {
+                    let _ = finished.shut_down();
+                }
+            }
+        }
+    }
 
     // The lock is not held across the wait below. Holding it for up to
     // `START_TIMEOUT` would make `status` — the call a UI polls to render
@@ -596,8 +695,16 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
         // Cheap to check and it ends the wait early: if the thread is already
         // finished the socket is never going to answer, and waiting the full
         // timeout would turn a fast, clean failure into a 20-second hang.
+        //
+        // Matched on the socket, so this reads THIS call's node rather than
+        // whatever happens to be in the slot. The registration above makes a
+        // mismatch nearly unreachable, but "nearly" is the wrong guarantee for a
+        // check whose whole job is to decide that a start failed: breaking out
+        // on someone else's finished thread would report our own healthy node as
+        // never having started.
         if locked()
             .as_ref()
+            .filter(|n| n.socket == socket)
             .and_then(|n| n.thread.as_ref())
             .is_some_and(|t| t.is_finished())
         {
@@ -761,8 +868,68 @@ fn verify_fingerprint(home: &Home, signer: &radicle::crypto::SigningKey) -> Resu
             home.path().display()
         )),
         Some(_) => Ok(()),
-        None => Fingerprint::init(home, signer)
-            .map_err(|e| format!("could not record the node's key fingerprint: {e}")),
+        // No fingerprint recorded yet — first start against this home.
+        //
+        // **`init` can lose a race, and losing it is not a failure.**
+        // `Fingerprint::init` opens with `create_new(true)`
+        // (`fingerprint.rs:70-72`), so a concurrent start that got there first
+        // makes this return `AlreadyExists`. Treating that as an error refuses a
+        // perfectly good start over a file the other caller wrote with **the
+        // same key** — both read the same keystore, so both compute the same
+        // fingerprint, and the file that now exists is the one this call would
+        // have written.
+        //
+        // **The re-read must tolerate a half-written file, and getting that
+        // wrong is worse than the bug it fixes.** `init` creates the file and
+        // writes it in a second step (`fingerprint.rs:70-77`) — no
+        // temp-and-rename — so the loser can read after `create_new` succeeded
+        // for the winner and before the bytes land. A short read compares
+        // unequal and produced a **false identity mismatch**: the most alarming
+        // error this module emits, telling a user their storage belongs to
+        // someone else, fired by a benign race. Both failure modes were real,
+        // seen as a 3-in-5 and then a 3-in-8 flake in
+        // `two_concurrent_starts_leave_exactly_one_node_and_never_overwrite_the_other`.
+        //
+        // So a mismatch is believed only once the file has settled. Retried
+        // rather than slept for a fixed time, for the usual reason: a fixed
+        // sleep passes on a fast machine and flakes on a slow one.
+        None => match Fingerprint::init(home, signer) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                let deadline = Instant::now() + FINGERPRINT_SETTLE;
+                loop {
+                    match Fingerprint::read(home) {
+                        Ok(Some(fp)) if fp.verify(signer) == FingerprintVerification::Match => {
+                            return Ok(());
+                        }
+                        // Absent, unreadable or not yet matching: every one of
+                        // these is a possible mid-write state, so none is
+                        // conclusive until the deadline passes.
+                        _ if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        // Settled and still not a match: a different identity
+                        // really did get here first.
+                        Ok(Some(_)) => {
+                            return Err(format!(
+                                "the signing key does not match the one this \
+                                 Radicle home was started with before. Refusing \
+                                 to start: the storage at {} belongs to a \
+                                 different identity, and serving it as this one \
+                                 would publish refs nobody can verify.",
+                                home.path().display()
+                            ));
+                        }
+                        Ok(None) | Err(_) => {
+                            return Err(format!(
+                                "could not record the node's key fingerprint at {}",
+                                home.path().display()
+                            ));
+                        }
+                    }
+                }
+            }
+        },
     }
 }
 

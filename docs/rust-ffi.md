@@ -281,10 +281,18 @@ reason.
 **`Profile::load()` is not used, and that is structural.** It resolves the home
 through `profile::home()`, which reads `RAD_HOME` then `$HOME/.radicle` — so a
 node started through it could be aimed at the user's own profile by an
-environment this module never set. `node.rs` composes `Home::new` +
+environment this module never set. `node.rs` composes `Home::load` +
 `Config::load` + a keystore read instead, mirroring what `open_storage` already
 does above and for the same reason: exactly one place resolves paths, and it is
 on the C++ side.
+
+**`Home::load`, not `Home::new`** — the distinction matters enough that naming
+the wrong one here was itself a review finding. `Home::new` *creates* the home
+and all four subdirectories if they are missing (`profile.rs:586-602`), which is
+right for `init_profile`, whose job is to make a home, and wrong for starting a
+node: against a typo'd path it would silently leave an empty Radicle home on
+disk and then fail with "no signing key", reporting the second problem after
+causing the first.
 
 **An encrypted profile needs its passphrase at start.** `Runtime::init` takes a
 decrypted `SigningKey`, so there is no later point to supply one. Phase 0 left
