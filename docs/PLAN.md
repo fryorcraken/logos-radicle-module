@@ -40,7 +40,10 @@ One line each; the pointer is the detail.
   always**, backed by a module-owned settings store that survives a restart,
   plus a `git` preflight with a configurable path. Embedded resolves a home of
   its own and can create an identity without `rad auth`; it has no running
-  daemon yet, which is the next section.
+  daemon yet, which is the next section. **The behaviour is specified**, in the
+  `source-modes`, `module-settings`, `node-paths` and `embedded-identity`
+  capabilities; the decisions behind it are in that change's archived
+  `design.md`. Neither is repeated here.
 - **The end-to-end layer.** See [`e2e.md`](e2e.md).
 
 Which milestone phases have merged is a `git log` question, not a sentence to
@@ -142,21 +145,14 @@ step 3 can settle it. The neighbouring half *is* settled: an encrypted profile
 is unusable for writes without its passphrase, and an unencrypted one is
 immediately signable.
 
-**A fully isolated embedded node has its own NID/DID.** The user's repos are not
-there and their allow-listed DID is not this one, so for a user who already has
-`rad`, the embedded node is **a new machine joining their network**. That is the
-intended model, not a compromise — it buys isolation by construction. What it
-obliges is that the consequence is stated and never silent: the UI must always
-show which mode is active and which identity is in use. The failure this design
-is most exposed to is a user believing they operate as their existing DID while
-operating as a fresh one, and not understanding why their private repos are
-missing.
-
-A deliberate non-goal follows from it: **do not offer to copy or move an
-existing Radicle home into the embedded one, and do not offer to import the
-user's existing secret key.** Both sound helpful and both risk corrupting a real
-identity or duplicating a key across two nodes writing one storage. A user who
-wants their existing identity should choose `local`, which is what it is for.
+**A fully isolated embedded node has its own NID/DID**, and for a user who
+already runs `rad` it is a new machine joining their network. ~~Why that was
+accepted rather than designed around, and the two rejected non-goals that follow
+(no copying an existing home, no importing an existing key)~~ — decided and
+acted on; the reasoning is in the `m3-embedded-node-foundations` change's
+archived `design.md`, and the consequence the UI owes the user is specified in
+`source-modes` and `embedded-identity`. What remains ahead is only that the
+wizard must state it at the moment a user picks Embedded.
 
 **`listen: []` is the embedded default, and the UI must be honest about it.** A
 node with no listen address is outbound-only: it can fetch and announce, but
@@ -171,8 +167,9 @@ tested Linux.
 
 **One thing left open on purpose:** the module is not told which Basecamp
 profile it runs under, so the control socket falls back to an unscoped name, and
-two profiles sharing a runtime dir would collide. The `radSocket` setting is the
-escape hatch, and is why it exists rather than being derived — but step 3, which
+two profiles sharing a runtime dir would collide. `resolveSocket` supports
+per-profile naming and its unit tests pin it, but nothing reaches it in
+production. The `radSocket` setting is the escape hatch — but step 3, which
 actually binds the socket, should revisit whether the profile name can be
 plumbed through.
 
