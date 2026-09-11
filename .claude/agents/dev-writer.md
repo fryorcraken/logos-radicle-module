@@ -41,7 +41,10 @@ route by kind:
 - **A decision about technology or strategy** — a library, a data structure, an
   encoding, a type chosen to make a mistake unrepresentable — goes in
   `design.md` under Decisions: what you chose, what else you considered, and
-  what ruled the alternatives out.
+  what ruled the alternatives out. **Where the decision is a guard, record what
+  breaks without it** — "removing this turns exactly these tests red". You are
+  the only person who cheaply knows that, and it is what stops the guard being
+  deleted later by someone who cannot see what it was for.
 
 **Make the unspecified behaviour visible in the code**, not only in your report.
 Write a test for it, marked so it cannot be missed:

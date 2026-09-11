@@ -225,6 +225,18 @@ what the tests lead with.
 **What it costs:** an absence is invisible in review — nothing points at the
 branch that is not there, which is why it is recorded here.
 
+**What breaks without it:** two tests, and both are deliberately
+input-dependent. `the_embedded_home_is_never_the_users_own_radicle_home`
+(`radicle/tests/test_settings_store.cpp`) pins the resolution;
+`creating_an_embedded_identity_never_touches_the_users_own_home`
+(`radicle/tests/test_radicle_impl.cpp`) pins the act, by pointing `RAD_HOME` and
+`XDG_DATA_HOME` at *different* scratch homes and asserting the key is absent
+from one **and present in the other**. That second assertion is the load-bearing
+one: without it the test is satisfied just as well by a creation that failed
+entirely — the trap this repo has shipped before. If a future change makes
+`embeddedHomeFor()` consult the environment "just for an override", those are
+what should stop it.
+
 ### Identity creation refuses an occupied home, with no `force`
 
 **Chosen:** `createEmbeddedIdentity` refuses rather than overwrites, and there

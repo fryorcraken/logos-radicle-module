@@ -92,6 +92,11 @@ Judge each against this and say which part is missing:
   first and matters most: an entry with no alternatives reads as though there
   was no choice, and the next person re-litigates it from scratch.
 - **What it costs**, including what it forecloses
+- **The mutation evidence, where the decision is a guard** — "removing this
+  turns exactly these tests red". This is the most perishable thing in a
+  change: it usually exists only in a commit message, and it is what stops a
+  future reader deleting a guard whose purpose is no longer obvious. Report an
+  entry that describes a guard without it.
 
 ## Output
 
