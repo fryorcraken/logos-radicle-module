@@ -1,3 +1,15 @@
+> **Archived with §4 deliberately unticked.** Everything this change set out to
+> do is done: the four specs are written, reviewed and promoted into
+> `openspec/specs/`, and the decisions are recorded. §4 is not leftover work —
+> it is the *output* of the exercise, a list of defects and coverage gaps found
+> by specifying shipped code, each of which is a behaviour change and therefore
+> belongs to a later change. Ticking them here would have meant making
+> behaviour changes inside a change whose premise is that it has none.
+>
+> **§4.17 is the one to read first**: an ordering the spec requires and
+> justifies, which no test exercises and which the reviewer could not confirm
+> the code implements. It may be a live bug.
+
 ## 1. Capture the shipped behaviour as specs
 
 Each spec is written from the code and its tests, never from
