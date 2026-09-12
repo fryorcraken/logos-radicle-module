@@ -230,7 +230,7 @@ sees, and a resolution-time check alone would let a bad value persist.
 
 #### Scenario: A socket setting within the cap is accepted
 
-- **WHEN** `radSocket` is set to `/run/user/1000/radicle-alice.sock`
+- **WHEN** `radSocket` is set to `/run/user/1000/rad.sock`
 - **THEN** the reply MUST NOT be an error
 - **AND** a subsequent read of the settings MUST show that path
 
@@ -359,6 +359,15 @@ profile would expose their signing key and put two nodes on one git storage.
 - **THEN** the resolved home MUST be empty
 - **AND** it MUST NOT be the `RAD_HOME` path or `<user home>/.radicle`
 
+Note this scenario depends on a guarantee the `module-settings` capability
+owns: an unknown stored mode is sanitised to `explore` on read, and `explore`
+resolves no home. The `MUST NOT` above therefore holds by composition rather
+than by anything in this capability, and would be violated by a change to that
+fallback — outside this spec entirely. It is stated here because the resolved
+home is what a reader of this capability is asking about, but the cross-
+capability dependency is the point: whoever changes the sanitising fallback
+must re-check this scenario.
+
 ### Requirement: A store reports the paths it was given rather than re-reading the environment
 
 A store constructed from an already-resolved set of paths MUST report that
@@ -485,7 +494,14 @@ A node MUST be reported as running only when the resolved socket path is
 non-empty, is within the kernel's `sun_path` capacity, exists on disk, and
 accepts a connection. A socket file that exists but accepts no connection MUST
 NOT be reported as a running node, because the file can outlive the daemon. A
-store with no profile MUST report the node as not running without probing.
+store with no profile MUST report the node as not running.
+
+Two properties here are about a syscall **not** being made — that a store with
+no profile, and a path over the cap, are not probed at all. Neither is
+observable through this interface, so neither is stated as a requirement: what
+is required is the reported outcome, which a test can check. The
+never-probe behaviour is a matter for review, and for the code comment that
+explains why a truncated path must not reach `connect()`.
 
 #### Scenario: A missing socket means the node is not running
 
@@ -493,9 +509,8 @@ store with no profile MUST report the node as not running without probing.
   resolved socket path
 - **THEN** the node MUST be reported as not running
 
-#### Scenario: An over-long socket path is never probed
+#### Scenario: An over-long socket path reports the node as not running
 
 - **WHEN** the resolved socket path is at or beyond the kernel's `sun_path`
   capacity
-- **THEN** the node MUST be reported as not running rather than a truncated
-  path being probed
+- **THEN** the node MUST be reported as not running

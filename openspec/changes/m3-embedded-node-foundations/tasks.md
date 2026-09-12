@@ -164,6 +164,40 @@ a change whose premise is that it has none.
       and its comment says the file was inconsistent about this for a milestone
       and the inconsistency was the bug. The spec states both values
       independently and never says they must agree
+- [ ] 4.17 **Verify, then test, the problem-ordering in `resolvePaths`.** The
+      `node-paths` spec requires that an unresolvable home is reported as its
+      own problem *in preference to* a socket-length problem when both apply,
+      and justifies the ordering: a user with no `HOME` and a long socket must
+      be told the home is missing, not to shorten their socket. **No test calls
+      `resolvePaths` with an empty home at all**, so the ordering is
+      unverified — the reviewer could not confirm the code implements it
+      without reading the implementation, which its remit forbids. Read the
+      code first: if the order is wrong, that is a real bug this change found
+      and could not see. Then pin it
+- [ ] 4.18 Add the remaining `node-paths` tests, each a requirement with a
+      stated rationale and no assertion behind it:
+      - **A refused socket is still reported as the resolved socket.** The
+        tests assert only on `problem`, never reading `paths.socket`. A
+        plausible "don't hand back a path we rejected" refactor would satisfy
+        every existing assertion while making the surface show a message
+        naming a path whose field reads empty — the exact disagreement the
+        requirement forbids
+      - **`resolveSocket` with no source at all returns the empty string.**
+        Every existing call passes a non-empty home, so nothing catches a
+        return of `/node/control.sock` — a filesystem-root path, and precisely
+        the defect `resolveHome`'s equivalent test exists to prevent. The spec
+        states the rule in the same sentence shape for both resolvers and only
+        one half got a test
+      - **An empty profile name yields an unsuffixed socket.** Covered only
+        incidentally by a writer test whose stated purpose is socket
+        agreement, so a change to `radicle-.sock` would fail a test named for
+        something else and no test named for this behaviour
+      - **A stale socket file is not a running node.** The requirement flags
+        this as the interesting case — the file outlives the daemon — and a
+        `nodeRunning()` doing `stat()` instead of `connect()` passes the whole
+        suite today
+      - **`setSetting("radHome"/"radSocket", …)` repoints the reported paths
+        without a restart.** Same gap as 4.14, reached from the paths side
 - [ ] 4.12 Note `ModePicker` has no test file of its own — it is exercised
       only through `tst_settings.qml` and `tst_source.qml`. Not a gap in
       itself, but the annotation rule is now stated twice in `source-modes`, in
@@ -214,13 +248,30 @@ a change whose premise is that it has none.
         is the single most valuable result of the whole review, because a
         surviving mutation is the only kind of finding that cannot be argued
         with. Recorded as 4.13-4.16
-      - Both reviewers independently reported the same positive finding, which
-        is worth recording as loudly as the defects: **no same-answer-for-every-
-        input fixture exists in any of these files.** Fakes store what they are
-        given, per-store values differ (`alice.example` vs `bob.example`),
-        assertions run in both directions, and several tests exist *solely* to
-        stop a sibling passing vacuously. The trap that shipped a dead feature
-        through every gate is genuinely not present here
+      - **`node-paths`: three mutations, all caught**, including the 107/108
+        boundary in both directions (the 107 test stayed green under a
+        loosened check, so it is not passing by accident) and the
+        socket-does-not-follow-the-home invariant, whose removal turns five
+        tests red. Two spec defects fixed: two clauses asserting a syscall is
+        *not* made, which nothing at this layer can observe, and a scenario
+        citing a socket path the test does not use. A cross-capability
+        dependency was made explicit rather than left implied. Coverage gaps
+        recorded as 4.17-4.18
+      - **All three reviewers independently reported the same positive
+        finding**, which is worth recording as loudly as the defects: **no
+        same-answer-for-every-input fixture exists in any of these files.**
+        Fakes store what they are given, per-store values differ
+        (`alice.example` vs `bob.example`), each precedence branch asserts a
+        value distinct from what the branch below would give, and several
+        tests exist *solely* to stop a sibling passing vacuously. The trap
+        that shipped a dead feature through every gate is genuinely not
+        present here
+      - Two reviewers looked specifically for the aspiration-instead-of-
+        description defect found in `embedded-identity` and **neither found
+        another**. What they found instead is its milder cousin: requirements
+        that are true and carry a stated rationale, with nothing asserting
+        them. That is the characteristic residue of a retrospective capture,
+        and it is what §4 now lists
 - [x] 5.2 Run `design-reviewer` against `design.md`, the code and
       `docs/PLAN.md`; verify it reports on decisions taken in code but not
       recorded. Findings acted on in this change, since all were artifact
