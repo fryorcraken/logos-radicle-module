@@ -1,10 +1,21 @@
 # M3 — An embedded Radicle node, set up from inside Basecamp
 
-Status: **plan.** Which phases have landed is a `git log` question, not a
-sentence to maintain here — this line used to claim "Phases 1-3 are not
-started" while Phase 1 had shipped, which is the failure mode CLAUDE.md's
-"Keeping this file true" section is about. Each phase heading below carries its
-own state, and those headings are edited when the phase merges.
+> **Superseded as the forward-looking document by
+> [`docs/PLAN.md`](PLAN.md).** What is still to build, and the constraints that
+> bind it, moved there when this repo adopted the spec-driven flow; PLAN.md is
+> what the role agents read, and it is the only one of the two that is kept
+> current.
+>
+> **This file is kept as research, and is no longer edited as phases merge.**
+> Its value is that every technical claim names where it came from, so a claim
+> in PLAN.md can be re-verified here rather than re-derived. Where the two
+> disagree, PLAN.md is the live one — and the phase status lines below are
+> frozen at the day this was superseded. Ask `git log` instead.
+
+Status: **research, superseded.** Which phases have landed is a `git log`
+question, not a sentence to maintain here — this line used to claim "Phases 1-3
+are not started" while Phase 1 had shipped, which is the failure mode CLAUDE.md's
+"Keeping this file true" section is about.
 
 Every technical claim below was checked against the `radicle 0.25.1` source
 vendored in `~/.cargo/registry`, the crates.io API, and the local docs
@@ -359,6 +370,16 @@ extended `getCapabilities`, and the `git` preflight plus its configurable path.
 `local` mode works end to end. This alone is shippable and useful: it makes
 M2.1 honest about *which* node it is reading, and makes the chosen seed survive
 a restart.
+
+> **That last clause is false, and is corrected here rather than left for a
+> reader to trip over.** The settings *store* survives a restart; the seed
+> picker does not use it. `setRemoteSeed` probes and adopts but never persists,
+> `setSetting("remoteSeed", …)` persists but never probes, and the UI calls the
+> first. This sentence is the origin of a claim that was later copied into a
+> design document before review caught it — which is why it is annotated in
+> place, even though this file is otherwise frozen. See the
+> `module-settings` capability and task 4.1 of the
+> `2026-09-12-m3-embedded-node-foundations` change.
 
 Six things Phase 1 settled that this document had left open or got wrong.
 Recorded so Phase 2 does not re-litigate them:

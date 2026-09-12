@@ -59,6 +59,19 @@ would turn a guarantee you can check by reading one file into one you have to
 check per function. Same reason `LocalWriter` is not a few more methods on
 `LocalReader`.
 
+**The announce socket is a parameter, and must stay one.** `announce()` once
+hardcoded `<home>/node/control.sock`, so against any node with a relocated
+socket the announce went nowhere — and that failure is invisible by
+construction, because an unannounced write is legitimately *not* an error, so
+nothing surfaces. Reading `RAD_SOCKET` from the environment was tried as the fix
+and is **not** sufficient: nothing propagates the module's `radSocket` *setting*
+into the environment, so the store and the writer would disagree by default on
+any machine with a runtime dir — failing exactly where the setting exists to
+help. The resolved socket is threaded in from the caller so the two cannot come
+apart. Note the C++ side range-checks the path against the 108-byte `sun_path`
+cap and the Rust side does not, which is fine while one caller exists and is
+worth remembering when a second appears.
+
 ## `write.yaml` runs in CI against a profile seeded for the run
 
 The obstacle was never the spec but the profile: a write needs a **signable
