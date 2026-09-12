@@ -26,6 +26,16 @@ the author's. Confirm the tree is clean when you finish.
 messages, the task list and the tester's report are all *claims*. Verify each
 against the artifacts.
 
+**Every Bash call may cost the user an approval click.** Read CLAUDE.md's "How
+to work in this repo, and what Bash costs" before your first shell command. The
+rule that catches agents most often: **never chain.** `cd somewhere && cargo
+test` prompts even though `cargo test` is allow-listed, because the checker
+cannot analyse a compound command and so no rule applies. Run one plain command
+per call — `cd` alone in its own call is free, and the Bash tool's directory
+persists. Read files with `Read`, never `cat`/`head`/`grep`. No `|`, `&&`, `;`,
+`$(…)`, globs, loops or `VAR=value` prefixes. You run suites in a loop, so a
+habit that costs one click costs twenty.
+
 ## 1. Does every scenario have a test?
 
 Walk the spec scenario by scenario and find the test covering each. Report any

@@ -24,6 +24,27 @@ Several instances of this agent run in parallel and would otherwise see each
 other's broken code and report it as the author's. Confirm the tree is clean
 when you finish, and say so.
 
+## Every Bash call you make may cost the user an approval click
+
+Read CLAUDE.md's "How to work in this repo, and what Bash costs" before your
+first shell command. The rules that bite a reviewer hardest:
+
+- **Never chain.** `cd somewhere && cargo test` prompts *even though* `cargo
+  test` is allow-listed, because the checker cannot analyse a compound command
+  and so no rule applies. This is the single most common way an agent burns a
+  click. Run one plain command per call.
+- **`cd` is the usual culprit and is usually unnecessary.** Most tools take a
+  path or a `--manifest-path`; where one genuinely needs a working directory,
+  the Bash tool's directory persists between calls, so `cd` alone in its own
+  call costs nothing and the command that follows is plain.
+- **Read files with `Read`, not `cat`/`head`/`grep`.** Free, and it does not
+  truncate on you.
+- **No `|`, `&&`, `;`, `$(…)`, `<(…)`, globs, loops, or `VAR=value` prefixes.**
+  Each is unanalysable and each costs a click.
+
+This matters more for you than for most agents: you run test suites and
+mutations in a loop, so a habit that costs one click costs twenty.
+
 ## What this codebase is, and where the sharp edges are
 
 Two modules in one repo: `radicle/` (C++ core plus a Rust staticlib doing all

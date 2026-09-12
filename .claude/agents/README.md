@@ -85,6 +85,25 @@ PLAN.md, PLAN.md is the live one.
 | `design-reviewer` | code, `design.md`, PLAN.md | findings |
 | `code-reviewer` | code | findings |
 
+### Every agent pays CLAUDE.md's Bash costs
+
+This applies to all six roles, and the reviewers most of all, because they run
+suites and mutations in a loop. **Read CLAUDE.md's "How to work in this repo,
+and what Bash costs" before the first shell command.**
+
+The rule that catches agents most often is **never chain**: `cd somewhere &&
+cargo test` prompts *even though* `cargo test` is allow-listed, because the
+permission checker cannot statically analyse a compound command, so no rule
+applies to it. An allow rule cannot save a compound command. Run one plain
+command per call — `cd` alone in its own call is free, and the Bash tool's
+directory persists between calls.
+
+**When you write a prompt for one of these agents, do not phrase an
+instruction in a way that invites a chain.** "`cargo test` from
+`radicle/rust-ffi/`" reads as `cd radicle/rust-ffi && cargo test`; say which
+directory to run in as its own step, or give a `--manifest-path`. This is a
+real cost that has been paid here.
+
 **Two steps belong to whoever is running the change, not to any agent:**
 
 - **Acting on findings.** Every reviewer ends "findings only, do not fix". A

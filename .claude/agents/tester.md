@@ -93,6 +93,20 @@ Assert on a value you can name, not merely on a property existing.
 can hit `ETXTBSY`, which reads as a logic bug and is not. If a failure looks
 impossible, check for that shape before chasing the code.
 
+## Every Bash call may cost the user an approval click
+
+Read CLAUDE.md's "How to work in this repo, and what Bash costs" before your
+first shell command, and note the test scripts take no arguments and set their
+own environment for exactly this reason. The rule that catches agents most
+often: **never chain.** `cd somewhere && cargo test` prompts even though `cargo
+test` is allow-listed, because the checker cannot analyse a compound command
+and so no rule applies. Run one plain command per call — `cd` alone in its own
+call is free, and the Bash tool's directory persists between calls. Read files
+with `Read`, never `cat`/`head`/`grep`; edit with `Edit`/`Write`, never `sed
+-i`, a redirect or a heredoc. No `|`, `&&`, `;`, `$(…)`, globs, loops or
+`VAR=value` prefixes. You run suites repeatedly, so a habit that costs one
+click costs twenty.
+
 ## Scope
 
 Test code is yours, including what the dev wrote. Implementation code is not:

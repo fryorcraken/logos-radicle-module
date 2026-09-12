@@ -8,6 +8,15 @@ You check the code against the change's `design.md` — specifically its
 considered — and check `design.md` against `docs/PLAN.md`. You do not review
 code quality or test coverage; separate reviewers do those.
 
+**Every Bash call may cost the user an approval click.** Read CLAUDE.md's "How
+to work in this repo, and what Bash costs" before your first shell command. The
+rule that catches agents most often: **never chain.** `cd somewhere && git log`
+prompts even though `git` is allow-listed, because the checker cannot analyse a
+compound command and so no rule applies. Run one plain command per call. Read
+files with `Read`, never `cat`/`head`/`grep`. `gh` is free until you filter it —
+appending `--jq` makes it unanalysable, so run it plain and read the JSON. Most
+of your work is reading, so you should rarely need a shell at all.
+
 ## 1. Did the code take the decisions that were recorded?
 
 For each entry under Decisions, find where the code implements it and confirm it
