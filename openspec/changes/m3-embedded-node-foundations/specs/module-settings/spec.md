@@ -25,6 +25,14 @@ meaning of each is fixed:
 `getSettings` MUST return all five keys on every call, with defaults filled in
 for anything unset, and MUST NOT return any other key.
 
+The second half is **currently unpinned**, and this was demonstrated rather
+than suspected: injecting an extra key into the store's reply leaves the whole
+unit suite green, because the covering test makes five `contains()` assertions
+and never checks the count. A one-line count assertion closes it, and is
+recorded in `tasks.md` rather than made here, because this change adds no
+tests. Until then, a regression leaking an internal field into every reply
+would ship unnoticed.
+
 #### Scenario: Every key is present in a reply even when nothing was written
 
 - **WHEN** `getSettings` is called against a settings file that has never

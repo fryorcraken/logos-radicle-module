@@ -120,8 +120,18 @@ or a hand edit left MUST survive so that build reading it again loses nothing.
 
 `startableModes()` MUST report every mode this build can start, and a mode
 counts as startable when it resolves a home this module can work against —
-**not** when a node daemon is running in it. All three modes MUST therefore be
-reported as startable.
+**not** when a node daemon is running in it. On this build all three modes
+therefore resolve a workable home and are reported as startable.
+
+**That is a fact about what this build reports, not a licence for a view to
+assume it.** Every view-layer requirement below is a property of the control
+for *any* set the backend might report, including sets no current build
+produces — and the component tests deliberately construct builds where
+`embedded` is absent from the set, because a control that is correct only for
+the set that happens to ship is a control that breaks silently the moment a
+mode stops resolving. A view MUST NOT hard-code the membership of this set, and
+simplifying a startability check to a constant on the strength of the sentence
+above is precisely the error it must not invite.
 
 Whether a daemon answers is a separate question with a separate lifetime:
 `getCapabilities().localNodeRunning` answers it by probing the control socket
@@ -409,9 +419,18 @@ of the three strings, whatever is on disk), `modeStartable`, `startableModes`,
 `writeUnavailableReason`.
 
 `modeUnavailableReason` MUST be the empty string whenever `modeStartable` is
-true. Since every mode this build knows is startable and an unknown stored mode
-resolves to `explore`, there is no reachable state in which it is non-empty;
-the field MUST remain present and empty rather than being omitted.
+true, and MUST be present rather than omitted.
+
+On this build that condition holds for every mode, so the field is empty in
+every state a test can reach: every known mode is startable and an unknown
+stored mode resolves to `explore`. The requirement is written as the
+conditional rather than as "it is always empty" for two reasons — the view
+layer consumes it for sets the backend does not currently report (a control
+marking an unstartable mode needs the sentence to show), and a fourth mode, or
+a mode that stops resolving, makes the conditional live without any edit here.
+
+Whether the sentence-building code that fills it should stay at all is an open
+question recorded in `tasks.md`, not settled by this spec.
 
 `getCapabilities()` MUST NOT fail: a probe that cannot answer MUST be reported
 as a reason a capability is absent, not as an `{"error":"..."}` reply.
@@ -518,5 +537,15 @@ startable changes this behaviour with no view edited.
 
 - **GIVEN** the mode is `embedded`, the mode is startable, and the backend
   refuses the list request because no identity exists in the embedded home yet
-- **THEN** the failure MUST be surfaced
-- **AND** the "no repositories" wording MUST NOT be shown in its place
+- **THEN** no repositories MUST be listed
+- **AND** the pane MUST NOT be blank — it MUST carry rows, a message or an
+  error, so there is something for the user to act on
+- **AND** the "no repositories" wording MUST NOT be shown in its place, since
+  a home with no identity is not a node that exists and holds nothing
+
+Note the third clause is **not currently pinned by a test**: the covering test
+asserts only that the pane is not blank, which an error *alongside* the
+"no repositories" wording would satisfy. The sibling case for an unstartable
+mode does check the empty-state is hidden, and this case wants the same. That
+gap is recorded in `tasks.md` rather than closed here, because this change adds
+no tests.

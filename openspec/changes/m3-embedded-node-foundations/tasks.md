@@ -100,6 +100,74 @@ a change whose premise is that it has none.
 - [ ] 4.9 Write up `setSetting("mode", …)` failure being wholly unspecified
       and untested: nothing says what the segment shows when the write is
       refused, or when capabilities return a mode the user did not pick
+- [ ] 4.11 Add the three tests the `source-modes` review found missing, each
+      pinning a requirement that currently has none:
+      - **`modeStartable` and `localNodeRunning` asserted from one
+        `getCapabilities()` reply.** Their divergence is the requirement's
+        headline distinction and nothing pins it. Someone "simplifying"
+        `modeStartable` to `modeStartable && localNodeRunning` would be caught
+        today only by the luck of a fixture with no daemon, not by a test that
+        names the invariant
+      - **The settings file is not rewritten when an unknown mode is read.**
+        The scenario asserts the in-memory consequences only, so a future
+        "self-healing settings" change that sanitises and persists would stay
+        green while silently destroying a mode a newer build wrote, or a hand
+        edit. Read the file back after construction
+      - **The "no repositories" wording is absent on an unprovisioned embedded
+        home.** The covering test asserts only that the pane is not blank,
+        which an error rendered *alongside* the empty-state satisfies. The
+        sibling test for an unstartable mode checks the empty-state is hidden;
+        this case wants the same
+- [ ] 4.13 **Close the one mutation that survived.** `getSettings`/`setSetting`
+      MUST return exactly the five known keys, and the "no other key" half has
+      no test: `set_returns_the_whole_settings_object_not_just_the_changed_key`
+      makes five `contains()` assertions and never checks the count. Proved by
+      mutation — injecting an extra key into `SettingsStore::all()` left **all
+      161 unit tests green**. A regression leaking an internal field (a cached
+      path, a debug flag, a stale key from an older schema) into every reply
+      would ship unnoticed. The fix is one line,
+      `LOGOS_ASSERT_EQ(result.size(), size_t(5))`, and the spec had already
+      asked for exactly that assertion. Note this is a different path from
+      `unknown_keys_in_the_file_are_ignored_rather_than_surfaced`, which covers
+      a key read *from the file*; a key the store itself adds is unguarded
+- [ ] 4.14 Add the `module-settings` tests the review found missing:
+      - **The settings file is not rewritten when an unknown mode is read** —
+        no test anywhere reads the settings file back off disk after a load
+        (there is no `ifstream` on the settings path in the test tree). This is
+        the same gap as 4.11's second bullet, found independently from the
+        other side, which is worth noting: two reviewers converging on one
+        hole is a strong signal
+      - **`setSetting("radHome", …)` and `setSetting("radSocket", …)` take
+        effect on the running instance.** Nothing in the tree calls either;
+        only `mode` is exercised. The panel could show a stale home after a
+        write and nothing would go red
+      - **`setSetting("remoteSeed", …)` adopts the URL for subsequent
+        `remote*` calls.** Adoption at construction is tested, and
+        `setRemoteSeed()` is tested, but not this third entry point into the
+        same state — which is also where 4.1's persistence gap lives
+      - **The restart note says what it must.** `test_the_restart_note_is_present`
+        asserts only that the text is non-empty, which a placeholder or the
+        wrong sentence satisfies; the scenario is about the content
+      - **Four of five defaults are unasserted** — only `mode` and `gitPath`
+        are checked when nothing has been persisted
+- [ ] 4.15 Decide where three tested-but-unspecified contracts belong, all
+      found by the `module-settings` review: the settings panel's scrollability
+      (`canScroll`, five tests), its escapability (close button, Escape key,
+      not disturbing the navigation stack, five tests), and the identity
+      readout. Each is real, tested behaviour with no requirement anywhere.
+      Also cross-check that `startableModes()` returning exactly three is
+      owned by `source-modes` — it is pinned hard in `test_settings_store.cpp`
+      and `module-settings` never mentions it
+- [ ] 4.16 State in `module-settings` why the first-run default and the
+      unknown-mode fallback must be the *same* value.
+      `the_default_and_the_unknown_mode_fallback_agree` pins it deliberately,
+      and its comment says the file was inconsistent about this for a milestone
+      and the inconsistency was the bug. The spec states both values
+      independently and never says they must agree
+- [ ] 4.12 Note `ModePicker` has no test file of its own — it is exercised
+      only through `tst_settings.qml` and `tst_source.qml`. Not a gap in
+      itself, but the annotation rule is now stated twice in `source-modes`, in
+      different words for two controls, which is worth consolidating
 - [ ] 4.10 Consider making **mutation evidence a standing field in Decisions
       entries** — "removing this guard turns exactly these tests red". The
       commit messages carry it for nearly every decision and `design.md`
@@ -131,12 +199,28 @@ a change whose premise is that it has none.
         test survives the echo because it asserts through `can_write` against
         the key on disk rather than against the reported flag. Tree restored
         and verified clean
-- [ ] 5.1b Re-run `spec-test-reviewer` on the remaining three capabilities.
-      Only `embedded-identity` was reached before the stall, so
-      `module-settings`, `source-modes` and `node-paths` have had no
-      spec-versus-test pass. Split it one capability per agent — the single
-      agent stalled on a whole-change scope, and mutation runs are slow enough
-      that four narrow passes will finish where one broad one did not
+- [x] 5.1b Re-run `spec-test-reviewer` on the remaining three capabilities,
+      one agent per capability. **The narrow scope worked** — the whole-change
+      agent stalled, all three narrow ones finished and removed their own
+      worktrees.
+      - **`source-modes`: four mutations, all caught.** Three spec defects
+        fixed in place: a requirement stating flatly that all three modes are
+        startable (which would licence a view hard-coding it, contradicting
+        the component tests); a scenario claiming the "no repositories" wording
+        is suppressed when its test only checks the pane is not blank; and a
+        negative existential no test could check. Three coverage gaps recorded
+        as 4.11/4.12
+      - **`module-settings`: one mutation, and it SURVIVED** — see 4.13. That
+        is the single most valuable result of the whole review, because a
+        surviving mutation is the only kind of finding that cannot be argued
+        with. Recorded as 4.13-4.16
+      - Both reviewers independently reported the same positive finding, which
+        is worth recording as loudly as the defects: **no same-answer-for-every-
+        input fixture exists in any of these files.** Fakes store what they are
+        given, per-store values differ (`alice.example` vs `bob.example`),
+        assertions run in both directions, and several tests exist *solely* to
+        stop a sibling passing vacuously. The trap that shipped a dead feature
+        through every gate is genuinely not present here
 - [x] 5.2 Run `design-reviewer` against `design.md`, the code and
       `docs/PLAN.md`; verify it reports on decisions taken in code but not
       recorded. Findings acted on in this change, since all were artifact
