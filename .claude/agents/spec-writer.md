@@ -35,10 +35,19 @@ This file carries only the split between documents:
 implements should stop reading as forthcoming:
 
 - **Behaviour** the spec now states — strike it through, point at the spec, and
-  leave at most a one-line summary that it exists.
+  leave at most a one-line summary that it exists. **This half is yours**, and
+  you can do it now, because the spec you just wrote is what it points at.
 - **Reasoning** the change acted on — rejected alternatives, spike results, the
-  why — moves to `design.md`'s Decisions section and stays there. Do not leave a
-  second copy in PLAN.md. The archive is in git and greppable.
+  why — moves to `design.md`'s Decisions section. **This half is NOT yours.**
+  You run before `design.md` exists and you are forbidden from writing it, so
+  moving reasoning now would delete it from the only file that holds it and
+  land it nowhere. **Leave it in place and list it in your handover** as
+  "reasoning for `dev-writer` to migrate", naming each passage. `dev-writer`
+  moves it when it writes the Decisions entry that receives it, and
+  `design-reviewer` checks the migration happened.
+
+  This is the flow's most fragile handoff: the failure is silent, and what is
+  lost is the reasoning the whole flow exists to preserve.
 
 Strike through and point rather than deleting, so a question's history stays
 legible. PLAN.md should shrink toward what is still ahead. This is the same

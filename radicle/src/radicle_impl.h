@@ -287,8 +287,12 @@ public:
      * **An empty `passphrase` means an unencrypted key on disk**, matching
      * `ssh-keygen` and the `radicle` crate's own `env::passphrase()`. That is a
      * real trade to state, not hide: an unencrypted key signs with no prompt, at
-     * the cost of a secret sitting in plaintext. The reply reports `encrypted`
-     * so a caller states the OUTCOME rather than assuming it followed the input.
+     * the cost of a secret sitting in plaintext. The reply reports `encrypted`,
+     * **computed from the passphrase argument rather than observed from the key
+     * written** — so it says what was asked for, not what landed on disk. A
+     * caller that must know the key is really sealed has to check signability;
+     * see the `embedded-identity` spec, which names the regression this field
+     * would not catch.
      * Reads never need the passphrase — only `keys/radicle.pub` is read — but
      * writes do, which is why `getCapabilities().canWriteLocal` is false for an
      * encrypted key with no agent holding it.

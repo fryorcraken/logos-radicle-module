@@ -130,8 +130,19 @@ the same file from scanning for a function doing two jobs, and a single pass
 becomes whichever the reviewer started with. A small change can take one
 instance covering all four.
 
-So a full review is typically six agents: four `code-reviewer`, plus
-`spec-test-reviewer` and `design-reviewer`.
+So a full review is one `code-reviewer` per dimension — four of them — plus
+`spec-test-reviewer` and `design-reviewer`. The count follows from the roles
+rather than being a fact to maintain: one per dimension, plus one of each other
+reviewer. `ls .claude/agents/` is the authority on which roles exist.
+
+**A change with no source diff still gets reviewed.** That is not an exemption,
+and treating it as one is how this flow's own adopting change nearly shipped
+with the `code-reviewer` step skipped entirely. Agent instruction files, the
+`openspec/config.yaml` context block injected into every future artifact
+prompt, and the prose in `CLAUDE.md` and `docs/` are all reviewable material —
+and reviewing them found a false claim in a header, an agent file whose
+frontmatter defeated its own thesis, and a handoff that could silently lose the
+reasoning this flow exists to preserve.
 
 `spec-test-reviewer` is deliberately blind to the implementation. Someone who
 has read the code judges tests by what the code does, which is exactly the
@@ -147,16 +158,12 @@ they must be removed when the branch lands.
 
 Each of these is in the agent files because it cost something here.
 
-**A fake that returns the same thing for every input cannot tell "reloaded" from
-"never reloaded".** The branch-switch feature shipped dead — picking a branch
-refetched the branch the tabs were already on — with every gate green, because
-the test asserted `treeCount === 0` against a fake returning an empty tree for
-*every* branch. That assertion is true whether the reset ran, the refetch ran,
-both, or neither; deleting the entire handler body left all tests passing. The
-fix was a fake returning a **different number of entries per branch**, so the
-count itself says which branch was fetched. This is the single most expensive
-lesson in this repo, and it generalises: **make fakes input-dependent, or the
-assertion is decoration.**
+**Make fakes input-dependent, or the assertion is decoration.** A fake that
+returns the same thing for every input cannot tell "reloaded" from "never
+reloaded", and a feature has shipped completely dead here past every gate for
+exactly that reason. CLAUDE.md's "A binding does not update inside the handler
+that changed its source" tells the whole story and owns it; read it there
+rather than from a second copy that can drift from the first.
 
 **The same trap wears other clothes.** A composer that appends a posted comment
 locally renders correctly whether or not the write landed — which is why a

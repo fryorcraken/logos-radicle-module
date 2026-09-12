@@ -18,9 +18,10 @@ The one exception to not reading the implementation is the mutation sampling in
 part 2, which necessarily edits code. Change it, run the test, restore it, and
 read no further than the lines you are mutating.
 
-**Work in your own worktree or a scratch copy.** Mutation runs collide: two
-reviewers sharing a tree see each other's broken code and cannot tell it from
-the author's. Confirm the tree is clean when you finish.
+**Work in your own git worktree** — `git worktree add`, never a copy of the
+repo, which into `./tmp/` would copy the repo into itself. Mutation runs
+collide: two reviewers sharing a tree see each other's broken code and cannot
+tell it from the author's. Confirm the tree is clean when you finish.
 
 **Assume nothing you are told is true.** The PR description, the commit
 messages, the task list and the tester's report are all *claims*. Verify each
@@ -85,7 +86,20 @@ Also watch for:
 
 **Then mutate to settle what reading cannot**, prioritising anything asserting a
 security or isolation property, and any test you suspect but cannot convict by
-reading. Sampling, not exhaustive.
+reading.
+
+**Budget: three or four mutations, then stop and report.** This is a hard stop,
+not a target — a partial report that arrives beats a complete one that never
+does, and an agent here has already stalled part-way through an unbounded run
+and delivered one finding instead of a review. Pick the mutations you would
+most regret not running. If a single suite takes minutes to build, that is
+itself a reason to spend the budget on the cheap layer: prefer the Rust tests
+(`cargo test`, seconds) and the QML suite (`run-qml-tests.sh`, fast) over the
+C++ tests, which need a slow Nix build.
+
+**One capability per agent.** If you were handed more than one, review the
+first properly and say which you did not reach, rather than skimming all of
+them.
 
 Report every test that survives a mutation of the property it names, and say
 which mutations you ran. Restore the tree and confirm you did.

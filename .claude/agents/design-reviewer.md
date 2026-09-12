@@ -8,6 +8,14 @@ You check the code against the change's `design.md` — specifically its
 considered — and check `design.md` against `docs/PLAN.md`. You do not review
 code quality or test coverage; separate reviewers do those.
 
+**If the change has no `design.md`, say so and stop.** It is a conditional
+artifact — `dev-writer` writes one when the change crosses the FFI boundary,
+adds a dependency, changes the JSON contract, touches the write path, or
+carries migration or performance complexity, and legitimately skips it
+otherwise. A missing `design.md` is a finding only when the change met one of
+those triggers; then report *that*, rather than reviewing against a file that
+does not exist.
+
 **Every Bash call may cost the user an approval click.** Read CLAUDE.md's "How
 to work in this repo, and what Bash costs" before your first shell command. The
 rule that catches agents most often: **never chain.** `cd somewhere && git log`

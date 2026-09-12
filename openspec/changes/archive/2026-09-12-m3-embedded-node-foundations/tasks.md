@@ -130,6 +130,36 @@ a change whose premise is that it has none.
         which an error rendered *alongside* the empty-state satisfies. The
         sibling test for an unstartable mode checks the empty-state is hidden;
         this case wants the same
+- [ ] 4.19 **A short read of entropy is unpinned, and this is the most serious
+      gap found.** `os_seed()` uses `read_exact` and the spec requires a short
+      read be a failure rather than padded — because a partially-random seed
+      becomes a permanent signing key. **Proved by mutation: replacing
+      `read_exact` with a lenient `read` that discards the count leaves all 14
+      tests passing.** A 16-byte short read would leave half the seed zeroed,
+      producing a weak, partly-predictable key, and the module would report
+      success with a well-formed DID — the isolation test still passes, because
+      two short reads still differ in their random prefix. Not testable as the
+      code stands: `/dev/urandom` cannot be made to short-read portably. Either
+      have `os_seed` take its source as a parameter so a fixture can supply a
+      short reader, or mark the requirement as structural-review-only in the
+      spec. The second is a retreat; prefer the first
+- [ ] 4.20 **`canWriteLocal` is never asserted true.** Every assertion on it in
+      `test_radicle_impl.cpp` is `ASSERT_FALSE`. Nothing pins that an
+      empty-passphrase embedded identity yields `canWriteLocal: true`, nor the
+      other half — false with a non-empty `writeUnavailableReason` — after a
+      passphrase creation. The Rust layer covers `can_write(&home)` directly,
+      but not its composition up through mode resolution into the capabilities
+      reply. A `getCapabilities()` that hardcoded `canWriteLocal: false` in
+      Embedded would leave every write affordance greyed out after a successful
+      unencrypted creation, and the suite would stay green — CLAUDE.md's
+      documented "compose box that cannot be submitted", arriving by the one
+      route nothing checks
+- [ ] 4.21 **The identity is never read back through a locked key.** No test
+      creates an identity with a passphrase and then calls
+      `getEmbeddedIdentity()`. If that method were changed to open the full
+      profile rather than reading only `keys/radicle.pub`, a locked home would
+      report `exists: false` and invite the user to create an identity they
+      already have — straight into the refusal
 - [ ] 4.13 **Close the one mutation that survived.** `getSettings`/`setSetting`
       MUST return exactly the five known keys, and the "no other key" half has
       no test: `set_returns_the_whole_settings_object_not_just_the_changed_key`

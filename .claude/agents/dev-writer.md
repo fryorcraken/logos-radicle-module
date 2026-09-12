@@ -46,6 +46,16 @@ route by kind:
   the only person who cheaply knows that, and it is what stops the guard being
   deleted later by someone who cannot see what it was for.
 
+**You own the PLAN.md reasoning migration.** `spec-writer` runs before
+`design.md` exists, so it strikes through the *behaviour* PLAN.md described and
+hands you a list of the *reasoning* passages this change acted on — rejected
+alternatives, spike results, a "why X and not Y". As you write each Decisions
+entry, move the passage that belongs to it out of PLAN.md and into that entry.
+Do not leave a second copy: two copies drift and the wrong one gets read.
+PLAN.md keeps what is still ahead. `design-reviewer` checks you did this, and a
+passage that was struck from PLAN.md but never landed in `design.md` is the
+silent failure to avoid — the reasoning is then only in a commit message.
+
 **Make the unspecified behaviour visible in the code**, not only in your report.
 Write a test for it, marked so it cannot be missed:
 

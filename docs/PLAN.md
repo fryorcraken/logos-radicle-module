@@ -75,23 +75,28 @@ the config panel exists to remove:
 ### Still ahead
 
 **Node start/stop (Phase 2 step 3).** The one step that needs the
-`radicle-node` crate, and therefore the whole of the dependency cost: roughly
-+111 crates in `Cargo.lock`, a new `flake.nix` vendor hash, and about +7 MB of
-link. It is its own commit for that reason — folding it into a step that also
-creates identities would put a large dependency review and a keygen review in
-one diff where neither can be read for itself.
+`radicle-node` crate, and therefore the whole of the dependency cost: a large
+number of added `Cargo.lock` entries, a new `flake.nix` vendor hash, and a
+materially bigger link. It is its own commit for that reason — folding it into
+a step that also creates identities would put a large dependency review and a
+keygen review in one diff where neither can be read for itself. Phase 0
+measured the exact figures on its spike branch; see
+[`M3-phase0-findings.md`](M3-phase0-findings.md) §4 rather than a number
+repeated here, since the next person to add the dependency will measure it
+again anyway.
 
 The library is drivable in-process: `Runtime::init` / `Runtime::run` /
 `Handle::shutdown` is a real lifecycle, the caller supplies the signal channel,
 and every process-global act (signal installation, logger, panic hook, `exit()`)
-lives in the binary's `main.rs` rather than the library. Measured at 97 ms
-start-to-stop.
+lives in the binary's `main.rs` rather than the library — which the spike
+confirmed by running a node start-to-stop, not only by reading.
 
-**The wizard and the configuration panel (Phase 2 step 4).** QML only — the two
-module methods it needs (`getEmbeddedIdentity`, `createEmbeddedIdentity`) are
-already plumbed through `radicle_ui.rep`.
+**The wizard and the configuration panel (Phase 2 step 4).** QML only, provided
+`getEmbeddedIdentity` and `createEmbeddedIdentity` are still exposed through
+`radicle_ui.rep` — check that file rather than trusting this sentence, because
+"QML only" is true exactly as long as they are.
 
-Six wizard steps, each failing loudly rather than proceeding on a guess:
+The wizard's steps, each failing loudly rather than proceeding on a guess:
 preflight (is `git` there, is there an existing home, is a node already running
 on its socket, can we write our own home — reported *before* offering a choice);
 mode, with the identity consequence stated in one sentence each; identity

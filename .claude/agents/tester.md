@@ -35,6 +35,16 @@ Hold them to the invariant below more firmly than your own, not less: they were
 written by whoever wrote the code, so they are the most likely to pin what was
 built rather than what was asked for.
 
+**The tiebreaker, when you cannot decide whether to keep one:** ask what the
+test would catch that yours would not. A dev test usually encodes an edge case
+found while implementing — keep it, even where it duplicates yours, because
+rediscovering that edge case costs more than the duplicate. Two tests you MUST
+NOT remove: one the dev reports as a **regression test watched failing before
+its fix** (deleting it discards the only proof the bug was real), and one
+carrying a `NO SPEC:` marker (that is a live question for the spec-writer, not
+yours to close by deletion). Otherwise, remove a dev test only when it cannot
+fail for the reason it names — and say which invariant it broke.
+
 Read the dev's handover: which of their tests they were least confident in, and
 every `NO SPEC:` marker they left. Keep the markers and report each one — that
 is behaviour chosen because the spec was silent, and the spec-writer decides

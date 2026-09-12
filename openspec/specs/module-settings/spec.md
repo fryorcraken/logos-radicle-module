@@ -176,7 +176,11 @@ The per-key rules are:
 - `remoteSeed` MUST, when non-empty, begin with `http://` or `https://`.
   Validation of `remoteSeed` is shape-only: whether the seed answers is not
   checked here and MUST NOT put a network round trip on a settings write.
-- `radHome` has no value validation.
+- `radHome` has no value validation. **This is a known gap, not the intended
+  contract**: every other non-mode key is validated on write, and an
+  unusable home is accepted here only to surface later as
+  `localAvailable: false` — the deferred-failure shape this capability rejects
+  for `gitPath`. Do not read this line as licence to leave it unvalidated.
 
 #### Scenario: A mode the module does not know is refused and lists the valid ones
 
