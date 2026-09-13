@@ -290,9 +290,12 @@ public:
      * the cost of a secret sitting in plaintext. The reply reports `encrypted`,
      * **computed from the passphrase argument rather than observed from the key
      * written** — so it says what was asked for, not what landed on disk. A
-     * caller that must know the key is really sealed has to check signability;
-     * see the `embedded-identity` spec, which names the regression this field
-     * would not catch.
+     * caller that must know the key is really sealed reads
+     * `getCapabilities().canWriteLocal`, which probes the key rather than
+     * echoing an argument: false with a reason means the key would not load,
+     * which is what "encrypted" has to mean to be worth anything. The
+     * `embedded-identity` spec names the regression this field would not
+     * catch.
      * Reads never need the passphrase — only `keys/radicle.pub` is read — but
      * writes do, which is why `getCapabilities().canWriteLocal` is false for an
      * encrypted key with no agent holding it.

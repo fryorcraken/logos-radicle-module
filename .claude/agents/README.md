@@ -41,6 +41,22 @@ So the change's `proposal.md`, `design.md` and `tasks.md` are moved, not
 deleted: they stay in version control and stay greppable. Finding a past
 decision means grepping the archive, which is what it is for.
 
+**`openspec/specs/` is the live contract; an archived `specs/` delta is a
+historical record of what one change added.** After an archive the two hold
+near-identical text, and they will diverge the first time a later change amends
+a requirement — the live copy moves and the archived delta does not, correctly,
+because it records what *that* change did. So: **never read an archived
+`specs/` file as the current contract, and never edit one to match.** If they
+disagree, the live spec wins and the archive is right to differ.
+
+This is the one duplication in the flow that is deliberate rather than a
+failure, and it is worth naming precisely because everything else here says two
+copies drift and the wrong one gets read. The difference is that these two
+answer different questions — "what must the system do?" and "what did this
+change add?" — and only the first is maintained. A reviewer greping the archive
+for a past decision (which is what it is for) must not mistake a superseded
+requirement for a live one.
+
 One exception worth knowing: a change that declares `retire_capabilities` can
 make archive **delete** a spec rather than merge into it. It takes an explicit
 marker, so it cannot happen by accident.
@@ -130,10 +146,16 @@ the same file from scanning for a function doing two jobs, and a single pass
 becomes whichever the reviewer started with. A small change can take one
 instance covering all four.
 
-So a full review is one `code-reviewer` per dimension — four of them — plus
-`spec-test-reviewer` and `design-reviewer`. The count follows from the roles
-rather than being a fact to maintain: one per dimension, plus one of each other
-reviewer. `ls .claude/agents/` is the authority on which roles exist.
+So a full review is one `code-reviewer` per dimension, plus `spec-test-reviewer`
+and `design-reviewer`. The dimensions are listed in `code-reviewer.md`; read
+them from there rather than from a number here, so adding one does not make this
+sentence quietly false.
+
+**Address the repo's agents unqualified** — `code-reviewer`, not
+`agent-skills:code-reviewer`. The plugin ships a similarly-described reviewer,
+and it carries none of this repo's traps: the input-independent fake, the
+binding that has not settled, `guarded()`, the vendor-hash-and-lock pairing,
+the `grep -q` SIGPIPE exit.
 
 **A change with no source diff still gets reviewed.** That is not an exemption,
 and treating it as one is how this flow's own adopting change nearly shipped

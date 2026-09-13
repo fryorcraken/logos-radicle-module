@@ -22,8 +22,22 @@ generated_code/
 # `.claude/*` rather than `.claude/` because git will not re-include a file
 # whose parent DIRECTORY is excluded — with a `.claude/` rule the negation
 # below is never consulted and `.claude/agents/` stays invisible.
+#
+# A directory negation is RECURSIVE, which is why it is narrowed again below.
+# `!.claude/agents/` alone stops `.claude/*` applying to anything beneath it,
+# so a nested scratch directory, a stray `settings.local.json`, or any build
+# leftover dropped in there becomes trackable — in the one namespace the
+# comment above admits is "generated or machine-local". The failure is a
+# generated file committed silently, which nobody notices, rather than a
+# tracked file going missing, which somebody does.
+#
+# So: re-exclude everything under `agents/`, then re-admit only the role files
+# themselves. Verified with `git check-ignore`: `agents/code-reviewer.md` is
+# tracked, `agents/scratch/tmp.json` and `agents/settings.local.json` are not.
 .claude/*
 !.claude/agents/
+.claude/agents/*
+!.claude/agents/*.md
 .cursor/
 AGENTS.md
 

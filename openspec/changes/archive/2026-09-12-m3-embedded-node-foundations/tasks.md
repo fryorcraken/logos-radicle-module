@@ -130,6 +130,16 @@ a change whose premise is that it has none.
         which an error rendered *alongside* the empty-state satisfies. The
         sibling test for an unstartable mode checks the empty-state is hidden;
         this case wants the same
+- [ ] 4.22 **Gate the archive sync in CI.** Promoting a delta into
+      `openspec/specs/` is a manual step, and declining its prompt ships a
+      change whose contract was never published — a silent failure in a repo
+      whose first rule is to make failures visible. It is the same shape as the
+      `ui-tests.yml` matrix trap, where three specs sat in the tree running
+      nowhere, and this flow documented that lesson without applying it to
+      itself. `openspec validate --specs --strict` runs clean and
+      non-interactively, so a `ci.yml` step is cheap; the harder half is
+      asserting that every capability named in an archived change's
+      `proposal.md` has a live spec. Start with the cheap half
 - [ ] 4.19 **A short read of entropy is unpinned, and this is the most serious
       gap found.** `os_seed()` uses `read_exact` and the spec requires a short
       read be a failure rather than padded — because a partially-random seed
