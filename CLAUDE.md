@@ -19,9 +19,9 @@ own file, because they only matter when you are doing that specific thing.
 `openspec/changes/<name>/`, written and reviewed by the role agents in
 `.claude/agents/`. **One piece of work is one branch (`piece/<name>`) and one
 PR**, its stages tracked as a checkbox block at the top of `tasks.md` and its
-review findings as checkboxes in `openspec/changes/<name>/findings/`, which the
-runner deletes before merge once none is empty. A shipped change's proposal,
-design and tasks are archived
+review findings as checkboxes under `openspec/changes/<name>/findings/`. Who owns
+each of those, and what must hold before a merge, is in the flow README rather
+than repeated here. A shipped change's proposal, design and tasks are archived
 under `openspec/changes/archive/`, which is where a past decision is found;
 `openspec/specs/` is the live behaviour contract. The CLI is `openspec`, from
 the npm package `@fission-ai/openspec` — note the bare `openspec` package is an
@@ -160,7 +160,7 @@ each one costs the user a manual approval click. What that means in practice:
 | the test scripts, by absolute path | `sh <relative-path>` |
 | `openspec …` | reading a path under `/nix/store` |
 
-Six that catch people repeatedly:
+The ones that catch people repeatedly:
 
 - **An allow rule cannot save a compound command.** The checker matches rules
   against a command it can statically analyse, so `cd /somewhere && openspec …`

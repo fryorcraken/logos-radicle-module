@@ -2,18 +2,22 @@
 
 ## Stages
 
+The four `code-reviewer` rows were covered by **one** instance, which the dimensions
+allow for a small change; it wrote one findings file per dimension and reported which
+it had covered, so each tick names work actually done.
+
 - [ ] ~~spec — `spec-writer`~~ — no spec delta: this change alters the flow's own
   instruction files, and adds no requirement to the module's behaviour contract
 - [x] design + code — `dev-writer`
 - [ ] ~~tests — `tester`~~ — no test layer can see an instruction file; the gate
   claims made here were verified by running the greps against fixtures instead
-- [ ] review: correctness — `code-reviewer`
-- [ ] review: security — `code-reviewer`
-- [ ] review: readability — `code-reviewer`
-- [ ] review: architecture — `code-reviewer`
+- [x] review: correctness — `code-reviewer`
+- [x] review: security — `code-reviewer`
+- [x] review: readability — `code-reviewer`
+- [x] review: architecture — `code-reviewer`
 - [ ] ~~review: spec-test — `spec-test-reviewer`~~ — its two inputs, a spec and a
   test suite, do not exist for this change
-- [ ] review: design — `design-reviewer`
+- [x] review: design — `design-reviewer`
 - [ ] findings all ticked, `findings/` deleted — runner
 - [ ] `openspec validate --strict`, then `archive` — runner
 

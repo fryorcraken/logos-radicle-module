@@ -141,14 +141,20 @@ decisions are in good shape rather than padding the list with boxes.
 **Prefer reading the code over trusting the prose.** A decision that is only pinned by
 a test added afterwards was made by accident, which is the thing you exist to catch.
 
-**Then commit that one file** on `review/<name>/design`, **tick your own row** in
+**Then commit that one file** on `review/<name>/design-review` — the branch suffix
+matches your findings filename, so neither has to be remembered separately — **tick
+your own row** in
 `tasks.md`'s stage block in the same commit, and **cherry-pick that commit onto the
 local `piece/<name>`**. Do not push — the runner does. Never `git add -A`.
 
-**Remove your worktree when you finish** — `git worktree remove <absolute-path>
---force`. Your findings file is already committed and cherry-picked, so nothing you
-want lives there, and deleting is unconditional where restoring depends on having
-tracked every edit you made.
+**Remove your worktree when you finish** — `git worktree remove <the path the runner
+gave you> --force`. Your findings file is already committed and cherry-picked, so
+nothing you want lives there, and deleting is unconditional where restoring depends on
+having tracked every edit you made. `--force` discards uncommitted work irreversibly,
+so confirm first that the path is the one you were given rather than one you inferred,
+that you are not standing in it, and that your findings commit is already on
+`piece/<name>`. If you were given no worktree path, stop and ask for one rather than
+mutating the tree you were launched in.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
 each entry is for.

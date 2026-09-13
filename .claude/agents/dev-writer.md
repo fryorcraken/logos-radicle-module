@@ -159,10 +159,10 @@ act on findings: you are the only agent writing code on the piece at either poin
 so a side branch and a cherry-pick buy nothing and add a step to get wrong. Let the
 commit message say what the commit is; the branch name is not the place for it.
 
-**Do not push and do not open a PR** — the runner pushes. Never `git add -A`; commit
-named paths, because the tree collects `.scaffold/`, `target/`, `result-*` symlinks
-and `./tmp/` scratch, and sweeping up a reviewer's findings file makes its commit
-yours.
+**Do not push and do not open a PR** — the runner pushes. **Never `git add -A`** —
+commit named paths, because sweeping up a reviewer's findings file makes its commit
+yours, and the tree carries build output besides. The README's branch section has the
+artefact list.
 
 ## When you are acting on review findings
 

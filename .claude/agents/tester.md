@@ -169,8 +169,9 @@ open on — and **tick the tests row** in `tasks.md`'s stage block in the same c
 Same when you come back to act on a finding: you are the only agent writing tests on
 the piece either time, so no side branch and no cherry-pick are needed.
 
-**Do not push and do not open a PR** — the runner pushes. Never `git add -A`; the
-tree collects `.scaffold/`, `target/`, `result-*` symlinks and `./tmp/` scratch.
+**Do not push and do not open a PR** — the runner pushes. **Never `git add -A`** —
+commit your test files by name; the tree carries build output that is not yours to
+commit. The README's branch section has the artefact list.
 
 Report what you kept, adapted and removed, and why. Report the
 predicted-versus-observed failure for each test you proved can fail — if they

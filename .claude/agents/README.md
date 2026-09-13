@@ -128,8 +128,9 @@ contract lands at a different time from the code that honours it — and a delta
 whose heading matches nothing applies nothing, so there is no error to notice when
 they drift.
 
-A stage is not a unit of review, even though each one looks like one. Splitting by
-stage optimises for the author's convenience at the reviewer's expense.
+A stage is not a unit of review, even though each one looks like one — which is why
+the branches below are named for the role and not the stage: `dev/x` invites a
+`test/x` beside it, and then a PR each.
 
 ### One writer at a time; reviewers in parallel
 
@@ -140,8 +141,13 @@ a git conflict:
 
 - **A spec must not move while code is written against it.** Run the pair together
   and the implementation answers a contract that changed underneath it, with
-  neither agent knowing. It holds on the way back too: when review routes a spec
-  gap, stop the fixer, land the spec, restart the fixer against the new text.
+  neither agent knowing. This repo knows the shape from its own worst bug, one
+  layer down: `onBranchChanged` set a property and then called something reading a
+  binding derived from it, so the refetch went out against state that had already
+  moved — and every gate was green, because nothing observes "answered the wrong
+  version of the question". Two agents on one piece is that hazard with a spec in
+  place of a binding. It holds on the way back too: when review routes a spec gap,
+  stop the fixer, land the spec, restart the fixer against the new text.
 - **`tester` mutates implementation code it does not own**, restoring after each
   mutation. A concurrent writer either inherits the broken state or overwrites the
   restore, and neither is touching git when it happens.
@@ -152,6 +158,14 @@ a test notices — two sharing a tree read each other's breakage as the author's
 and each **deletes its worktree** when done rather than restoring, since deleting
 cannot half-succeed where a restore depends on having tracked every edit.
 
+**The runner creates each reviewer's worktree and names it in the dispatch**, and
+the reviewer deletes it. Stating the owner matters because the failure on ambiguity
+is silent and destructive in both directions: a reviewer that assumes it must make
+its own may instead mutate the tree it was launched in, which is the piece's; and
+one that assumes it was given one may `--force`-remove a tree holding the only copy
+of somebody's work. **A reviewer that was not given a worktree path stops and says
+so** rather than choosing either fallback.
+
 Every branch rule below follows from that asymmetry.
 
 ### Branch names say which kind of branch it is
@@ -161,16 +175,43 @@ Every branch rule below follows from that asymmetry.
 | `piece/<name>` | one, shared | the three writers, in turn | **the** task branch, and **the only one pushed**. Spec, code, tests and findings-fixes all commit here directly |
 | `review/<name>/<dimension>` | one each | one reviewer | **local only** — its findings file, nothing else, cherry-picked onto the piece and never pushed |
 
-Named for the role and not the stage, because `dev/x` invites a `test/x` beside
-it — which is the shape this section exists to stop.
+`<dimension>` is the findings filename without its extension — `correctness`,
+`security`, `readability`, `architecture`, `spec-test`, `design-review` — so the
+branch and the file it carries are never two things to remember. The branch is never
+pushed, so there is no `origin/` ref to make a mismatch visible; the naming rule is
+all that catches it.
 
-**Open the PR on `piece/<name>` from the first commit. It cannot be corrected
-later, and every workaround loses something.** A PR's head ref is immutable:
-`PATCH /pulls/<n> -f head=…` returns **200 and silently ignores the field**, and
-`--base` changes the target, not the source. The rename endpoint does follow open
-PRs — but it **auto-closes** one whose *head* vanished, and if the target name
-already exists you must delete that ref first, at which point the rename recreates
-it **at the old branch's tip and silently drops anything the deleted ref held**.
+**Why the three writers share one tree rather than getting one each**, since a tree
+each is the obvious alternative: they never run at the same time, so the isolation
+would protect nothing, and each would then need a cherry-pick to get its work onto the
+piece — a step to get wrong in exchange for nothing. Reviewers pay that cost because
+they genuinely overlap.
+
+That reasoning is deliberately repeated in `spec-writer.md`, `dev-writer.md` and
+`tester.md` as well as here. The duplication is a chosen cost: an agent reads only its
+own file, and a bare "share the tree" without the reason invites the workaround the
+rule exists to prevent. **So if the concurrency rule is ever relaxed — giving `tester`
+its own tree, say — there are four sites to retire, not one.** Written down because a
+missed one becomes an instruction contradicting the new rule, in a file some agent
+reads as authoritative.
+
+**Open the PR on `piece/<name>` from the first commit.** Renaming the branch under an
+open PR is not a cheap correction, so the cheap thing is getting the name right once.
+
+The specifics below were established in the sibling dialectica repo rather than here,
+and are recorded as inherited rather than measured — if you need to rely on one,
+re-check it against `gh api` first. A PR's head ref is reported there as immutable:
+`PATCH /pulls/<n> -f head=…` returns 200 and silently ignores the field, and `--base`
+changes the target, not the source. The rename endpoint does follow open PRs, but
+auto-closes one whose *head* vanished; and where the target name already exists you
+must delete that ref first, at which point the rename recreates it at the old
+branch's tip and drops what the deleted ref held. That last one cost six reviewers'
+findings there, recovered only from a local reflog.
+
+**So do not try to rename or re-point a branch that has an open PR.** If the name is
+wrong, open a new PR on the correctly-named branch and close the old one, saying in
+the closing comment where the work went. That loses a PR number and nothing else;
+every other route risks losing commits.
 
 **Only the runner pushes.** A reviewer commits its findings file on its own branch,
 cherry-picks that commit onto the local `piece/<name>`, and stops; the writers commit
@@ -185,9 +226,26 @@ parallel — six at once, while a fixer may still be changing the code they are
 reading. Everyone else writes the piece one at a time and commits to it directly; a
 side branch there would add a step to get wrong and misname the commits besides.
 
-**Never `git add -A`** — commit named paths. A worktree collects build output
-(`.scaffold/`, `target/`, `result-*` symlinks) and `./tmp/` scratch, and sweeping
-up another agent's half-finished edit corrupts the branch you were working on.
+The reason single-pusher matters is sharper for fixes than for findings. Two reviewers
+never write the same path, so their files could have gone straight to the branch
+safely. **Two fixes to one piece routinely touch the same file** — and serialising
+them through the one role that can see both changes is what leaves a conflict to
+somebody able to resolve it, rather than to whichever agent pushed second.
+
+**Never `git add -A`** — commit named paths. Two reasons, and they are not the same
+rule:
+
+- **Sweeping up another agent's half-finished edit corrupts the branch you were
+  working on.** This is the one that matters, because it is silent: the commit looks
+  like yours, and the agent whose work you took has no way to see that it left.
+- **A worktree collects build output that is not yours to commit** — `.scaffold/`,
+  `target/`, `result-*` out-links, `./tmp/` scratch, and whatever is added to that
+  list next. Noise, which a reviewer spots.
+
+The second reason is the one an agent remembers, being concrete; the first is the one
+that does damage, so it is stated first. **This is the canonical copy of the artefact
+list**; each agent file states the rule, because an agent reads only its own file, and
+points here rather than repeating the list, which is the part that changes.
 
 **Check `git branch -vv` before any git write.** A worktree created from a branch
 inherits that branch's upstream, so a bare `git push` can land commits somewhere
@@ -209,29 +267,22 @@ Empty means contained. **Non-empty means fold it first** — and a commit
 cherry-picked rather than merged shows here even though its content is already in,
 so read the commits rather than the count.
 
-## Two files carry the state of a change
+## Where the state of a change lives while it is in flight
 
-Each agent's own file says what it writes. These are the shapes everyone needs to
+`tasks.md` carries which stages are done and `findings/` carries what review found.
+Each agent's own file says what it writes; these two are the shapes everyone needs to
 recognise, because everyone reads both.
 
-**`tasks.md` opens with a stage block**, written once by `spec-writer` and
-unticked:
+Both are scaffolding and both go: `findings/` is deleted before merge, and `tasks.md`
+is archived. **`design.md` is the one that survives as something anyone reads again**,
+which is why durable reasoning has to be moved into it before the tracker is deleted.
 
-```markdown
-## Stages
-
-- [ ] spec — `spec-writer`
-- [ ] design + code — `dev-writer`
-- [ ] tests — `tester`
-- [ ] review: correctness — `code-reviewer`
-- [ ] review: security — `code-reviewer`
-- [ ] review: readability — `code-reviewer`
-- [ ] review: architecture — `code-reviewer`
-- [ ] review: spec-test — `spec-test-reviewer`
-- [ ] review: design — `design-reviewer`
-- [ ] findings all ticked, `findings/` deleted — runner
-- [ ] `openspec validate --strict`, then `archive` — runner
-```
+**`tasks.md` opens with a stage block**, written once by `spec-writer` and unticked:
+one row per stage, then two rows the runner owns. **The roster itself lives in
+[`spec-writer.md`](spec-writer.md)**, which is the agent that writes it into
+`tasks.md`; copying it here as well would mean a roster change made in one file
+shipping the stale list from the other, which is the hazard the dimension count two
+sections down is deliberately not written to avoid.
 
 **One row per agent instance, not per role** — `code-reviewer` runs once per
 dimension, so it gets one row per dimension, each ticked by the instance that did
@@ -241,7 +292,11 @@ which is the conflict one-row-per-agent exists to prevent.
 
 Each agent flips its own row and adds none, so concurrent cherry-picks never touch
 the same line. **An unticked row with no agent running is a stage nobody is
-doing** — that is the whole point. Without it, which stages a change has been
+doing** — that is the whole point — **unless it is struck through**, which is how a
+stage says it does not apply and why the row is struck rather than deleted: a deleted
+row and a skipped stage look identical, and a struck one says which. A struck row
+keeps its empty box, so read the strike, not the box. Nothing greps this block; the
+`findings/` greps are scoped to that directory, and the stage block is read. Without it, which stages a change has been
 through lives only in the runner's head, and a piece can reach the edge of merge
 missing reviewers with nothing visible to say so.
 
@@ -268,11 +323,11 @@ already has one of those and the collision would be silent.
 **Every finding is a checkbox**, written unticked by the reviewer:
 
 ```markdown
-- [ ] **`dev-writer`** — `SourceTab.qml:140` — the refetch goes out for the old branch
+- [ ] **`dev-writer`** — `RepoView.qml:191` — the refetch goes out for the old branch
       **Scenario:** pick branch `b` while on `a` → the pane repopulates with `a`'s
-      entries, because `branch` is a binding that has not re-evaluated inside the
-      handler that changed its source.
-      **Measured:** deleting the whole `onBranchChanged` body leaves all 122 tests green.
+      entries, because `SourceTab.branch` is a binding that has not re-evaluated inside
+      the handler that changed its source.
+      **Measured:** deleting the whole `onBranchChanged` body leaves the QML suite green.
 ```
 
 Whoever acts on it flips the box and appends the outcome — **fixed** (with the test
@@ -287,17 +342,32 @@ that would have caught it.
 So "blocks the merge" is literal and checkable: `grep -rn "^- \[ \]"` over the
 directory either returns lines or it does not.
 
-Four consequences worth knowing whatever your role:
+What follows from that, whatever your role:
 
 - **An unticked entry blocks the merge.** A file, not a convention, so a forgotten
   finding stops a PR instead of evaporating.
-- **The gate only sees checkboxes.** `grep -rn "^- \[ \]"` reports a file of
-  headings as clean, so an entry written any other way is invisible to the gate
-  that exists to catch exactly it. This is the same failure this repo keeps hitting
-  from the other side — a green gate structurally unable to see what it appears to
-  check. Before trusting an empty result, confirm the files have boxes at all:
+- **The gate only sees a box in the first column.** `grep -rn "^- \[ \]"` reports a
+  file of headings as clean, so an entry written any other way is invisible to the
+  gate that exists to catch exactly it. This is the same failure this repo keeps
+  hitting from the other side — a green gate structurally unable to see what it
+  appears to check. Two rules follow, and both were measured rather than reasoned:
+
+  **Every box starts at column zero.** The `^` anchor is load-bearing, and an
+  indented `- [ ]` defeats *both* greps at once — the first misses it on the
+  anchor, and the second counts the ticked box above it and returns non-zero, so
+  the companion check reports clean too. That is reachable from the entry format
+  itself, whose continuation lines are indented: a follow-up written as a nested
+  box disappears. Append prose under an entry, never another box; a second thing
+  that must happen is a second top-level entry.
+
+  **Before trusting an empty result, confirm the files have boxes at all** —
   `grep -rc "^- \[" findings/` is non-zero for every file in the intended format
-  and zero for one written any other way.
+  and zero for one written any other way. A zero has two causes and they are fixed
+  differently: a reviewer that wrote prose instead of boxes needs that one file read
+  and re-formatted, where a directory written before a format change needs the whole
+  directory re-read. The sibling repo hit the second — forty entries, four of them
+  high-severity, all reading as done to the gate — which is the case to expect if this
+  format is ever revised.
 - **Findings stay attributable**, which is what a rejection needs: a fixer that
   disagrees knows which reviewer to argue with, and the runner can send it back to
   that agent while it still holds its worktree and its measurements.
@@ -348,7 +418,10 @@ reviewers whose findings led to changes. Those two rows are:
 - **`openspec validate --strict` and `openspec archive`.** Archive is where the
   delta is merged into `openspec/specs/` — skip the step, or decline its sync
   prompt, and the change ships with its spec never promoted. Do it once the change
-  is otherwise done, and take the sync.
+  is otherwise done, and **take the sync whenever the change has a delta**. A piece
+  that declared `skip_specs: true` has none to promote, and archives with
+  `--skip-specs`, which the CLI documents for exactly this case; taking a sync there
+  would be promoting nothing.
 
 The reviewers run in parallel and ask different questions:
 

@@ -19,13 +19,17 @@ not, cover all four and say that you did.
 **Assume nothing you are told is true.** The PR description, the commit messages
 and the task list are *claims*. Verify each against the code.
 
-**Mutating is allowed, and only in your own git worktree.** "Findings only, do
-not fix" governs the *change* — no edit of yours reaches the piece — but breaking a
-property on purpose to see whether a test catches it is the highest-value thing
-you do, and it requires an edit. Make it with `git worktree add`, not by copying
-the repo: a "scratch copy" into `./tmp/` copies the repo into itself. Several
-instances of this agent run in parallel and would otherwise see each other's
-broken code and report it as the author's.
+**Mutating is allowed, and only in the worktree you were given.** "Findings only,
+do not fix" governs the *change* — no edit of yours reaches the piece — but breaking
+a property on purpose to see whether a test catches it is the highest-value thing
+you do, and it requires an edit. Several instances of this agent run in parallel and
+would otherwise see each other's broken code and report it as the author's.
+
+**The runner creates that worktree and names its path in your dispatch.** If your
+dispatch does not name one, **stop and ask for it** — do not mutate the tree you
+were launched in, which is the piece's own, and do not create one and then remove it
+by the rule below. A worktree is made with `git worktree add`, never by copying the
+repo: a "scratch copy" into `./tmp/` copies the repo into itself.
 
 ## Every Bash call you make may cost the user an approval click
 
@@ -173,11 +177,11 @@ Write your findings to `openspec/changes/<name>/findings/<your-dimension>.md`,
 writing their own list:
 
 ```markdown
-- [ ] **`dev-writer`** — `SourceTab.qml:140` — the refetch goes out for the old branch
+- [ ] **`dev-writer`** — `RepoView.qml:191` — the refetch goes out for the old branch
       **Scenario:** pick branch `b` while on `a` → the pane repopulates with `a`'s
-      entries. `branch` is a binding to `RepoView.branch` and has not re-evaluated
-      inside the handler that changed its source.
-      **Measured:** deleting the whole `onBranchChanged` body leaves all 122 tests green.
+      entries. `SourceTab.branch` is a binding to `RepoView.branch` and has not
+      re-evaluated inside the handler that changed its source.
+      **Measured:** deleting the whole `onBranchChanged` body leaves the QML suite green.
 ```
 
 Lead with **who it is for** (`spec-writer`, `dev-writer` or `tester`), then
@@ -195,9 +199,9 @@ than padding the list.
 commit **tick the one stage row that names your dimension** — `tasks.md` carries a
 `code-reviewer` row per dimension, and yours is the only one you may touch. Then
 **cherry-pick that commit onto the local `piece/<name>`**. Do not push — the runner
-does. Never `git add -A`: the tree collects `.scaffold/`, `target/`, `result-*`
-symlinks and `./tmp/` scratch, and sweeping up a fixer's half-finished edit corrupts
-the branch you were reviewing.
+does. **Never `git add -A`** — commit your findings file by name; sweeping up a fixer's
+half-finished edit corrupts the branch you were reviewing. The README's branch section
+has the artefact list.
 
 **Your final report is a pointer, not a copy** — the file path, how many entries, and
 who each is for. The fixer reads the file; copying the findings into your report puts
@@ -205,14 +209,14 @@ them in the runner's context twice and crowds out what it needs to track.
 
 ## Your worktree, and deleting it when you are done
 
-You are given a worktree of your own under `.claude/worktrees/` and a branch named
+The runner gives you a worktree under `.claude/worktrees/` and a branch named
 `review/<name>/<dimension>`. **Mutate it freely** — breaking the code to see whether
 a test notices is the job.
 
-**When you are done, remove the worktree rather than restoring it**:
+**When you are done, remove that worktree rather than restoring it**:
 
 ```
-git worktree remove <absolute-path> --force
+git worktree remove <the absolute path you were given> --force
 ```
 
 Do not try to undo your mutations one by one. That depends on your having tracked
@@ -221,5 +225,15 @@ the piece. Removing the tree needs no bookkeeping and cannot half-succeed — yo
 findings file is already committed and cherry-picked, so nothing you want lives there
 any more.
 
-Verify the piece branch is clean afterwards, and say in your report that you removed
-the tree.
+**Three conditions before you run it, because `--force` discards uncommitted work and
+cannot be undone:**
+
+- **The path is the one your dispatch named**, not one you inferred. Removing the
+  piece's own tree would destroy whatever the writers had not committed.
+- **You are not standing in it.** `git rev-parse --show-toplevel` must not be that
+  path — run the removal from the main checkout.
+- **Your findings commit is cherry-picked onto `piece/<name>` already.** It is the
+  one thing in that tree you cannot recreate.
+
+If any of the three does not hold, **stop and report it** rather than forcing. Then
+verify the piece branch is clean, and say in your report that you removed the tree.
