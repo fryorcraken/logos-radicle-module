@@ -296,7 +296,11 @@ doing** — that is the whole point — **unless it is struck through**, which i
 stage says it does not apply and why the row is struck rather than deleted: a deleted
 row and a skipped stage look identical, and a struck one says which. A struck row
 keeps its empty box, so read the strike, not the box. Nothing greps this block; the
-`findings/` greps are scoped to that directory, and the stage block is read. Without it, which stages a change has been
+`findings/` greps are scoped to that directory, and the stage block is read. One
+consequence to expect rather than debug: **`openspec archive` counts a struck row as
+incomplete** and warns before continuing, because the box really is empty. That is the
+price of keeping `[x]` single-valued, and it is the right way round — a tool that counts
+a skipped stage beats one that cannot tell it from a finished one. Without it, which stages a change has been
 through lives only in the runner's head, and a piece can reach the edge of merge
 missing reviewers with nothing visible to say so.
 

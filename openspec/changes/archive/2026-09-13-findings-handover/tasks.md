@@ -6,6 +6,12 @@ The four `code-reviewer` rows were covered by **one** instance, which the dimens
 allow for a small change; it wrote one findings file per dimension and reported which
 it had covered, so each tick names work actually done.
 
+`openspec archive` counted the three struck-through rows as incomplete and warned
+before continuing. Expected: a struck row keeps its empty box by design, because `[x]`
+would have to mean both "done" and "not applicable". The warning is the cost of that,
+and it is the right way round — a tool that counts a skipped stage is better than one
+that cannot tell it from a finished one.
+
 - [ ] ~~spec — `spec-writer`~~ — no spec delta: this change alters the flow's own
   instruction files, and adds no requirement to the module's behaviour contract
 - [x] design + code — `dev-writer`
@@ -18,8 +24,8 @@ it had covered, so each tick names work actually done.
 - [ ] ~~review: spec-test — `spec-test-reviewer`~~ — its two inputs, a spec and a
   test suite, do not exist for this change
 - [x] review: design — `design-reviewer`
-- [ ] findings all ticked, `findings/` deleted — runner
-- [ ] `openspec validate --strict`, then `archive` — runner
+- [x] findings all ticked, `findings/` deleted — runner
+- [x] `openspec validate --strict`, then `archive` — runner
 
 ## Implementation
 
