@@ -26,15 +26,26 @@ which into `./tmp/` would copy the repo into itself. Mutation runs collide: two
 reviewers sharing a tree see each other's broken code and cannot tell it from the
 author's.
 
-**When you finish, remove that worktree rather than restoring it** —
-`git worktree remove <the path you were given> --force`. Restoring depends on your
-having tracked every edit, and one missed restore ships a deliberately broken line
-into the piece; removing the tree needs no bookkeeping and cannot half-succeed. Your
-findings file is already committed and cherry-picked, so nothing you want lives there.
+**Enter it before you start** — `EnterWorktree(path: <the absolute path you were
+given>)` — and then run everything with plain relative paths. `cd <dir> && cargo
+test` costs an approval click on every call even though `cargo test` is allow-listed,
+because the permission checker cannot analyse a compound command. Pass `path` and
+never `name`: `name` creates a new tree branched from `origin/main`, which would
+leave you reviewing none of the piece's tests.
+
+**When you finish, step out of the worktree and remove it rather than restoring it**
+— `ExitWorktree(action: "keep")`, then
+`git worktree remove <the path you were given> --force`. The exit comes first because
+`git worktree remove` cannot remove the directory you are standing in, and `keep`
+rather than `remove` because `ExitWorktree` only deletes worktrees it created itself
+and the runner made this one. Restoring depends on your having tracked every edit, and
+one missed restore ships a deliberately broken line into the piece; removing the tree
+needs no bookkeeping and cannot half-succeed. Your findings file is already committed
+and cherry-picked, so nothing you want lives there.
 
 **`--force` discards uncommitted work irreversibly**, so check three things first:
-the path is the one you were given and not one you inferred, you are not standing in
-it (`git rev-parse --show-toplevel`), and your findings commit is already
+the path is the one you were given and not one you inferred, the exit returned you
+out of it (`git rev-parse --show-toplevel`), and your findings commit is already
 cherry-picked onto `piece/<name>`. If any does not hold, stop and report it.
 
 (The per-mutation restore above is different and still necessary — that is what lets
@@ -199,7 +210,9 @@ than a judgement.
 
 **Then commit that one file** on `review/<name>/spec-test`, **tick your own row** in
 `tasks.md`'s stage block in the same commit, and **cherry-pick that commit onto the
-local `piece/<name>`**. Do not push — the runner does. Never `git add -A`.
+local `piece/<name>`**. **Push nothing** — a reviewer is the one role that pushes no
+branch at all; the cherry-pick is your hand-off, and the writers push the piece.
+Never `git add -A`.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
 each entry is for.

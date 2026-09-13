@@ -149,20 +149,48 @@ QML cannot be covered by the QML suite, however green that suite is; when a
 requirement holds because nothing can reach the code that would break it, say it is
 satisfied by construction and say what makes the absence real.
 
-**You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
-on, and the same tree the `spec-writer` and `tester` use. You share it because you
-never overlap: at most one of the three runs at a time. Reviewers get separate trees
-because they are concurrent; you do not need one.
+**You work in the piece's worktree, on `piece/<name>`** — the branch the PR is
+opened on, and the same tree the `spec-writer` and `tester` use. You share it
+because you never overlap: at most one of the three runs at a time. Reviewers get
+separate trees because they are concurrent; you do not need one.
+
+**Enter it first** — `EnterWorktree(path: <the absolute path your brief names>)` —
+and then use plain relative paths. Not `cd <dir> && …`: the permission checker
+cannot analyse a compound command, so that shape costs the user an approval click on
+every call even when the command itself is allow-listed.
 
 **Commit straight to that branch**, both on the first pass and when you come back to
 act on findings: you are the only agent writing code on the piece at either point,
 so a side branch and a cherry-pick buy nothing and add a step to get wrong. Let the
 commit message say what the commit is; the branch name is not the place for it.
 
-**Do not push and do not open a PR** — the runner pushes. **Never `git add -A`** —
-commit named paths, because sweeping up a reviewer's findings file makes its commit
-yours, and the tree carries build output besides. The README's branch section has the
-artefact list.
+**Never `git add -A`** — commit named paths, because sweeping up a reviewer's
+findings file makes its commit yours, and the tree carries build output besides
+(`.scaffold/`, `target/`, `result-*` out-links, `./tmp/` scratch). The README's
+branch section has the artefact list.
+
+## Open the PR before you hand back
+
+**Push `piece/<name>` and open its PR as your last act on the first pass**, before
+the runner dispatches reviewers. **A push alone gets you no CI at all**: both
+workflows trigger on `pull_request` and on pushes to `main` (`ci.yml` on `v*` tags
+too), never on a push to a piece branch. So opening the PR later means the first
+news of the build arrives after six reviewers have already read the code.
+
+On the findings pass the PR is already open: commit, push to it, and never open a
+second. One piece is one PR, so `gh pr list --head piece/<name>` before you create.
+
+**Check `git branch -vv` first** and push by name, `git push origin piece/<name>`.
+A worktree inherits its parent branch's upstream, so a bare `git push` can land
+commits somewhere you did not name.
+
+The title says what the change does, not which stage produced it; the body says why
+it exists and names every `NO SPEC:` you left. Do not narrate your commits — the
+squash discards them. The `closer` checks both against the diff before merging,
+which findings will have changed by then; write them so that is an edit, not a
+rewrite.
+
+**You still do not merge**, and `piece/<name>` is the only branch you push.
 
 ## When you are acting on review findings
 
@@ -200,6 +228,6 @@ are two claims, and a reader needs to see both to judge either.
 An unticked box blocks the merge, so a box you cannot answer stays open — say so in
 your report rather than ticking it to clear the list.
 
-Move anything durable into `design.md` before the runner deletes the tracker. A
+Move anything durable into `design.md` before the `closer` deletes the tracker. A
 finding like "a write affordance must gate on `canWriteLocal`, never
 `localAvailable`" is a recorded decision, not a task.

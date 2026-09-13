@@ -198,8 +198,10 @@ than padding the list.
 **Then commit that one file** on `review/<name>/<your-dimension>`, and in the same
 commit **tick the one stage row that names your dimension** — `tasks.md` carries a
 `code-reviewer` row per dimension, and yours is the only one you may touch. Then
-**cherry-pick that commit onto the local `piece/<name>`**. Do not push — the runner
-does. **Never `git add -A`** — commit your findings file by name; sweeping up a fixer's
+**cherry-pick that commit onto the local `piece/<name>`**. **Push nothing** — a
+reviewer is the one role that pushes no branch at all; the cherry-pick is your
+hand-off, and the writers push the piece.
+**Never `git add -A`** — commit your findings file by name; sweeping up a fixer's
 half-finished edit corrupts the branch you were reviewing. The README's branch section
 has the artefact list.
 
@@ -210,14 +212,25 @@ them in the runner's context twice and crowds out what it needs to track.
 ## Your worktree, and deleting it when you are done
 
 The runner gives you a worktree under `.claude/worktrees/` and a branch named
-`review/<name>/<dimension>`. **Mutate it freely** — breaking the code to see whether
-a test notices is the job.
+`review/<name>/<dimension>`. **Enter it first** — `EnterWorktree(path: <the absolute
+path you were given>)` — and then work with plain relative paths, rather than
+prefixing every call with `cd <dir> && …`, which costs an approval click each time.
+Pass `path`, never `name`: `name` creates a *new* worktree branched from
+`origin/main`, which would leave you reviewing none of the piece's commits.
 
-**When you are done, remove that worktree rather than restoring it**:
+**Mutate it freely** — breaking the code to see whether a test notices is the job.
+
+**When you are done, step out of it and remove it rather than restoring it**:
 
 ```
+ExitWorktree(action: "keep")
 git worktree remove <the absolute path you were given> --force
 ```
+
+`ExitWorktree` first, because `git worktree remove` cannot remove the directory you
+are standing in — and `keep` rather than `remove`, because `ExitWorktree` only
+deletes worktrees it created itself and the runner made this one, so `remove` would
+do nothing and the tree would survive.
 
 Do not try to undo your mutations one by one. That depends on your having tracked
 every edit you made, and a single missed restore ships a deliberately broken line into
@@ -231,7 +244,10 @@ cannot be undone:**
 - **The path is the one your dispatch named**, not one you inferred. Removing the
   piece's own tree would destroy whatever the writers had not committed.
 - **You are not standing in it.** `git rev-parse --show-toplevel` must not be that
-  path — run the removal from the main checkout.
+  path — which is what the `ExitWorktree(action: "keep")` above is for. Confirm it
+  returned you to the main checkout before running the removal; `git worktree remove`
+  refuses the directory you are in, and that refusal reads like a permissions
+  problem.
 - **Your findings commit is cherry-picked onto `piece/<name>` already.** It is the
   one thing in that tree you cannot recreate.
 

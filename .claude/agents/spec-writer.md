@@ -12,9 +12,15 @@ A stale section is how a change gets designed against a decision that moved.
 
 **You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
 on, and the same tree the `dev-writer` and `tester` use. You share it because you
-never overlap: at most one of the three runs at a time. Commit there directly; do
-not push and do not open a PR, the runner does both. **Never `git add -A`** — commit
-named paths; the README's branch section has the artefact list and the reason.
+never overlap: at most one of the three runs at a time. **Enter it first** —
+`EnterWorktree(path: <the absolute path your brief names>)` — then use plain
+relative paths; `cd <dir> && …` costs an approval click on every call, and
+`openspec` resolves its root from the cwd besides.
+
+Commit there directly; do not push and do not open a PR — the `dev-writer` does
+both at the end of its pass, and the PR carries your spec commits with it.
+**Never `git add -A`** — commit named paths; the README's branch section has the
+artefact list and the reason.
 
 You own two artifacts, in order: `proposal.md` then `specs/`. Run
 `openspec instructions proposal --change <name>`, then the same for `specs`,
@@ -39,9 +45,14 @@ one.
 - [ ] review: architecture — `code-reviewer`
 - [ ] review: spec-test — `spec-test-reviewer`
 - [ ] review: design — `design-reviewer`
-- [ ] findings all ticked, `findings/` deleted — runner
-- [ ] `openspec validate --strict`, then `archive` — runner
+- [ ] findings all ticked, `findings/` deleted — `closer`
+- [ ] `openspec validate --strict`, then `archive` — `closer`
+- [ ] CI green, title/body checked, PR merged — `closer`
 ```
+
+The archive row sits **above** the merge row on purpose: the archive is a commit on
+the piece branch that rides the same PR, so it happens before CI and the merge, not
+after. [`closer.md`](closer.md) says why.
 
 Tick your own row when the spec is done. **Strike a row through with its reason
 rather than deleting it** if it genuinely does not apply — a missing row reads as an

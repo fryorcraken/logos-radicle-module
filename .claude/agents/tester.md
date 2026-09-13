@@ -164,14 +164,24 @@ not edit the reviewer's text; append below it. A box you cannot answer stays ope
 
 ## Where your work lands
 
+**Enter the piece's worktree first** — `EnterWorktree(path: <the absolute path your
+brief names>)` — then use plain relative paths. `cd <dir> && cargo test` costs an
+approval click on every call even though `cargo test` is allow-listed, because the
+permission checker cannot analyse a compound command.
+
 **Commit straight to `piece/<name>`** — the piece's one branch, the one its PR is
 open on — and **tick the tests row** in `tasks.md`'s stage block in the same commit.
 Same when you come back to act on a finding: you are the only agent writing tests on
 the piece either time, so no side branch and no cherry-pick are needed.
 
-**Do not push and do not open a PR** — the runner pushes. **Never `git add -A`** —
-commit your test files by name; the tree carries build output that is not yours to
-commit. The README's branch section has the artefact list.
+**Push `piece/<name>` once you are done**, and do not open a PR — the `dev-writer`
+opened it before you ran. Push by name, `git push origin piece/<name>`, after
+checking `git branch -vv`: a worktree inherits its parent branch's upstream, so a
+bare `git push` can land commits somewhere you did not name.
+
+**Never `git add -A`** — commit your test files by name; the tree carries build
+output that is not yours to commit. The README's branch section has the artefact
+list.
 
 Report what you kept, adapted and removed, and why. Report the
 predicted-versus-observed failure for each test you proved can fail — if they

@@ -6,6 +6,11 @@ the agents. Nothing here is custom tooling — subagents already give isolated
 context windows, per-role models and tool limits, which is what per-role
 separation needs.
 
+> **If you are the session dispatching these agents, read
+> [`RUNNER.md`](RUNNER.md) first — it is written for you, and this file is not.**
+>
+> Everything below is addressed to the agent it names.
+
 The CLI is `openspec`, from the npm package `@fission-ai/openspec`
 (`npm install -g @fission-ai/openspec`). `openspec --help` lists the surface.
 Note the bare `openspec` package on npm is an unrelated placeholder at 0.0.0.
@@ -24,6 +29,13 @@ Note the bare `openspec` package on npm is an unrelated placeholder at 0.0.0.
 This sits alongside the trigger-specific docs CLAUDE.md indexes — `rust-ffi.md`,
 `writes.md`, `e2e.md`. Those describe **built** areas and stay put; they are
 where a shipped subsystem's traps live. PLAN.md is the forward-looking one.
+
+**Archiving has enough traps to be worth its own page:
+[`docs/OPENSPEC-ARCHIVE.md`](../../docs/OPENSPEC-ARCHIVE.md). Read it before you
+archive, not before you start.** Archiving is the `closer`'s, and it runs as a
+commit on the piece branch before CI and the merge — [`closer.md`](closer.md)
+says why that ordering. Run `openspec --version` rather than believing any
+document about it, this one included.
 
 ### What "archived" means concretely
 
@@ -103,11 +115,12 @@ cheapest kind to get wrong.
 | Agent | Reads | Writes |
 |---|---|---|
 | `spec-writer` | PLAN.md (from `origin/main`) | `proposal.md`, `specs/` |
-| `dev-writer` | spec, PLAN.md | `design.md`, `tasks.md`, code, tests-as-it-goes |
+| `dev-writer` | spec, PLAN.md | `design.md`, `tasks.md`, code, tests-as-it-goes, **the PR** |
 | `tester` | spec, inherited tests | the test suite |
 | `spec-test-reviewer` | **spec + tests only** | findings |
 | `design-reviewer` | code, `design.md`, PLAN.md | findings |
 | `code-reviewer` | code | findings |
+| `closer` | the gates, the diff, the CI run | the archive commit, the PR title/body, the merge |
 
 ## One piece of work is one branch and one PR
 
@@ -122,8 +135,9 @@ second PR on one piece is the failure this section exists to stop.
 **The unit of review is a behaviour change with its contract and its tests
 attached.** A reviewer must be able to see that they belong together, not be told
 so by whoever is orchestrating — and verifying exactly that is what a reviewer is
-for. `openspec archive` settles it independently: it runs once, on merge, and
-promotes the delta into `openspec/specs/`. Split across several merges, the
+for. `openspec archive` settles it independently: it runs once, as a commit on the
+piece branch that rides the same PR, and promotes the delta into
+`openspec/specs/`. Split across several merges, the
 contract lands at a different time from the code that honours it — and a delta
 whose heading matches nothing applies nothing, so there is no error to notice when
 they drift.
@@ -172,8 +186,9 @@ Every branch rule below follows from that asymmetry.
 
 | Branch | Worktree | Whose | Holds |
 |---|---|---|---|
-| `piece/<name>` | one, shared | the three writers, in turn | **the** task branch, and **the only one pushed**. Spec, code, tests and findings-fixes all commit here directly |
+| `piece/<name>` | one, shared | the three writers in turn, then the `closer` | **the** task branch, and **the only one pushed**. Spec, code, tests, findings-fixes and the archive all commit here directly |
 | `review/<name>/<dimension>` | one each | one reviewer | **local only** — its findings file, nothing else, cherry-picked onto the piece and never pushed |
+| `main` | — | nobody | **no agent ever pushes here.** It takes commits through a PR only |
 
 `<dimension>` is the findings filename without its extension — `correctness`,
 `security`, `readability`, `architecture`, `spec-test`, `design-review` — so the
@@ -195,8 +210,30 @@ its own tree, say — there are four sites to retire, not one.** Written down be
 missed one becomes an instruction contradicting the new rule, in a file some agent
 reads as authoritative.
 
-**Open the PR on `piece/<name>` from the first commit.** Renaming the branch under an
-open PR is not a cheap correction, so the cheap thing is getting the name right once.
+**That retirement count covers the agent files only, never
+`openspec/changes/archive/`.** Archived proposals and task lists state the rules as
+they stood when that change shipped — two of them say "only the runner pushes", which
+was true then and is not now — and they are **deliberately left wrong**, because an
+archived document records what a past change did rather than what the flow requires
+today. Editing one to match a new rule destroys the only record of the old one. The
+live agent files are the contract; the archive is evidence. This is the same
+distinction the "what archived means" section draws for `specs/` deltas, and it is
+worth restating here because a sweep for a retired rule will hit the archive and the
+instinct to tidy it is wrong.
+
+**The PR is opened on `piece/<name>` and nothing else. Whichever ref it is opened
+on, it is stuck with** — so the cheap thing is getting the name right once, because
+renaming the branch under an open PR is not a cheap correction.
+
+**The `dev-writer` opens it, as its last act on the first pass**, before the runner
+dispatches reviewers. **Until the PR exists there is no CI run at all** — and not
+merely a partial one: `ci.yml` triggers on `pull_request` plus pushes to `main` and
+`v*` tags, `ui-tests.yml` on `pull_request` plus pushes to `main`, so a push to
+`piece/<name>` with no PR open triggers **neither workflow**. Opening the PR later
+means the first news of the build arrives after six reviewers have already read the
+code. The timing used to be "from the first commit"; nothing before `dev-writer`
+needs a PR open, and the evidence under that sentence was about the ref being
+immutable rather than about the moment.
 
 The specifics below were established in the sibling dialectica repo rather than here,
 and are recorded as inherited rather than measured — if you need to rely on one,
@@ -213,10 +250,30 @@ wrong, open a new PR on the correctly-named branch and close the old one, saying
 the closing comment where the work went. That loses a PR number and nothing else;
 every other route risks losing commits.
 
-**Only the runner pushes.** A reviewer commits its findings file on its own branch,
-cherry-picks that commit onto the local `piece/<name>`, and stops; the writers commit
-to `piece/<name>` directly. With one pusher there is no race to lose, no rebase to
-retry, and no force-push to be tempted by.
+**Each agent pushes its own commits, once its work is done** — `dev-writer` and
+`tester` after theirs, and the `closer` after committing the archive. The
+`dev-writer` pushes at the end of its first pass and opens the PR there; see
+[`dev-writer.md`](dev-writer.md). A reviewer is the exception and pushes nothing:
+it commits its findings file on its own branch, cherry-picks that commit onto the
+local `piece/<name>`, and stops.
+
+That is safe for the same reason the writers can share a worktree — **at most one
+of them runs at a time**, so a push is never a race. It is not a licence to
+parallelise: two agents pushing one branch is the hazard, and the concurrency rule
+is what rules it out.
+
+**Nobody pushes `main`.** It takes commits through a PR only — `enforce_admins` is
+on, so a direct push is rejected with `GH006`, admin or not. The archive was once
+documented as the one exception to this; it is not, and it now rides the piece's PR
+instead. The sibling repo found that out the expensive way: its first closer
+followed that instruction, was rejected, and opened a second PR to land one commit.
+
+**Check the protection with `gh api
+repos/fryorcraken/logos-radicle-module/branches/main/protection`, not with the
+directory name.** The remote is `logos-radicle-module` while the working directory
+is `radicle-logos-module`, and querying the latter returns a 404 that reads exactly
+like "this branch has no protection" — which is the opposite of true. Thirteen
+checks, signed commits and `enforce_admins` are all required.
 
 Cherry-pick rather than merge, so the task branch reads as a flat sequence of
 findings and fixes rather than six merge commits carrying six branches.
@@ -226,11 +283,13 @@ parallel — six at once, while a fixer may still be changing the code they are
 reading. Everyone else writes the piece one at a time and commits to it directly; a
 side branch there would add a step to get wrong and misname the commits besides.
 
-The reason single-pusher matters is sharper for fixes than for findings. Two reviewers
-never write the same path, so their files could have gone straight to the branch
-safely. **Two fixes to one piece routinely touch the same file** — and serialising
-them through the one role that can see both changes is what leaves a conflict to
-somebody able to resolve it, rather than to whichever agent pushed second.
+**What the writers pushing for themselves does not relax is the serialisation.**
+Two reviewers never write the same path, so their findings files were never the
+hazard; **two fixes to one piece routinely touch the same file**, and what keeps a
+conflict in front of somebody able to resolve it is that only one fixer runs at a
+time — not that a single role does the pushing. So the rule that carries the weight
+is one-writer-at-a-time, and relaxing *that* is what would put a conflict in front
+of whichever agent pushed second.
 
 **Never `git add -A`** — commit named paths. Two reasons, and they are not the same
 rule:
@@ -278,7 +337,7 @@ is archived. **`design.md` is the one that survives as something anyone reads ag
 which is why durable reasoning has to be moved into it before the tracker is deleted.
 
 **`tasks.md` opens with a stage block**, written once by `spec-writer` and unticked:
-one row per stage, then two rows the runner owns. **The roster itself lives in
+one row per stage, then three rows the `closer` owns. **The roster itself lives in
 [`spec-writer.md`](spec-writer.md)**, which is the agent that writes it into
 `tasks.md`; copying it here as well would mean a roster change made in one file
 shipping the stale list from the other, which is the hazard the dimension count two
@@ -336,7 +395,7 @@ already has one of those and the collision would be silent.
 
 Whoever acts on it flips the box and appends the outcome — **fixed** (with the test
 that fails without it), **rejected** (with the argument), or **deferred** (and
-where to) — **without editing the reviewer's text**. The runner deletes the
+where to) — **without editing the reviewer's text**. The `closer` deletes the
 directory before merge, once no box is empty.
 
 The tick distinguishes the three outcomes on purpose: "fixed" is the one nobody
@@ -391,11 +450,53 @@ does not reach you is its *report*, which returns to the runner; so anything an
 agent needs passed on must be in a file, not in a report.
 
 **A brief points at the work; it does not contain it.** A dispatch is which piece,
-which worktree, which file:
+which worktree, which file — and it tells the agent to enter that worktree first:
 
 > Act on the findings for `dev-writer` in
 > `openspec/changes/embedded-node-wizard/findings/`. Piece branch
-> `piece/embedded-wizard`, worktree `.claude/worktrees/piece-embedded`.
+> `piece/embedded-wizard`, worktree `.claude/worktrees/piece-embedded` — enter it
+> with `EnterWorktree(path: "…/.claude/worktrees/piece-embedded")` before anything
+> else, then use plain relative paths.
+
+**Say that in every brief, because it is what keeps an agent out of the shapes that
+cost a permission click.** An agent that never moves its working directory reaches
+for `cd <dir> && …` or `git -C <dir> …` on every call — the first is the single
+biggest source of prompts here, and CLAUDE.md's Bash-cost table says why: an allow
+rule cannot save a compound command, so `cd somewhere && cargo test` prompts even
+though `cargo test` is allow-listed. `EnterWorktree` moves the session into the tree
+once, and everything after is an ordinary relative-path command in the right place.
+
+Two things about the tool that decide how it is used here:
+
+- **`path` enters an existing worktree; `name` creates one.** The runner has already
+  made the piece's worktree with `git worktree add`, so a dispatched agent passes
+  `path` and never `name` — `name` would branch from `origin/main` and strand the
+  agent in a tree holding none of the piece's commits. This repo's worktrees branch
+  from `origin/main` already, which is exactly why an accidental fresh one looks
+  plausible and is empty.
+- **It only moves the agent that calls it.** From an agent whose directory was
+  pinned at launch, the switch affects that agent alone. So the runner cannot enter
+  a worktree on an agent's behalf; the instruction has to be in the brief, which is
+  why it belongs in the dispatch shape above rather than in a setup step.
+- **It can refuse, and the fallback matters.** A session sitting at the repository
+  root has been refused with *"switching is only available to sessions whose
+  working directory is inside a worktree"* — measured here, by a reviewer that was
+  then unable to follow its own file. **If the call is refused, work through
+  absolute paths and `git -C <worktree> …`, and say so in your report.** `git -C`
+  is one plain command and costs no approval click, unlike the `cd <dir> && …`
+  chain this rule exists to avoid.
+
+The runner itself stays in the main checkout. It dispatches and reads; it is the
+agents that need to be somewhere specific.
+
+**A reviewer has to step out before it deletes its tree.** `git worktree remove`
+cannot remove the directory you are standing in, so the last two acts are
+`ExitWorktree(action: "keep")` — which returns the session to where it started and
+leaves the tree alone — and then the `git worktree remove <absolute-path> --force`
+its own file already specifies. `keep` is the right action there rather than
+`remove`: `ExitWorktree` only removes worktrees it created itself, and these were
+made by the runner with `git worktree add`, so asking it to remove one does nothing
+and the tree would survive.
 
 **If you are writing out what a finding says, you have the wrong shape.** The
 reviewer already wrote it with the measurement behind it; a restatement puts a
@@ -409,23 +510,41 @@ approach impossible has produced a result worth as much as the review, and
 unwritten, the next agent spends the same afternoon. It goes in `design.md`,
 beside the decision it rules out.
 
-**The runner owns the last two stage rows, plus dispatching and pushing.**
-`tasks.md`'s stage block is the list — read it to see what is left. Dispatch by
-naming the findings files rather than carrying their content, and re-run only the
-reviewers whose findings led to changes. Those two rows are:
+**The runner owns dispatching; the `dev-writer` opens the PR; the `closer` owns the
+last three stage rows.** `tasks.md`'s stage block is the list — read it to see what
+is left, because an unticked row with no agent running is a stage nobody is doing.
+
+**How the runner does that is [`RUNNER.md`](RUNNER.md), not this section** — how to
+tell whether an agent is still running, how many to launch at once, what it reads
+and what it only points at, and why one piece is one PR. It is kept there rather
+than restated here because two copies of a rule drift and the wrong one gets read.
+
+The three rows the `closer` owns, and why they are its rather than the runner's —
+orchestration context is the scarcest thing here, and watching a Nix build consumes
+it without producing anything:
 
 - **Deleting `findings/` once no box is empty**, having checked with the grep pair
   above. With several fixers across six files, "whoever finishes last" is an owner
-  nobody is, which is how a gate gets skipped; the runner is the one role that sees
-  all six. Every reviewer ends "findings only, do not fix", and routing is the
+  nobody is, which is how a gate gets skipped. Deleting a tracker is only safe
+  immediately before the merge that makes it historical, and the closer is the agent
+  standing there. Every reviewer ends "findings only, do not fix", and routing is the
   reviewer's own job — each finding names who it is for.
-- **`openspec validate --strict` and `openspec archive`.** Archive is where the
-  delta is merged into `openspec/specs/` — skip the step, or decline its sync
-  prompt, and the change ships with its spec never promoted. Do it once the change
-  is otherwise done, and **take the sync whenever the change has a delta**. A piece
-  that declared `skip_specs: true` has none to promote, and archives with
-  `--skip-specs`, which the CLI documents for exactly this case; taking a sync there
-  would be promoting nothing.
+- **`openspec validate --strict` and `openspec archive`**, as a commit on the piece
+  branch before CI. Archive is where the delta is merged into `openspec/specs/` —
+  skip the step, or decline its sync prompt, and the change ships with its spec never
+  promoted. **Take the sync whenever the change has a delta**; a piece that declared
+  `skip_specs: true` has none to promote and archives with `--skip-specs`, which the
+  CLI documents for exactly this case.
+- **CI green, title and body checked, PR merged.** The title and body are the only
+  prose that survives a squash, and findings changed the code under what the
+  `dev-writer` wrote, so the closer reads them against the diff and updates them
+  before merging.
+
+**What the closer never does is decide anything about the content.** It does not
+dispatch, does not fix code to make CI green, and does not judge whether a finding
+was answered well — a ticked box with an unconvincing **rejected** outcome is a
+report back to the runner, not a box it re-opens. That boundary is what keeps it
+from becoming a second runner, which is the failure the split exists to avoid.
 
 The reviewers run in parallel and ask different questions:
 
@@ -455,7 +574,7 @@ failure a spec exists to catch: a test that faithfully pins the wrong behaviour.
 
 ### Every agent pays CLAUDE.md's Bash costs
 
-This applies to all six roles, and the reviewers most of all, because they run
+This applies to every role, and the reviewers most of all, because they run
 suites and mutations in a loop. **Read CLAUDE.md's "How to work in this repo,
 and what Bash costs" before the first shell command.**
 

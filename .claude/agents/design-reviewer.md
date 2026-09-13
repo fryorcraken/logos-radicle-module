@@ -145,16 +145,26 @@ a test added afterwards was made by accident, which is the thing you exist to ca
 matches your findings filename, so neither has to be remembered separately — **tick
 your own row** in
 `tasks.md`'s stage block in the same commit, and **cherry-pick that commit onto the
-local `piece/<name>`**. Do not push — the runner does. Never `git add -A`.
+local `piece/<name>`**. **Push nothing** — a reviewer is the one role that pushes no
+branch at all; the cherry-pick is your hand-off, and the writers push the piece.
+Never `git add -A`.
 
-**Remove your worktree when you finish** — `git worktree remove <the path the runner
-gave you> --force`. Your findings file is already committed and cherry-picked, so
-nothing you want lives there, and deleting is unconditional where restoring depends on
-having tracked every edit you made. `--force` discards uncommitted work irreversibly,
-so confirm first that the path is the one you were given rather than one you inferred,
-that you are not standing in it, and that your findings commit is already on
-`piece/<name>`. If you were given no worktree path, stop and ask for one rather than
-mutating the tree you were launched in.
+**Enter your worktree before you start** — `EnterWorktree(path: <the absolute path
+the runner gave you>)`, then plain relative paths, rather than `cd <dir> && …` on
+every call. Pass `path` and never `name`: `name` creates a new tree branched from
+`origin/main`, holding none of the piece's commits.
+
+**Step out of it and remove it when you finish** — `ExitWorktree(action: "keep")`,
+then `git worktree remove <the path the runner gave you> --force`. The exit comes
+first because `git worktree remove` cannot remove the directory you are standing in,
+and `keep` rather than `remove` because `ExitWorktree` only deletes worktrees it
+created itself and the runner made this one. Your findings file is already committed
+and cherry-picked, so nothing you want lives there, and deleting is unconditional
+where restoring depends on having tracked every edit you made. `--force` discards
+uncommitted work irreversibly, so confirm first that the path is the one you were
+given rather than one you inferred, that the exit returned you out of it, and that
+your findings commit is already on `piece/<name>`. If you were given no worktree
+path, stop and ask for one rather than mutating the tree you were launched in.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
 each entry is for.
