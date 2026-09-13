@@ -85,10 +85,17 @@ plenty that has no change to attach to yet — the git-spawn-site constraint, th
 open passphrase-at-start question. Leave it. It shrinks by attrition as changes
 touch each area.
 
-`docs/M3-embedded-node-plan.md` and `docs/M3-phase0-findings.md` are research
-that PLAN.md was distilled from, kept because they cite the crate source line by
-line. They are **not** edited as phases merge, and where they disagree with
-PLAN.md, PLAN.md is the live one.
+`docs/M3-embedded-node-plan.md` is M3's own working document and **is** edited
+as phases merge — each step adds its findings there. `docs/M3-phase0-findings.md`
+beside it records one spike and is finished. Both cite the crate source line by
+line, which is what makes a claim in PLAN.md re-verifiable rather than
+re-derivable. PLAN.md is the cross-milestone view; the two overlap on M3, and
+the more recently edited one wins.
+
+An earlier version of this paragraph called both files frozen. A milestone step
+edited one of them two days later, which is the lesson: **do not write down that
+a document has stopped changing.** It is a claim about the future, and the
+cheapest kind to get wrong.
 
 ## The roles
 
