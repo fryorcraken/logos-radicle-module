@@ -120,15 +120,58 @@ click costs twenty.
 ## Scope
 
 Test code is yours, including what the dev wrote. Implementation code is not:
-change it only to mutate and restore, and restore it before you finish.
+change it only to mutate, and restore it after each mutation.
 
-If reviewers are running concurrently, mutate in a scratch copy or your own
-worktree rather than the shared tree — otherwise they see your broken code and
-report it as the author's.
+**Prove the implementation is untouched before you commit, with a diff rather than
+from memory** — `git diff --stat` against the piece branch should show test files
+only. You cannot delete your tree the way a reviewer does, because your tests are
+the deliverable, so the diff is what stands in for that. One missed restore ships a
+deliberately broken line, and **it will not fail your own suite**: you mutated the
+code precisely so a test would catch it, then restored the test's expectation to
+match.
+
+**You work in the piece's worktree, on `piece/<name>`** — the same tree the
+`spec-writer` and `dev-writer` use. You share it because you never overlap: at most
+one of the three runs at a time. Reviewers get separate trees because they are
+concurrent; you do not need one.
+
+**Nothing else writes the piece while you run.** No `spec-writer`, no `dev-writer`:
+you mutate implementation code you do not own, and a concurrent writer either
+inherits your mutation as its own broken state or overwrites your restore. Neither
+surfaces as a git conflict, because you are not touching git when it happens. If you
+find evidence another writer is active on the piece, **stop and report it** rather
+than working around it.
 
 If a test cannot be written because the code makes the property unreachable, say
 so — that is a finding about the code, not a reason to weaken the test. Same if
 a scenario turns out to be untestable as specified: report it as a spec defect
 rather than writing a test that cannot fail.
 
-Report what you kept, adapted and removed, and why.
+## When review routes a finding to you
+
+Reviewers address findings to `spec-writer`, `dev-writer` or `tester`, and the ones
+marked for you are usually a test that cannot fail for the reason its name claims.
+
+**Your brief points at the files; it does not contain them.** Expect a dispatch
+naming the piece, the worktree and `openspec/changes/<name>/findings/` — then read
+every box addressed to you. If a brief also summarises one, **read the file and
+trust it over the summary**, and say so if they disagree: the file carries the
+measurement, the summary is somebody's recollection of it.
+
+Flip each box you address and append the outcome — **fixed** (with the test that now
+fails without it), **rejected** (with the argument), or **deferred** (and where). Do
+not edit the reviewer's text; append below it. A box you cannot answer stays open.
+
+## Where your work lands
+
+**Commit straight to `piece/<name>`** — the piece's one branch, the one its PR is
+open on — and **tick the tests row** in `tasks.md`'s stage block in the same commit.
+Same when you come back to act on a finding: you are the only agent writing tests on
+the piece either time, so no side branch and no cherry-pick are needed.
+
+**Do not push and do not open a PR** — the runner pushes. Never `git add -A`; the
+tree collects `.scaffold/`, `target/`, `result-*` symlinks and `./tmp/` scratch.
+
+Report what you kept, adapted and removed, and why. Report the
+predicted-versus-observed failure for each test you proved can fail — if they
+differ, that difference is itself a finding.

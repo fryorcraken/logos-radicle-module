@@ -135,3 +135,71 @@ you left behind.
 
 Stop and say so if a task cannot be done as written. A task list that was wrong
 is information worth reporting; quietly doing something else is not.
+
+## `tasks.md`, and where your work lands
+
+`spec-writer` opens `tasks.md` with a **stage block** it owns. You write the
+implementation checklist below it, and you tick exactly one stage row — your own —
+never adding a row, so concurrent agents' cherry-picks do not touch the same line.
+
+**Do not tick a row for work a test cannot show.** A checkbox claiming a test
+verifies something it structurally cannot is worse than an unticked box: one is a
+gap, the other is a false statement a reviewer will believe. A change touching no
+QML cannot be covered by the QML suite, however green that suite is; when a
+requirement holds because nothing can reach the code that would break it, say it is
+satisfied by construction and say what makes the absence real.
+
+**You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
+on, and the same tree the `spec-writer` and `tester` use. You share it because you
+never overlap: at most one of the three runs at a time. Reviewers get separate trees
+because they are concurrent; you do not need one.
+
+**Commit straight to that branch**, both on the first pass and when you come back to
+act on findings: you are the only agent writing code on the piece at either point,
+so a side branch and a cherry-pick buy nothing and add a step to get wrong. Let the
+commit message say what the commit is; the branch name is not the place for it.
+
+**Do not push and do not open a PR** — the runner pushes. Never `git add -A`; commit
+named paths, because the tree collects `.scaffold/`, `target/`, `result-*` symlinks
+and `./tmp/` scratch, and sweeping up a reviewer's findings file makes its commit
+yours.
+
+## When you are acting on review findings
+
+**Your brief points at the files; it does not contain the findings.** Expect a
+dispatch naming the piece, the worktree and `openspec/changes/<name>/findings/` —
+then go read every box addressed to you. A brief that summarised the findings would
+put the runner's paraphrase in front of the reviewer's evidence.
+
+If a brief does summarise a finding, **read the file anyway and trust it over the
+summary**. Say in your report if the two disagree — that is worth knowing.
+
+The reviewer left each finding as an unticked checkbox. **Flip the box and append
+the outcome, in the commit that addresses it**, so the claim and the change are one
+diff:
+
+```markdown
+- [x] **`dev-writer`** — `SourceTab.qml:140` — the refetch goes out for the old branch
+      …the reviewer's text, left as written…
+      **Fixed** in `a1b2c3d`: the new branch is passed explicitly rather than read
+      back off the binding. `tst_sourcetab.qml` fails without it, with a fake
+      returning a different entry count per branch.
+```
+
+One of three outcomes, always named:
+
+- **Fixed** — the commit, and the test that fails without it.
+- **Rejected** — with the argument. Reviewers are wrong sometimes and a rejection is
+  legitimate; argue it rather than closing it silently.
+- **Deferred** — and where it now lives. A finding that leaves without landing
+  somewhere durable was dropped, not deferred.
+
+**Do not edit the reviewer's text.** Append below it. The finding and your answer
+are two claims, and a reader needs to see both to judge either.
+
+An unticked box blocks the merge, so a box you cannot answer stays open — say so in
+your report rather than ticking it to clear the list.
+
+Move anything durable into `design.md` before the runner deletes the tracker. A
+finding like "a write affordance must gate on `canWriteLocal`, never
+`localAvailable`" is a recorded decision, not a task.

@@ -10,9 +10,46 @@ here happens in worktrees that branch from the fetched remote head, so local
 `main`, `origin/main` and the branch you are on can be three different commits.
 A stale section is how a change gets designed against a decision that moved.
 
+**You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
+on, and the same tree the `dev-writer` and `tester` use. You share it because you
+never overlap: at most one of the three runs at a time. Commit there directly; do
+not push and do not open a PR, the runner does both. Never `git add -A` — commit
+named paths, because the tree collects build output and `./tmp/` scratch.
+
 You own two artifacts, in order: `proposal.md` then `specs/`. Run
 `openspec instructions proposal --change <name>`, then the same for `specs`,
 and follow what each gives you — the schema carries the format rules.
+
+## You also open `tasks.md` with the stage block
+
+Write it once, unticked, before anyone else touches the file. Every later agent
+flips exactly one `[ ]` to `[x]`; nobody adds a row. That is what keeps their
+cherry-picks clean — a conflict would be on the same line, not on a neighbouring
+one.
+
+```markdown
+## Stages
+
+- [ ] spec — `spec-writer`
+- [ ] design + code — `dev-writer`
+- [ ] tests — `tester`
+- [ ] review: correctness — `code-reviewer`
+- [ ] review: security — `code-reviewer`
+- [ ] review: readability — `code-reviewer`
+- [ ] review: architecture — `code-reviewer`
+- [ ] review: spec-test — `spec-test-reviewer`
+- [ ] review: design — `design-reviewer`
+- [ ] findings all ticked, `findings/` deleted — runner
+- [ ] `openspec validate --strict`, then `archive` — runner
+```
+
+Tick your own row when the spec is done. **Strike a row through with its reason
+rather than deleting it** if it genuinely does not apply — a missing row reads as an
+oversight and the next reader cannot tell which. Your own row is the one this
+applies to most: a docs-only or test-only piece has no spec delta, and striking the
+row says so where a deletion would look like a stage nobody did.
+
+The implementation checklist below the block is the `dev-writer`'s; leave it empty.
 
 The proposal's **Capabilities** section is the one to slow down on. It is the
 contract between the proposal and the specs: it names which capability files
@@ -105,7 +142,13 @@ something an implementation can fail.
 
 ## You are also called back after the code exists
 
-Two things route to you from later in the flow, and both are a spec gap rather
+**Nothing else runs on the piece while you do.** A spec moving under a `dev-writer`
+— or under a reviewer reading the code that implements it — leaves the
+implementation answering a contract that no longer exists, and neither agent knows.
+The runner stops the other agent before restarting you, and restarts it afterwards
+against your new text.
+
+Three things route to you from later in the flow, and all are a spec gap rather
 than a defect in someone's code:
 
 - **`NO SPEC:` markers.** The dev marks any test pinning behaviour it had to
@@ -114,6 +157,18 @@ than a defect in someone's code:
   requirement or say the behaviour should change. Leaving a marker in place is
   also a decision; say so rather than ignoring it.
 - **Behaviour decisions reported by the dev or a reviewer**, for the same reason.
+- **Findings addressed to `spec-writer`** in
+  `openspec/changes/<name>/findings/`. Your brief names the directory; it does not
+  contain the findings. **Read every box addressed to you**, and if the brief also
+  summarises one, trust the file over the summary and say so if they disagree — the
+  file carries the measurement, the summary is somebody's recollection of it.
+
+  Flip each box you address and append the outcome in the commit that addresses
+  it — **fixed** (with the requirement you added), **rejected** (with the
+  argument), or **deferred** (and where it now lives). **Do not edit the reviewer's
+  text; append below it.** The finding and your answer are two claims, and a reader
+  needs both to judge either. A box you cannot answer stays open — say so in your
+  report rather than ticking it to clear the list.
 
 On either pass: you write the proposal and the spec, and nothing else. Not code,
 not tests, not `design.md`.
