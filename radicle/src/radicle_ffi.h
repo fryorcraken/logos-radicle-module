@@ -237,6 +237,78 @@ char* radicle_local_profile_exists(const char* home);
 char* radicle_local_init_profile(const char* home, const char* alias,
                                  const char* passphrase);
 
+// ---------------------------------------------------------------------------
+// The node daemon.
+//
+// These three are unlike everything above in one way that matters: they leave
+// something RUNNING after they return. Every other function here completes
+// within its call, while a started node is threads, a bound socket and open
+// databases that outlive the boundary entirely.
+//
+// The node runs IN THIS PROCESS — `radicle-node` linked as a library and driven
+// through `Runtime::init`/`run`/`Handle::shutdown`, not a spawned binary. See
+// `docs/M3-phase0-findings.md` §3 for why, and `EmbeddedNode` for the C++ side
+// that owns this boundary.
+//
+// **One consequence to know rather than discover:** the Rust side's `guarded()`
+// panic boundary does not reach the threads the node spawns. `radicle_node_*`
+// itself is guarded like everything else, but a reactor or worker-pool panic
+// inside a running node is outside it — which is why `radicle_node_status`
+// reports `serving` (a live socket probe) alongside `running` (bookkeeping),
+// since only the first can tell a working node from one that died quietly.
+// ---------------------------------------------------------------------------
+
+/// Starts a node in this process against `home`, listening on `socket`.
+///
+/// Both paths are parameters rather than resolved on the Rust side, for the
+/// same reason `home` is everywhere else here — `LocalStore` owns resolution —
+/// and for one more that is specific to this call: a node that bound a socket
+/// the rest of the module was not watching would report as never running while
+/// running perfectly, since `localNodeRunning` probes the socket `LocalStore`
+/// resolved. Consulting `RAD_HOME`/`RAD_SOCKET` here would also let an
+/// environment this module never set aim the embedded node at the user's own
+/// `~/.radicle`, which is the one thing the mode exists to prevent.
+///
+/// An empty `passphrase` means the key is unencrypted. **An encrypted profile
+/// needs its passphrase at START, not at sign time** — `Runtime::init` takes a
+/// decrypted signing key, so there is no later point to supply one. Phase 0 left
+/// this open; `tests/node_lifecycle.rs` now measures it in both directions.
+///
+/// The node binds **no TCP port** (`listen: []`): it can fetch and announce, but
+/// peers cannot fetch from it. That is the right default for a desktop behind
+/// NAT and a real limitation a UI must state; `listening` reports it.
+///
+/// Returns only once the control socket answers, or with an error saying why it
+/// never did — a spawned thread is not a started node.
+///
+/// -> {"started":true,"home":"…","socket":"…","nodeId":"did:key:z6Mk…",
+///     "listening":[]}
+/// -> {"error":"…"}
+char* radicle_node_start(const char* home, const char* socket,
+                         const char* passphrase);
+
+/// Stops the node this process started.
+///
+/// Like `radicle_local_can_write`, a negative answer is NOT an error object:
+/// stopping a node that is not running is what the caller asked for, so it
+/// returns `{"stopped":false,"reason":"…"}`. An `{"error":…}` here means a node
+/// WAS running and did not stop cleanly.
+///
+/// -> {"stopped":bool[,"reason":"…"]} or {"error":"…"}
+char* radicle_node_stop(void);
+
+/// What this process's node is doing.
+///
+/// **`running` and `serving` answer different questions and both are reported.**
+/// `running` is bookkeeping — a node was started here and its thread has not
+/// finished. `serving` is a live probe of the control socket. They agree in
+/// every ordinary state; the two moments they disagree are the interesting ones
+/// (mid-startup, and after an internal panic), and collapsing them into one
+/// boolean would make the second invisible.
+///
+/// -> {"running":bool,"home":"…","socket":"…","serving":bool,"reason":"…"}
+char* radicle_node_status(void);
+
 /// Releases a string returned by any of the above. Passing anything else, or
 /// freeing twice, is undefined behaviour — the same contract as `free()`.
 void radicle_free_string(char* s);

@@ -42,6 +42,30 @@ class RadicleUi
     SLOT(QString getEmbeddedIdentity())
     SLOT(QString createEmbeddedIdentity(QString alias, QString passphrase))
 
+    // The node itself: start it, stop it, ask what it is doing. The daemon half
+    // of Embedded, and the only slots here that leave something RUNNING after
+    // they return — everything else answers and is finished.
+    //
+    // Neither start nor status takes a home or a socket, for the same reason
+    // the identity pair above takes no home: those paths are the core module's
+    // to resolve. One handed across this boundary would let a sandboxed view
+    // point a node at the user's own ~/.radicle, and would let the node bind a
+    // socket the read path is not watching — at which point localNodeRunning
+    // reports false forever about a node running perfectly.
+    //
+    // startNode's passphrase is not optional for an encrypted identity: the
+    // node is given a decrypted signing key when it is built, so there is no
+    // later point to supply one. Pass "" for an identity created without a
+    // passphrase, which is what createEmbeddedIdentity(alias, "") makes.
+    //
+    // getNodeStatus reports `running` AND `serving` and a view needs both:
+    // `running` is bookkeeping, `serving` probes the control socket, and the
+    // states where they disagree — starting up, or failed internally — are the
+    // ones a user cannot otherwise account for. See radicle_impl.h.
+    SLOT(QString startNode(QString passphrase))
+    SLOT(QString stopNode())
+    SLOT(QString getNodeStatus())
+
     // --- remote: proxied to a public seed, no local node needed ------------
     SLOT(QString remoteListRepos(QString query, int page, int perPage))
     SLOT(QString remoteGetRepo(QString rid))

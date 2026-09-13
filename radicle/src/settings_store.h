@@ -48,10 +48,11 @@ public:
     /// - `explore`   — no local node at all; browse a seed over HTTP.
     /// - `local`     — use an existing Radicle home; the node is not ours.
     /// - `embedded`  — a Basecamp-owned home, separate from any `~/.radicle`.
-    ///                 Its home comes from `embeddedHomeFor()`; creating the
-    ///                 identity in it is `createEmbeddedIdentity()`. Starting a
-    ///                 node in it is not implemented — see `startableModes()`
-    ///                 for why that does not make the mode unstartable.
+    ///                 Its home comes from `embeddedHomeFor()`, creating the
+    ///                 identity in it is `createEmbeddedIdentity()`, and running
+    ///                 a node in it is `startNode()` — the only mode for which
+    ///                 that is allowed, since the other two either have no home
+    ///                 or have one whose node is the user's own.
     ///
     /// **These are the same words the UI shows**, deliberately. They used to be
     /// `attach`/`seedOnly` while the view called the same things "Local" and

@@ -244,6 +244,93 @@ reproduce. Two homes, one identity, every directory-shaped assertion green.
 This was verified by temporarily returning that fixed seed and watching the
 assertion go red with the same DID on both sides.
 
+## Running a node narrows the panic invariant — deliberately, and here is where
+
+`node.rs` links `radicle-node` as a library and drives it in-process
+(`Runtime::init` / `run` / `Handle::shutdown`). That decision was spiked rather
+than assumed; `docs/M3-phase0-findings.md` §3 has the evidence, including that
+every process-global act — signal installation, the logger, the panic hook,
+`exit()` — lives in `radicle-node`'s `main.rs` and not in its library.
+
+**The consequence for this file's standing invariant is the part worth reading.**
+Everywhere else here, "every panic in this crate is caught at a known boundary"
+holds: `guarded()` wraps every `extern "C"` frame, and `tests/panic_guard.rs` is
+the inventory that keeps it true. A running node breaks it. The reactor, the
+worker pool and the control listener are threads the *library* spawns, none of
+them behind our boundary, and `Runtime::run` ends with `self.pool.run().unwrap()`
+and `self.reactor.join().unwrap()` — so those failures panic rather than
+returning `Err`.
+
+That is not a gap to close; there is no boundary to put around a thread another
+crate spawns. It is a property to report, and the shape it produces is specific:
+**a node half-dead with nothing saying so.** A panicked reactor leaves the whole
+`local*` read path answering normally, because reads never touch the daemon —
+the module looks entirely healthy and reaches no peer.
+
+So `node::status()` reports **two** fields where one would read more simply:
+
+- `running` — our own bookkeeping, the thread has not finished;
+- `serving` — a live probe of the control socket.
+
+They agree in every ordinary state. The two moments they disagree are the
+interesting ones: mid-startup, and after an internal panic. Collapsing them
+into one boolean makes the second invisible, which is exactly the failure the
+pair exists to surface. `radicle_impl.h` tells views to read both, for the same
+reason.
+
+**`Profile::load()` is not used, and that is structural.** It resolves the home
+through `profile::home()`, which reads `RAD_HOME` then `$HOME/.radicle` — so a
+node started through it could be aimed at the user's own profile by an
+environment this module never set. `node.rs` composes `Home::load` +
+`Config::load` + a keystore read instead, mirroring what `open_storage` already
+does above and for the same reason: exactly one place resolves paths, and it is
+on the C++ side.
+
+**`Home::load`, not `Home::new`** — the distinction matters enough that naming
+the wrong one here was itself a review finding. `Home::new` *creates* the home
+and all four subdirectories if they are missing (`profile.rs:586-602`), which is
+right for `init_profile`, whose job is to make a home, and wrong for starting a
+node: against a typo'd path it would silently leave an empty Radicle home on
+disk and then fail with "no signing key", reporting the second problem after
+causing the first.
+
+**An encrypted profile needs its passphrase at start.** `Runtime::init` takes a
+decrypted `SigningKey`, so there is no later point to supply one. Phase 0 left
+this as inference from `main.rs`'s flow; `tests/node_lifecycle.rs` now measures
+it in both directions, which is what separates "the passphrase is required" from
+"the node never starts" and from "the passphrase is ignored".
+
+### Two traps this file's node code walked into, both worth not re-learning
+
+**`Runtime::init` is not a constructor — it starts everything.** By the time it
+returns, the reactor thread and the whole worker pool are running and the
+control socket is bound (`runtime.rs:226`, `:234`, `:249`), and `radicle-node`
+has **no `Drop` impl** for `Runtime` or `ControlSocket`; the socket file is
+unlinked only on `run()`'s success path (`:307`). So *dropping* a runtime stops
+nothing — it detaches the threads and leaves the socket bound and its file on
+disk, after which every later start fails inside `Runtime::bind` with
+`AlreadyRunning` and nothing explains why. That is why `Node::shut_down` takes
+`self` and every path that gives up a node goes through it, including the one
+where the thread was never spawned.
+
+**Do not take the node lock twice in one statement.** The obvious way to refuse
+a second start is `locked().take()`, inspect, then `*locked() = Some(...)` to
+put a still-running node back. That is a deadlock: the mutex is not reentrant
+and the first temporary guard lives to the end of the statement. It does not
+fail — the test suite *hangs*, which is what a deadlock always looks like and
+why it is worth naming here rather than rediscovering. Take one named guard,
+decide under it, and release before doing anything that waits.
+
+**Never probe the control socket with `Node::is_running()`.** It sends a `Status`
+command and reads the reply with a **30-second** timeout
+(`radicle-0.25.1/src/node/command.rs:24`) — and it blocks for the full 30
+seconds in exactly the half-dead state worth detecting, because the control
+listener is detached and still accepts while nothing answers. This module's calls
+arrive serialized, so one such probe freezes every `remote*` call and every local
+read behind it. `socket_answers` is a bare `connect`, matching what
+`LocalStore::nodeRunning()` already does on the C++ side, and its weaker
+guarantee is documented where it is defined.
+
 ## `cargo clippy -- -D warnings` is load-bearing here, not style policing
 
 CI runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.

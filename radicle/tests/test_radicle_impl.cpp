@@ -1298,3 +1298,224 @@ LOGOS_TEST(a_seed_is_adopted_from_the_settings_it_was_given_not_from_a_fixed_def
     LOGOS_ASSERT_EQ(parse(implB.getCapabilities())["remoteSeed"].get<std::string>(),
                     std::string("https://beta.example.test"));
 }
+
+// ===========================================================================
+// The node.
+//
+// What this layer owns is the GATING — which modes may start a node, and what
+// is refused before the backend is reached. Whether a node actually starts,
+// binds and stops is `rust-ffi/tests/node_lifecycle.rs`, which can stand up a
+// real runtime; standing one up here would make the C++ unit tests slow, need a
+// socket path short enough to bind, and prove something the layer below already
+// proves.
+//
+// Every test below therefore drives a path that returns BEFORE
+// `EmbeddedNode::start` is called. That is a deliberate boundary, not a gap:
+// each one asserts a decision this file makes.
+// ===========================================================================
+
+LOGOS_TEST(starting_a_node_in_local_mode_is_refused_because_that_node_is_the_users)
+{
+    // The refusal that matters most, and it is not about tidiness: `local` names
+    // a node the user runs themselves, very possibly right now. Starting a
+    // second one against that home puts two nodes on one git storage, which is
+    // the corruption hazard the whole isolation model exists to prevent.
+    ScopedRadHome home("node-start-local");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("node-start-local");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("node-start-local")});
+    impl.setSetting("mode", "local");
+
+    // The profile IS readable in this environment — without asserting that,
+    // every assertion below would also pass against a module that could not see
+    // any profile at all and refused for an unrelated reason.
+    LOGOS_ASSERT_TRUE(parse(impl.getCapabilities())["localAvailable"].get<bool>());
+
+    const auto reply = parse(impl.startNode(""));
+    LOGOS_ASSERT_TRUE(reply.contains("error"));
+
+    // The message must name the mode and point at the one that does run a node.
+    // A bare "not supported" leaves a user with a control that failed and no
+    // idea what to do instead.
+    const std::string error = reply["error"].get<std::string>();
+    LOGOS_ASSERT_CONTAINS(error, std::string("local"));
+    LOGOS_ASSERT_CONTAINS(error, std::string("embedded"));
+}
+
+LOGOS_TEST(starting_a_node_in_explore_mode_is_refused_for_a_different_reason)
+{
+    // Distinct from the case above, and the distinction is the point: `explore`
+    // has no home at all — that is its definition — so there is nothing to start
+    // a node in. `local` has a home and a node that is not ours.
+    //
+    // Two refusals with two reasons rather than one generic "wrong mode",
+    // because the user's next action differs: one is "your node is already
+    // yours to run", the other is "pick a mode that has a node".
+    ScopedRadHome home("node-start-explore");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("node-start-explore");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("node-start-explore")});
+    impl.setSetting("mode", "explore");
+
+    const auto reply = parse(impl.startNode(""));
+    LOGOS_ASSERT_TRUE(reply.contains("error"));
+
+    const std::string error = reply["error"].get<std::string>();
+    LOGOS_ASSERT_CONTAINS(error, std::string("explore"));
+    LOGOS_ASSERT_CONTAINS(error, std::string("embedded"));
+
+    // And it is NOT the local-mode sentence. Without this the two refusals could
+    // collapse into one message and both tests above would still pass — the
+    // same-answer-for-every-input trap, arriving through error text.
+    LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+}
+
+LOGOS_TEST(starting_a_node_with_no_embedded_identity_says_so_in_the_modes_own_words)
+{
+    // The ordinary first state of Embedded: a home resolved, nothing in it yet.
+    // This is not a misconfiguration and must not read as one — in particular it
+    // must not say "run `rad auth`", which is advice for the mode whose whole
+    // premise is that the user never does.
+    //
+    // `NodePaths::absentProfileReason` carries that sentence, and this asserts
+    // the node path reuses it rather than inventing a second, worse one.
+    ScopedRadHome home("node-start-no-identity");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("node-start-no-identity");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("node-start-no-id")});
+    impl.setSetting("mode", "embedded");
+
+    const auto reply = parse(impl.startNode(""));
+    LOGOS_ASSERT_TRUE(reply.contains("error"));
+
+    const std::string error = reply["error"].get<std::string>();
+    LOGOS_ASSERT_CONTAINS(error, std::string("no embedded identity yet"));
+    // The sentence that must never appear here.
+    LOGOS_ASSERT_TRUE(error.find("rad auth") == std::string::npos);
+
+    // And RAD_HOME's real, readable profile was not reached. A start that fell
+    // through to the environment would have found a perfectly good profile
+    // there — which is the aliasing failure, arriving through the node path.
+    LOGOS_ASSERT_TRUE(error.find(home.dir) == std::string::npos);
+}
+
+LOGOS_TEST(stopping_and_status_answer_in_every_mode_including_ones_that_cannot_start)
+{
+    // **Deliberately NOT gated on the mode, unlike `startNode`**, and this is
+    // what pins that asymmetry.
+    //
+    // A node that is running has to be stoppable whatever the settings now say.
+    // A user who starts an embedded node and then switches to Local would
+    // otherwise hold a running node with no control that can reach it — a mode
+    // switch as a way to strand a daemon. Status is ungated for the same reason
+    // plus one of its own: it is the call a view polls, and one that refused
+    // outside Embedded would leave a UI unable to explain a node it can see.
+    ScopedRadHome home("node-stop-any-mode");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("node-stop-any-mode");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("node-stop-any")});
+
+    for (const char* mode : {"explore", "local", "embedded"}) {
+        impl.setSetting("mode", mode);
+
+        // Nothing is running in this test process, so the answer is
+        // `stopped:false` with a reason — an ANSWER, not an error. A caller that
+        // asked for the node to be stopped has got what it asked for, and making
+        // that a failure means every shutdown path special-cases the normal one.
+        const auto stopped = parse(impl.stopNode());
+        LOGOS_ASSERT_FALSE(stopped.contains("error"));
+        LOGOS_ASSERT_FALSE(stopped["stopped"].get<bool>());
+
+        // Status always reports BOTH halves. A view reading only `running` would
+        // be blind to a node that died internally, which is the failure the two
+        // fields exist to separate.
+        const auto status = parse(impl.getNodeStatus());
+        LOGOS_ASSERT_FALSE(status.contains("error"));
+        LOGOS_ASSERT_FALSE(status["running"].get<bool>());
+        LOGOS_ASSERT_FALSE(status["serving"].get<bool>());
+    }
+}
+
+LOGOS_TEST(a_too_long_socket_is_reported_before_a_start_is_attempted)
+{
+    // The 108-byte `sun_path` cap, named in full rather than discovered.
+    //
+    // This is the failure Phase 0 measured and the one whose native error costs
+    // an afternoon: the kernel says "path must be shorter than SUN_LEN", naming
+    // neither the path, nor its length, nor the limit. `pathsProblem` names all
+    // three, and the node path must surface it BEFORE attempting a start —
+    // otherwise the useful message is replaced by the useless one.
+    ScopedRadHome home("node-long-socket");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("node-long-socket");
+
+    const auto path = scratchSettingsPath("node-long-socket");
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+    impl.setSetting("mode", "embedded");
+
+    // Written straight into the settings file rather than through `setSetting`,
+    // which validates the length and would refuse it. That refusal is the right
+    // behaviour and is covered in test_settings_store.cpp; what is under test
+    // here is the SECOND line of defence — a socket that arrived some other way
+    // (a hand-edited file, or the environment, which the store never sees).
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << nlohmann::json{
+            {"mode", "embedded"},
+            {"radHome", ""},
+            {"radSocket", "/tmp/" + std::string(120, 'x') + ".sock"},
+            {"gitPath", ""},
+            {"remoteSeed", ""},
+        }.dump();
+    }
+
+    // Rebuilt so the store re-reads the file above — and then `setSetting` is
+    // called, because construction alone is not enough here.
+    //
+    // `setDependenciesForTest` REPLACES `m_local` with the store it is handed,
+    // which is the environment-resolved default. Only `setSetting` on a
+    // home-affecting key runs `storeForSettings()`, which is what applies the
+    // mode and the socket from the file. Without this the impl sits on
+    // RAD_HOME's profile and the assertions below fail against a message about
+    // a completely different home — which is exactly how the first draft of this
+    // test failed, and is worth recording because every other Embedded test in
+    // this file happens to call `setSetting` for its own reasons and so never
+    // meets it.
+    //
+    // Re-setting `mode` to the value already in the file is the smallest way to
+    // trigger that rebuild.
+    auto reloaded = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+    reloaded.setSetting("mode", "embedded");
+    const auto reply = parse(reloaded.startNode(""));
+
+    LOGOS_ASSERT_TRUE(reply.contains("error"));
+    const std::string error = reply["error"].get<std::string>();
+
+    // All three facts, because a user cannot act on "too long" without knowing
+    // which path, by how much, and against what limit.
+    LOGOS_ASSERT_CONTAINS(error, std::string("too long"));
+    LOGOS_ASSERT_CONTAINS(error, std::string(".sock"));   // the path
+    LOGOS_ASSERT_CONTAINS(error, std::string("130"));     // its actual length
+    // The limit as a user experiences it: 107 usable bytes, the message spelling
+    // out that the 108th is the NUL. Asserted as 107 rather than 108
+    // deliberately — the first draft asserted "108" and failed here, which is the
+    // check doing its job: `kSunPathMax` is the capacity INCLUDING the
+    // terminator, and reporting that raw number would overstate what fits by
+    // one. A user shortening a path to exactly 108 bytes on our advice would hit
+    // the same error again.
+    LOGOS_ASSERT_CONTAINS(error, std::string("107"));
+
+    // And it never reached the backend. The Rust side's message for a home with
+    // no key is a perfectly good sentence about a different problem, and letting
+    // it win here would replace the one message that names the cap with one that
+    // does not — the exact substitution this ordering exists to prevent.
+    LOGOS_ASSERT_TRUE(error.find("no signing key") == std::string::npos);
+}

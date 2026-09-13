@@ -13,6 +13,7 @@ pub mod cobwrite;
 pub mod env;
 pub mod gitread;
 pub mod local;
+pub mod node;
 pub mod profileinit;
 
 use std::ffi::{CStr, CString};
@@ -437,6 +438,72 @@ pub unsafe extern "C" fn radicle_local_init_profile(
 ) -> *mut c_char {
     let (home, alias, passphrase) = (read_str(home), read_str(alias), read_str(passphrase));
     guarded(move || profileinit::init_profile(&home, &alias, &passphrase))
+}
+
+// ---------------------------------------------------------------------------
+// The node daemon.
+//
+// These three are the only entry points that leave something RUNNING behind
+// after they return. Everything above completes within its call; a started node
+// is threads, a bound socket and open databases that outlive the FFI boundary
+// entirely.
+//
+// That has one consequence worth stating here rather than only in `node.rs`:
+// `guarded()` still catches a panic in THESE frames, but it has no reach into
+// the threads `radicle-node` spawns. `docs/rust-ffi.md`'s invariant — every
+// panic in this crate is caught at a known boundary — is narrowed by this
+// module, not preserved by it. `radicle_node_status` exists partly so that a
+// node which died behind that boundary is visible rather than silent.
+// ---------------------------------------------------------------------------
+
+/// Start a node in this process, against `home`, listening on `socket`.
+///
+/// Both paths are parameters rather than resolved here: exactly one place in
+/// this module resolves them (`LocalStore`), and a node that bound a socket the
+/// rest of the module was not watching would report as never running while
+/// running perfectly. An empty `passphrase` means the key is unencrypted.
+///
+/// Returns only once the control socket answers, or with an error saying why it
+/// never did — a spawned thread is not a started node.
+///
+/// -> {"started":true,"home":"…","socket":"…","nodeId":"…","listening":[…]}
+/// -> {"error":"…"}
+///
+/// # Safety
+/// `home`, `socket`, `passphrase` must each be NULL or a valid NUL-terminated
+/// UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_node_start(
+    home: *const c_char,
+    socket: *const c_char,
+    passphrase: *const c_char,
+) -> *mut c_char {
+    let (home, socket, passphrase) = (read_str(home), read_str(socket), read_str(passphrase));
+    guarded(move || node::start(&home, &socket, &passphrase))
+}
+
+/// Stop the node this process started.
+///
+/// Stopping a node that is not running is an answer, not an error:
+/// `{"stopped":false,"reason":"…"}`.
+///
+/// -> {"stopped":bool[,"reason":"…"]} or {"error":"…"}
+#[no_mangle]
+pub extern "C" fn radicle_node_stop() -> *mut c_char {
+    guarded(node::stop)
+}
+
+/// What this process's node is doing.
+///
+/// Reports `running` (our own bookkeeping) and `serving` (a live probe of the
+/// control socket) separately, because the state where they disagree — a thread
+/// alive with a node that has failed internally — is invisible to either one
+/// alone. See `node::status`.
+///
+/// -> {"running":bool,"home":"…","socket":"…","serving":bool,"reason":"…"}
+#[no_mangle]
+pub extern "C" fn radicle_node_status() -> *mut c_char {
+    guarded(node::status)
 }
 
 /// Frees a string previously returned by one of the `radicle_local_*`

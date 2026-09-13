@@ -67,6 +67,40 @@ QString RadicleUiBackend::createEmbeddedIdentity(QString alias, QString passphra
     return result;
 }
 
+QString RadicleUiBackend::startNode(QString passphrase)
+{
+    const QString result = modules().radicle.startNode(passphrase);
+    // A running node moves `localNodeRunning`, which is what a view reads to
+    // say whether this machine can reach the network at all. Refreshed for the
+    // same reason the two above are.
+    //
+    // Note the core module ALSO emits `localAvailabilityChanged` on a successful
+    // start, so a view gets the new capabilities whether it is watching the
+    // signal or reading this reply. That is deliberate rather than redundant:
+    // the signal reaches screens that did not make the call, and this keeps the
+    // auto-synced property correct for the one that did without it having to
+    // wait for a round trip it already made.
+    setCapabilities(modules().radicle.getCapabilities());
+    return result;
+}
+
+QString RadicleUiBackend::stopNode()
+{
+    const QString result = modules().radicle.stopNode();
+    setCapabilities(modules().radicle.getCapabilities());
+    return result;
+}
+
+QString RadicleUiBackend::getNodeStatus()
+{
+    // A plain read, and the one a view polls while a node is starting or
+    // stopping. Deliberately does NOT refresh capabilities: this is called
+    // repeatedly, and doing a full capability probe — which stats a profile,
+    // connects to a socket and spawns `git --version` — on every poll would make
+    // watching a node start cost more than starting it.
+    return modules().radicle.getNodeStatus();
+}
+
 // --- remote ----------------------------------------------------------------
 
 QString RadicleUiBackend::remoteListRepos(QString query, int page, int perPage)
