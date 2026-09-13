@@ -25,11 +25,12 @@ unrelated placeholder, so install with the scoped name.
 
 `docs/` also holds background documents: `M2.2-write-actions-design.md`
 (shipped), `M2.2-write-features-proposal.md`, and `M3-embedded-node-plan.md`
-with `M3-phase0-findings.md` beside it. **Those two M3 files are frozen
-research, superseded as the forward-looking document by `docs/PLAN.md`** — they
-are kept because they cite the crate source line by line, so a claim can be
-re-verified rather than re-derived, and they are no longer edited as phases
-merge. Which phases have landed is a `git log` question; this line deliberately
+with `M3-phase0-findings.md` beside it. **`M3-embedded-node-plan.md` is M3's
+own working document and is still maintained** — each step adds its findings
+there, and it cites the crate source line by line, which is what makes a claim
+re-verifiable rather than re-derivable. `docs/PLAN.md` is the *cross-milestone*
+forward-looking file; the two overlap on M3 and the more recently edited one
+wins. Which phases have landed is a `git log` question; this line deliberately
 does not repeat it, because it used to say "not started", which was true when
 written and false two merges later.
 

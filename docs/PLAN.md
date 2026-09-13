@@ -74,22 +74,13 @@ the config panel exists to remove:
 
 ### Still ahead
 
-**Node start/stop (Phase 2 step 3).** The one step that needs the
-`radicle-node` crate, and therefore the whole of the dependency cost: a large
-number of added `Cargo.lock` entries, a new `flake.nix` vendor hash, and a
-materially bigger link. It is its own commit for that reason — folding it into
-a step that also creates identities would put a large dependency review and a
-keygen review in one diff where neither can be read for itself. Phase 0
-measured the exact figures on its spike branch; see
-[`M3-phase0-findings.md`](M3-phase0-findings.md) §4 rather than a number
-repeated here, since the next person to add the dependency will measure it
-again anyway.
-
-The library is drivable in-process: `Runtime::init` / `Runtime::run` /
-`Handle::shutdown` is a real lifecycle, the caller supplies the signal channel,
-and every process-global act (signal installation, logger, panic hook, `exit()`)
-lives in the binary's `main.rs` rather than the library — which the spike
-confirmed by running a node start-to-stop, not only by reading.
+~~**Node start/stop (Phase 2 step 3).**~~ **Shipped.** `startNode`, `stopNode`
+and `getNodeStatus` run `radicle-node` in-process. What it settled, and the
+traps it found — a runtime that leaks threads if dropped, a 30-second blocking
+`is_running()`, `running` versus `serving` as separate questions because a
+node's threads are outside `guarded()`'s reach — are in
+[`rust-ffi.md`](rust-ffi.md) and
+[`M3-embedded-node-plan.md`](M3-embedded-node-plan.md).
 
 **The wizard and the configuration panel (Phase 2 step 4).** QML only, provided
 `getEmbeddedIdentity` and `createEmbeddedIdentity` are still exposed through
@@ -142,13 +133,14 @@ that code will look.
 **Whether `git` is available inside a shipped Basecamp bundle is still open.**
 Testable now, and worth testing early, since it constrains every write feature.
 
-**Whether the node needs the passphrase at start or only at sign time is still
-open** — it determines whether the wizard can start a node without prompting.
-The binary's flow reads the secret key up front and fails if it cannot, which
-suggests "at start", but that is inference rather than measurement, and only
-step 3 can settle it. The neighbouring half *is* settled: an encrypted profile
-is unusable for writes without its passphrase, and an unencrypted one is
-immediately signable.
+~~**Whether the node needs the passphrase at start or only at sign time**~~ —
+**answered by step 3: at start.** `Runtime::init` takes an already-decrypted
+signing key, so there is no later point at which one could be supplied. The
+consequence is a real constraint on the wizard rather than a detail: **an
+encrypted embedded profile cannot start unattended**, so offering a passphrase
+by default — which is the right security posture — means the node needs an
+unlock every time Basecamp starts it. Step 4 has to state that trade at the
+moment the user chooses, not discover it later.
 
 **A fully isolated embedded node has its own NID/DID**, and for a user who
 already runs `rad` it is a new machine joining their network. ~~Why that was
@@ -170,12 +162,15 @@ against.** `radicle-node` carries `uds_windows` and `radicle-windows`
 dependencies, so it is not Linux-only, but this repo has only ever built and
 tested Linux.
 
-**One thing left open on purpose:** the module is not told which Basecamp
-profile it runs under, so the control socket falls back to an unscoped name, and
-two profiles sharing a runtime dir would collide. `resolveSocket` supports
-per-profile naming and its unit tests pin it, but nothing reaches it in
-production. The `radSocket` setting is the escape hatch — but step 3, which
-actually binds the socket, should revisit whether the profile name can be
+**One thing left open on purpose, and step 3 made it worse:** the module is not
+told which Basecamp profile it runs under, so the control socket falls back to
+an unscoped name, and two profiles sharing a runtime dir collide.
+`resolveSocket` supports per-profile naming and its unit tests pin it, but
+nothing reaches it in production. **Until step 3 this was two readers probing
+one path, which is harmless because neither owns it; now one profile's node
+*binds* it, so the second fails to start with an error about a socket in use
+rather than about profiles.** The `radSocket` setting is the escape hatch — but
+the question of whether the profile name can be
 plumbed through.
 
 ### Testing it, per this repo's own rules

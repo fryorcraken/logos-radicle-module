@@ -1,21 +1,21 @@
 # M3 — An embedded Radicle node, set up from inside Basecamp
 
-> **Superseded as the forward-looking document by
-> [`docs/PLAN.md`](PLAN.md).** What is still to build, and the constraints that
-> bind it, moved there when this repo adopted the spec-driven flow; PLAN.md is
-> what the role agents read, and it is the only one of the two that is kept
-> current.
+> **This is the milestone's working document, and it is still maintained** —
+> step 3 added its findings here. [`docs/PLAN.md`](PLAN.md) is the
+> *cross-milestone* forward-looking file the role agents read; this one carries
+> M3's depth, and every technical claim below names where it came from, so a
+> claim in PLAN.md can be re-verified here rather than re-derived.
 >
-> **This file is kept as research, and is no longer edited as phases merge.**
-> Its value is that every technical claim names where it came from, so a claim
-> in PLAN.md can be re-verified here rather than re-derived. Where the two
-> disagree, PLAN.md is the live one — and the phase status lines below are
-> frozen at the day this was superseded. Ask `git log` instead.
+> An earlier draft of this banner declared the file frozen. That was wrong —
+> step 3 edited it two days later — and asserting "no longer edited" over a
+> document being actively edited is the exact false-but-plausible claim the
+> spec-driven flow exists to remove. Where the two files disagree, prefer the
+> one whose git history is more recent, and fix the other.
 
-Status: **research, superseded.** Which phases have landed is a `git log`
-question, not a sentence to maintain here — this line used to claim "Phases 1-3
-are not started" while Phase 1 had shipped, which is the failure mode CLAUDE.md's
-"Keeping this file true" section is about.
+Status: **live.** Which phases have landed is a `git log` question, not a
+sentence to maintain here — this line used to claim "Phases 1-3 are not started"
+while Phase 1 had shipped, which is the failure mode CLAUDE.md's "Keeping this
+file true" section is about.
 
 Every technical claim below was checked against the `radicle 0.25.1` source
 vendored in `~/.cargo/registry`, the crates.io API, and the local docs
