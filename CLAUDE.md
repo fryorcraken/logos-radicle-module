@@ -10,10 +10,12 @@ own file, because they only matter when you are doing that specific thing.
 | Read | When |
 |---|---|
 | [`docs/PLAN.md`](docs/PLAN.md) | **Before any design decision.** What is not built yet, and the constraints that bind it. Read it from `origin/main`. |
+| [`.claude/agents/RUNNER.md`](.claude/agents/RUNNER.md) | **Before dispatching your first agent.** Written for the session that orchestrates rather than for the agents it launches: how to tell whether an agent is still running, how many to launch at once, what it reads and what it only points at, and why one piece is one PR. The mistakes it prevents all came from its rules living in files the runner never opened. |
 | [`.claude/agents/README.md`](.claude/agents/README.md) | **Before starting a change.** The spec-driven flow: which document answers which question, the role agents, and how a change lands — one branch, one PR, findings in a tracked file. |
 | [`docs/rust-ffi.md`](docs/rust-ffi.md) | Touching `radicle/rust-ffi/`, the `local*` read path, or `flake.nix`'s per-system handling |
 | [`docs/writes.md`](docs/writes.md) | Touching the `local*` **write** path — `cobwrite.rs`, `LocalWriter`, the composers — or adding a write action |
 | [`docs/e2e.md`](docs/e2e.md) | Running, adding to, or debugging a sitometres spec (`radicle-ui/tests/ui/*.yaml`) |
+| [`docs/OPENSPEC-ARCHIVE.md`](docs/OPENSPEC-ARCHIVE.md) | **Archiving an OpenSpec change** — run as a commit on the piece branch, before CI and the merge |
 
 **Changes go through the spec-driven flow** — an OpenSpec change under
 `openspec/changes/<name>/`, written and reviewed by the role agents in
@@ -170,6 +172,17 @@ The ones that catch people repeatedly:
   working directory. Verified the expensive way: every bare `npx …` this repo
   has run went through unprompted, and the single prompt came from prefixing
   one with a `cd`.
+
+  **When the working directory genuinely is wrong, `EnterWorktree` moves the
+  session rather than prefixing a command.** An agent working in a worktree
+  enters it once with `EnterWorktree(path: <absolute path>)` and then uses
+  ordinary relative paths: no `cd` for the checker to trip over, and no
+  `git -C <dir>` spread through every git call. That is the shape to put in an
+  agent's brief — see [`.claude/agents/README.md`](.claude/agents/README.md).
+  Pass `path` and never `name`: `name` creates a *new* worktree branched from
+  `origin/main`, so an agent meant to work on an existing piece lands in a tree
+  holding none of its commits. Note the tool moves only the agent that calls it,
+  so a runner cannot enter a worktree on a subagent's behalf.
 - **A long output is not a reason to pipe.** This is the most common way the rule
   above gets broken by someone who already knows it: appending `| tail -30` to
   keep a test run's output manageable turns a call the checker would have
@@ -722,14 +735,18 @@ the latest `ui-tests.yml` run says — read that rather than a claim here.
 
 ## CI
 
-`.github/workflows/ci.yml` runs the fast layers on every push and pull request:
+`.github/workflows/ci.yml` runs the fast layers on every pull request, and on
+pushes to `main` and `v*` tags — **not on a push to a feature branch**, which
+gets no run at all until its PR is open:
 QML syntax, metadata lint, qmllint, the QML component tests and the LGX builds.
 It also validates that the sitometres specs parse.
 
 `.github/workflows/ui-tests.yml` runs the sitometres specs for real, on pushes
 to `main`, on pull requests, and on demand. It is a **matrix, one job per
-spec** (`browse`, `branches`, `source`, `sync`, `write`) — `SPEC` used to be
-hardcoded to `browse.yaml`, so three specs sat in the tree running nowhere. If
+spec** (`browse`, `branches`, `source`, `sync`, `write`, `local`) — `SPEC` used
+to be hardcoded to `browse.yaml`, so three specs sat in the tree running
+nowhere. Read the matrix in `ui-tests.yml` rather than this list, which has
+already been stale once. If
 you add a spec, add it to that matrix, or it is decoration. `write` is the odd
 one out: it needs a signable key, so the job seeds a throwaway profile for the
 run and hands it over as `RAD_HOME` — see [`docs/writes.md`](docs/writes.md).
