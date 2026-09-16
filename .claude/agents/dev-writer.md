@@ -42,7 +42,20 @@ route by kind:
 - **A decision about technology or strategy** — a library, a data structure, an
   encoding, a type chosen to make a mistake unrepresentable — goes in
   `design.md` under Decisions: what you chose, what else you considered, and
-  what ruled the alternatives out.
+  what ruled the alternatives out. **Where the decision is a guard, record what
+  breaks without it** — "removing this turns exactly these tests red". You are
+  the only person who cheaply knows that, and it is what stops the guard being
+  deleted later by someone who cannot see what it was for.
+
+**You own the PLAN.md reasoning migration.** `spec-writer` runs before
+`design.md` exists, so it strikes through the *behaviour* PLAN.md described and
+hands you a list of the *reasoning* passages this change acted on — rejected
+alternatives, spike results, a "why X and not Y". As you write each Decisions
+entry, move the passage that belongs to it out of PLAN.md and into that entry.
+Do not leave a second copy: two copies drift and the wrong one gets read.
+PLAN.md keeps what is still ahead. `design-reviewer` checks you did this, and a
+passage that was struck from PLAN.md but never landed in `design.md` is the
+silent failure to avoid — the reasoning is then only in a commit message.
 
 **Make the unspecified behaviour visible in the code**, not only in your report.
 Write a test for it, marked so it cannot be missed:
@@ -71,17 +84,41 @@ by accident, and nobody ever decides whether it was right.
 
 And the rules that bite hardest here:
 
-- **Absolute paths, and `Read`/`Edit`/`Write` over shell file manipulation.**
-- **Never trust inbound data.** Anything from a peer is attacker-controlled:
-  validate at the boundary, before it reaches a state machine. No panic may be
-  reachable from malformed input — the SDK has no panic guard, and an unguarded
-  panic aborts the module process.
+- **`Read`/`Edit`/`Write`, never `sed -i`, a redirect, or a heredoc.** This is
+  not style: the permission checker cannot analyse those shapes, so each costs
+  the user an approval click, and `sed -i 's/x/y/'` silently changes every match
+  or none and exits 0 either way, where `Edit` refuses a string that is missing
+  or non-unique. CLAUDE.md's Bash-cost table is the full list; read it before
+  reaching for a shell.
+- **Reach for `lgs` for anything build-, run- or install-shaped.** Raw
+  `nix build` has one legitimate use: the core module's unit tests.
+- **Scratch files go in `./tmp/`**, not `/tmp` or a session scratchpad.
 - **One failure shape.** `{"error":"..."}`, never a partial success.
+- **A guard is a job.** `guarded()` in `rust-ffi` exists solely to stop a panic
+  unwinding through an `extern "C"` frame. Keeping it separate is what made "is
+  it called everywhere?" a question with an answer.
+- **Gate every write affordance on `getCapabilities().canWriteLocal`**, never on
+  `localAvailable`: a profile can exist while its key stays locked, and a compose
+  box that cannot be submitted loses whatever the user typed.
 
 **Write tests as you go.** You are not the owner of the final suite — a separate
 agent writes tests from the spec and will adapt, keep or remove yours — but a
 test you needed while implementing usually encodes an edge case you found in the
 code, which is information the tester would otherwise have to rediscover.
+
+**The trap that has cost this repo most: a fake returning the same thing for
+every input cannot tell "reloaded" from "never reloaded".** A branch-switch
+feature shipped completely dead, with every gate green, because its test
+asserted an empty tree against a fake returning an empty tree for *every*
+branch — true whether the refetch ran or not. Deleting the whole handler left
+every test passing. **Make fakes return input-dependent data.** Before writing
+an assertion, ask what the null implementation would produce; if it would pass,
+the assertion is decoration.
+
+Pick the cheapest layer that can actually see what you changed, and be honest
+when none of them can: a change touching no QML can break no QML test, so a
+green component suite proves nothing about it. Say so rather than letting the
+green stand in for coverage.
 
 Prefer TDD where the behaviour is known up front: write the test, watch it fail,
 implement. For a bug, that ordering is not optional — confirm a failing test
@@ -112,6 +149,13 @@ on, and the same tree the `spec-writer` and `tester` use. You share it because y
 never overlap: at most one of the three runs at a time. Reviewers get separate
 trees because they are concurrent; you do not need one.
 
+**Enter it first** — `EnterWorktree(path: <the absolute path your brief names>)` —
+and then use plain relative paths. Not `cd <dir> && …`: the permission checker
+cannot analyse a compound command, so that shape costs the user an approval click
+on every call even when the command itself is allow-listed. If the call is
+refused, work through absolute paths and `git -C <worktree> …`, and say so in your
+report.
+
 **Commit straight to that branch.** Both on the first pass and when you come back
 to act on findings: you are the only agent writing code on the piece at either
 point, so a side branch and a cherry-pick buy nothing and add a step to get wrong.
@@ -119,13 +163,17 @@ Let the commit message say what the commit is; the branch name is not the place
 for it.
 
 Never `git add -A`; commit named paths, because a worktree collects build output
-and a gitignored SDK symlink, and sweeping up a reviewer's findings file makes
-its commit yours.
+(`.scaffold/`, `target/`, `result-*` out-links, `./tmp/` scratch), and sweeping
+up a reviewer's findings file makes its commit yours. The README's branch section
+has the artefact list.
 
 ## Open the PR before you hand back
 
 **Push `piece/<name>` and open its PR as your last act on the first pass**, before
-the runner dispatches reviewers.
+the runner dispatches reviewers. **A push alone gets you no CI at all**: both
+workflows trigger on `pull_request` and on pushes to `main` (`ci.yml` on `v*` tags
+too), never on a push to a piece branch. So opening the PR later means the first
+news of the build arrives after six reviewers have already read the code.
 
 On the findings pass the PR is already open: commit, push to it, and never open a
 second. One piece is one PR, so `gh pr list --head piece/<name>` before you
@@ -158,10 +206,11 @@ the outcome, in the commit that addresses it**, so the claim and the change are 
 diff:
 
 ```markdown
-- [x] **`dev-writer`** — `wire.rs:96` — `Request::get` drops explicit nulls
+- [x] **`dev-writer`** — `SourceTab.qml:140` — the refetch goes out for the old branch
       …the reviewer's text, left as written…
-      **Fixed** in `a1b2c3d`: four handler fixtures, each verified against the
-      mutation it names.
+      **Fixed** in `a1b2c3d`: the new branch is passed explicitly rather than read
+      back off the binding. `tst_sourcetab.qml` fails without it, with a fake
+      returning a different entry count per branch.
 ```
 
 One of three outcomes, always named:
@@ -178,6 +227,6 @@ are two claims, and a reader needs to see both to judge either.
 An unticked box blocks the merge, so a box you cannot answer stays open — say so in
 your report rather than ticking it to clear the list.
 
-Move anything durable into `design.md` before the tracker is deleted. A finding
-like "the creator key cannot moderate the Stoa it creates" is a recorded decision,
-not a task.
+Move anything durable into `design.md` before the `closer` deletes the tracker. A
+finding like "a write affordance must gate on `canWriteLocal`, never
+`localAvailable`" is a recorded decision, not a task.
