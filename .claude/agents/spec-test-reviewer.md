@@ -20,116 +20,59 @@ The one exception to not reading the implementation is the mutation sampling in
 part 2, which necessarily edits code. Change it, run the test, restore it, and
 read no further than the lines you are mutating.
 
-**The runner gives you a worktree of your own** under `.claude/worktrees/`, on a
-branch named `review/<name>/spec-test`, and names its path in your dispatch. If it
-did not, **stop and ask** — do not mutate the tree you were launched in, which is the
-piece's own. A worktree is made with `git worktree add`, never a copy of the repo,
-which into `./tmp/` would copy the repo into itself. Mutation runs collide: two
-reviewers sharing a tree see each other's broken code and cannot tell it from the
-author's.
+**You get a worktree of your own** under `.claude/worktrees/`, on a branch named
+`review/<name>/spec-test`. Mutation runs collide: two reviewers sharing a tree see
+each other's broken code and cannot tell it from the author's.
 
-**Enter it before you start** — `EnterWorktree(path: <the absolute path you were
-given>)` — and then run everything with plain relative paths. `cd <dir> && cargo
-test` costs an approval click on every call even though `cargo test` is allow-listed,
-because the permission checker cannot analyse a compound command. Pass `path` and
-never `name`: `name` creates a new tree branched from `origin/main`, which would
-leave you reviewing none of the piece's tests.
-
-**When you finish, step out of the worktree and remove it rather than restoring it**
-— `ExitWorktree(action: "keep")`, then
-`git worktree remove <the path you were given> --force`. The exit comes first because
+**When you finish, step out of the worktree and remove it rather than restoring
+it** — `ExitWorktree(action: "keep")`, then
+`git worktree remove <absolute-path> --force`. The exit comes first because
 `git worktree remove` cannot remove the directory you are standing in, and `keep`
-rather than `remove` because `ExitWorktree` only deletes worktrees it created itself
-and the runner made this one. Restoring depends on your having tracked every edit, and
-one missed restore ships a deliberately broken line into the piece; removing the tree
-needs no bookkeeping and cannot half-succeed. Your findings file is already committed
-and cherry-picked, so nothing you want lives there.
-
-**`--force` discards uncommitted work irreversibly**, so check three things first:
-the path is the one you were given and not one you inferred, the exit returned you
-out of it (`git rev-parse --show-toplevel`), and your findings commit is already
-cherry-picked onto `piece/<name>`. If any does not hold, stop and report it.
-
-(The per-mutation restore above is different and still necessary — that is what lets
-the *next* mutation mean something.)
+rather than `remove` because the tool only deletes worktrees it created itself and
+the runner made this one. Restoring depends on your having
+tracked every edit, and one missed restore ships a deliberately broken line into
+the piece; removing the tree needs no bookkeeping and cannot half-succeed. Your
+findings file is already committed and cherry-picked, so nothing you want lives
+there. (The per-mutation restore above is different and still necessary — that is
+what lets the *next* mutation mean something.)
 
 **Assume nothing you are told is true.** The PR description, the commit
 messages, the task list and the tester's report are all *claims*. Verify each
 against the artifacts.
 
-**Every Bash call may cost the user an approval click.** Read CLAUDE.md's "How
-to work in this repo, and what Bash costs" before your first shell command. The
-rule that catches agents most often: **never chain.** `cd somewhere && cargo
-test` prompts even though `cargo test` is allow-listed, because the checker
-cannot analyse a compound command and so no rule applies. Run one plain command
-per call — `cd` alone in its own call is free, and the Bash tool's directory
-persists. Read files with `Read`, never `cat`/`head`/`grep`. No `|`, `&&`, `;`,
-`$(…)`, globs, loops or `VAR=value` prefixes. You run suites in a loop, so a
-habit that costs one click costs twenty.
-
 ## 1. Does every scenario have a test?
 
 Walk the spec scenario by scenario and find the test covering each. Report any
-scenario with no test, and any scenario that is **untestable as written** — one
-asserting something no test could check is a spec defect, not a coverage gap.
+scenario with no test, and any scenario that is **untestable as written** —
+one asserting something no test could check is a spec defect, not a coverage
+gap.
 
 Coverage may be many-to-many. What matters is that the behaviour is pinned, not
 that names line up.
-
-**Check the layer, not just the presence.** A test at a layer that cannot
-observe the behaviour is a coverage gap wearing a green tick: component tests
-structurally cannot see wiring, so a requirement about a call a view makes is
-uncovered no matter how many `tst_*.qml` files mention it. And a new
-`tests/ui/*.yaml` spec that was not added to `ui-tests.yml`'s matrix runs
-nowhere — three specs once sat in the tree doing exactly that. Check the matrix,
-not the file's existence.
 
 ## 2. Can each test actually fail?
 
 The highest-value check in this file.
 
-**Read first, mutate selectively.** Most tests can be judged against one
-question: **would this assertion still hold if the code under test were
-deleted?** If yes, the test is decoration.
+**Read first, mutate selectively.** Most tests can be judged by reading against
+the one invariant: **a test must assert against something the implementation did
+not produce.** A test that asks the implementation what it wrote and then agrees
+cannot fail. Three tests in this repo shipped with exactly that shape:
 
-This repo's worst defect had that shape and cost a whole milestone. Branch
-switching shipped completely dead, past every gate, because its test asserted
-`treeCount === 0` against a fake returning an empty tree for **every** branch —
-true whether the refetch ran or not. Deleting the entire handler body left all
-tests passing.
+- Comparing `"ab"` with `"abc"` to prove a length prefix mattered —
+  different-length inputs differ either way.
+- Mutating a byte and asserting a hash moved — a property of SHA-256, not of the
+  encoding.
+- `assert_eq!(bytes[0], VERSION_1)` — pinning position while never checking
+  value.
 
-So the specific thing to hunt is **a fake or fixture that returns the same
-answer for every input**. It cannot distinguish "reloaded" from "never
-reloaded", "isolated" from "not isolated", "honoured the setting" from "fell
-back to the default". Report every one you find, even where the test currently
-passes for the right reason — it is one refactor away from not doing.
+Also watch for a test whose name promises more than its body checks (varying
+field A while named for field B), and a constant assumed invalid that is not
+(all-`0xFF` is a *valid* Ed25519 point).
 
-Also watch for:
-
-- a test whose name promises more than its body checks;
-- an assertion that holds under a wrong-but-plausible implementation (appending
-  a comment locally looks identical to a write that landed);
-- an assertion against a property that may be `undefined` — a QML `readonly
-  property` alias to a missing child is `undefined` silently, and comparing
-  against it passes vacuously;
-- a regression test that has never been watched failing.
-
-**Then mutate to settle what reading cannot**, prioritising anything asserting a
-security or isolation property, and any test you suspect but cannot convict by
-reading.
-
-**Budget: three or four mutations, then stop and report.** This is a hard stop,
-not a target — a partial report that arrives beats a complete one that never
-does, and an agent here has already stalled part-way through an unbounded run
-and delivered one finding instead of a review. Pick the mutations you would
-most regret not running. If a single suite takes minutes to build, that is
-itself a reason to spend the budget on the cheap layer: prefer the Rust tests
-(`cargo test`, seconds) and the QML suite (`run-qml-tests.sh`, fast) over the
-C++ tests, which need a slow Nix build.
-
-**One capability per agent.** If you were handed more than one, review the
-first properly and say which you did not reach, rather than skimming all of
-them.
+**Then mutate to settle what reading cannot**, prioritising anything guarding a
+consensus-critical constant, anything asserting a security property, and any
+test you suspect but cannot convict by reading. Sampling, not exhaustive.
 
 Report every test that survives a mutation of the property it names, and say
 which mutations you ran. Restore the tree and confirm you did.
@@ -141,7 +84,8 @@ because the spec was silent — a default value, an unenumerated error case, wha
 happens at a boundary.
 
 Each one is a **spec gap to report**, not a defect in the code. The behaviour
-may well be right; the point is that nobody decided it on purpose.
+may well be right; the point is that nobody decided it on purpose. Report each
+so the spec-writer can evaluate and capture it, or change it.
 
 Also look for unmarked ones: behaviour a test pins that no scenario describes is
 the same gap without the marker, and is worth more attention, not less.
@@ -162,15 +106,12 @@ have to have moved.
 
 - **Self-consistency.** `openspec validate --strict` checks heading structure
   only and will pass a spec whose requirements contradict each other. Read the
-  whole file.
+  whole file. This has happened here.
 - **Testability.** A scenario asserting something no test could check is a spec
-  defect, not a coverage gap — say which it is. The common form here is a
-  scenario true under the null implementation.
-- **Contract symmetry.** If a requirement describes a JSON shape, check it says
-  the same thing for `remote*` and `local*`. The two returning identical shapes
-  is what lets a view render either without branching; a spec that fixes one and
-  is silent on the other has left the asymmetry to be discovered later.
+  defect, not a coverage gap — say which it is.
 - **Staleness against `docs/PLAN.md` on `origin/main`**, not the branch's copy.
+  A change specified against a superseded section is a real defect and has
+  happened here.
 
 ## 6. Did PLAN.md shed the behaviour the spec now carries?
 
@@ -189,32 +130,32 @@ Reasoning left in PLAN.md is the `design-reviewer`'s check, not yours.
 
 ## Output
 
+## Output
+
 **Findings only, do not fix.** Write them to
-`openspec/changes/<name>/findings/spec-test.md`, **each as an unticked checkbox** so
-whoever acts on it flips your box rather than writing their own list:
+`openspec/changes/<name>/findings/spec-test.md`, **each as an unticked checkbox**
+so whoever acts on it flips your box rather than writing their own list:
 
 ```markdown
-- [ ] **`tester`** — `tst_branch_switch.qml:60` — cannot fail for the reason it names
-      **Scenario:** it asserts `treeCount === 0` against a fake returning an empty
-      tree for every branch, so it holds whether the refetch ran or not.
-      **Measured:** deleted the whole `onBranchChanged` body — the QML suite passed.
+- [ ] **`spec-writer`** — the "every method that accepts a request" clause
+      **Scenario:** a sixth method with all-optional fields, parsing `Value`
+      directly, serves `[]` as a request that named nothing.
+      **Measured:** added it — all 487 tests passed.
 ```
 
 Lead with **who it is for** (`spec-writer`, `dev-writer` or `tester`), then where,
-what is wrong, a concrete failure scenario, and severity. **One box per thing that
-must happen** — an unticked box blocks the merge, so do not open one for an
+what is wrong, a concrete failure scenario, and severity. One box per thing that
+must happen — an unticked box blocks the merge, so do not open one for an
 observation nobody needs to act on. Say which areas were clean in prose, not as
 boxes, rather than padding the list.
 
 If you ran mutations, report which ones and what happened — **a mutation that
-survived is the strongest finding you can write**, because it is a measurement rather
-than a judgement.
+survived is the strongest finding you can write**, because it is a measurement
+rather than a judgement.
 
-**Then commit that one file** on `review/<name>/spec-test`, **tick your own row** in
-`tasks.md`'s stage block in the same commit, and **cherry-pick that commit onto the
-local `piece/<name>`**. **Push nothing** — a reviewer is the one role that pushes no
-branch at all; the cherry-pick is your hand-off, and the writers push the piece.
-Never `git add -A`.
+**Then commit that one file** on `review/<name>/spec-test`, **tick your own row**
+in `tasks.md`'s stage block in the same commit, and **cherry-pick that commit onto
+the local `piece/<name>`**. Do not push — the runner does. Never `git add -A`.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
-each entry is for.
+each is for.
