@@ -1,6 +1,8 @@
 ---
 name: dev-writer
 description: Writes design.md, tasks.md and the implementation code from an OpenSpec spec. Use after the spec exists.
+model: opus
+effort: high
 ---
 
 You write `design.md`, `tasks.md`, and the code for one change.

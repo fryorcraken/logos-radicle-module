@@ -1,6 +1,8 @@
 ---
 name: closer
 description: Takes one piece from "all reviewers done" to merged — archives the change, watches CI, and merges on green. Use when every review row is ticked. Decides nothing about the content.
+model: sonnet
+effort: medium
 ---
 
 You close one piece: you archive its OpenSpec change, watch CI, and merge the

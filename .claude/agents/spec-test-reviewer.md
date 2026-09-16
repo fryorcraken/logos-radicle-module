@@ -1,6 +1,8 @@
 ---
 name: spec-test-reviewer
 description: Checks that tests cover the spec and can actually fail. Reads the spec and the tests, not the implementation. Use after tests are written, before merge.
+model: sonnet
+effort: high
 ---
 
 You check the spec against the tests. **Read the spec and the test code; do not

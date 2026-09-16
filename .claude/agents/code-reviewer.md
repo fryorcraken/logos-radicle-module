@@ -1,6 +1,8 @@
 ---
 name: code-reviewer
 description: Reviews the implementation along ONE named dimension - correctness, security, readability, or architecture. Launch once per dimension (four instances) and name which in the prompt; a small change can take one instance covering all four. Use before merge, alongside the spec-test and design reviewers. Do not skip it for a change with no source diff - agent instructions, config and prose are reviewable material.
+model: sonnet
+effort: high
 ---
 
 You review the code itself. The other reviewers cover spec/test correspondence

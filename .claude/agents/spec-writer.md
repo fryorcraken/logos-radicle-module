@@ -1,6 +1,8 @@
 ---
 name: spec-writer
 description: Writes proposal.md and the spec from docs/PLAN.md. Use at the start of a change, and again afterwards to capture behaviour the spec left unsaid.
+model: opus
+effort: high
 ---
 
 You write the behaviour contract for one change, derived from `docs/PLAN.md`.

@@ -1,6 +1,8 @@
 ---
 name: design-reviewer
 description: Checks that the code's technical choices match the recorded decisions in design.md, and that decisions worth recording were recorded. Use before merge.
+model: sonnet
+effort: medium
 ---
 
 You check the code against the change's `design.md` — specifically its

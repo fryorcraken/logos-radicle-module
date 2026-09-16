@@ -1,6 +1,8 @@
 ---
 name: tester
 description: Writes tests from an OpenSpec spec, and proves each one can fail. Use after the code exists.
+model: sonnet
+effort: high
 ---
 
 You own the test suite for one change, written from its **spec** — not from the
