@@ -9,24 +9,22 @@
 #
 # Reasoning never goes in a spec: a spec is a behaviour contract, and prose
 # rationale in one is prose nobody maintains.
-#
-# See `.claude/agents/README.md` for the document model and the role agents.
 schema: spec-driven
 
 # Shown to the AI when it creates any artifact. Kept to what a writer needs in
 # order to place a requirement in the right module and the right test layer —
-# the rest is in CLAUDE.md, which the agents are told to read.
+# the rest is in CLAUDE.md.
 #
 # **This block is injected into every artifact prompt, which makes a stale
 # sentence here worse than a stale one anywhere else**: it arrives in context
 # ahead of CLAUDE.md and is invisible to anyone reading CLAUDE.md alone, so the
-# out-of-date copy is the one every future spec-writer sees. It restates
-# CLAUDE.md deliberately, and the duplication is only safe while it stays
-# limited to facts that change when the architecture changes — the module
-# split, the JSON contract, which layer sees what. **When you change any of
-# those in CLAUDE.md, change them here in the same commit.** Do not grow this
-# block with anything finer-grained; a detail that moves often belongs in
-# CLAUDE.md alone, where there is one copy.
+# out-of-date copy is the one that gets read. It restates CLAUDE.md
+# deliberately, and the duplication is only safe while it stays limited to facts
+# that change when the architecture changes — the module split, the JSON
+# contract, which layer sees what. **When you change any of those in CLAUDE.md,
+# change them here in the same commit.** Do not grow this block with anything
+# finer-grained; a detail that moves often belongs in CLAUDE.md alone, where
+# there is one copy.
 context: |
   Two modules in one git repo, published to the Logos catalog:
   `radicle/` (core — all HTTP, JSON, filesystem and FFI, C++ plus a Rust
