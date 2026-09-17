@@ -79,6 +79,27 @@ Rust staticlib — every slot the flow drives was already exposed.
 - [x] Both guards proven to fail without their code: neutering `isCurrent()`
       reddens the late-reply test while its positive twin stays green, and
       deleting `clip.copy()` reddens the clipboard test.
+
+### Review findings (second pass)
+
+- [x] A successful start withdraws the start control. `alreadyServing` is now
+      written by every reading of the node's state, so a node this flow started
+      blocks a second start exactly as one it found running does.
+- [x] `chooseMode`'s success path is exercised, with a fake whose reported mode
+      can differ from the one written — so "re-read capabilities" is
+      distinguishable from "trusted the argument".
+- [x] `neutral` governs a finding's colour, not whether it can fail, so a
+      backend `problem` sentence is no longer unreachable.
+- [x] The mode blurb carries an `objectName` and is asserted as rendered, not
+      read off `ModePicker.modes`.
+- [x] The passphrase is cleared once `startNode` reports success — keyed on the
+      reply, so a retry after a refusal still has it.
+- [x] A choice is proven withheld while its preflight probe is outstanding,
+      using a held-reply identity fake rather than `reset()`.
+- [x] `preflightDone` follows three named flags rather than a literal `3`;
+      `applyCapabilities()` is the one copy of the capabilities mapping.
+- [x] Each of the above proven by mutation: the fix reverted, the named test
+      watched to fail, the fix restored.
 - [x] Full suite green — `sh radicle-ui/tests/run-qml-tests.sh`, zero failures.
 
 ### Documentation
