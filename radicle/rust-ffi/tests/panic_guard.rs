@@ -634,6 +634,154 @@ fn the_node_entry_points_are_guarded_too() {
     );
 }
 
+/// The node-configuration and seeding entry points are guarded too.
+///
+/// Six more `extern "C"` functions, and this file only stays an inventory if it
+/// grows with them. Two of these are the sharpest additions since
+/// `init_profile`: `set_config` **writes a file** and `seed`/`unseed` **write a
+/// SQLite database**, so an unwind here would cross the ABI mid-write rather
+/// than merely dropping a handle.
+///
+/// The seeding functions additionally get a `home` that is a *file* rather than
+/// a directory, which is the input most likely to reach a panic inside
+/// `sqlite`'s open path rather than a clean `Err`.
+#[test]
+fn the_node_config_and_seeding_entry_points_are_guarded_too() {
+    let missing_home = c("/nonexistent/definitely/not/a/radicle/home");
+    let traversal = c("../../../etc/passwd");
+    // A path that exists and is a FILE: `policies.db` would be created beneath
+    // it, which the OS refuses in a way sqlite reports from deep in its own
+    // stack.
+    let a_file = c("/etc/hostname");
+    let rid = c("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn");
+    let junk_rid = c("not-a-rid-at-all");
+    let scope = c("all");
+    let junk_scope = c("\u{fffd}");
+    // Not JSON at all, and JSON of the wrong kind: both must come back as an
+    // error object rather than as a panic in serde's own frames.
+    let not_json = c("}{ this is not json");
+    let wrong_kind = c("[1, 2, 3]");
+    let huge_field = c(&format!(r#"{{"alias":"{}"}}"#, "x".repeat(100_000)));
+
+    for (label, out) in [
+        (
+            "get_config(missing home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_get_config(missing_home.as_ptr())
+            }),
+        ),
+        (
+            "get_config(traversal-shaped home)",
+            call(|| unsafe { radicle_local_ffi::radicle_node_get_config(traversal.as_ptr()) }),
+        ),
+        (
+            "get_config(NULL home)",
+            call(|| unsafe { radicle_local_ffi::radicle_node_get_config(std::ptr::null()) }),
+        ),
+        (
+            "set_config(not JSON)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_set_config(
+                    missing_home.as_ptr(),
+                    not_json.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "set_config(JSON of the wrong kind)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_set_config(
+                    missing_home.as_ptr(),
+                    wrong_kind.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "set_config(absurdly long value)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_set_config(
+                    missing_home.as_ptr(),
+                    huge_field.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "set_config(all NULL)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_set_config(std::ptr::null(), std::ptr::null())
+            }),
+        ),
+        (
+            "list_seeded(missing home)",
+            call(|| unsafe { radicle_local_ffi::radicle_node_list_seeded(missing_home.as_ptr()) }),
+        ),
+        (
+            "list_seeded(a file as home)",
+            call(|| unsafe { radicle_local_ffi::radicle_node_list_seeded(a_file.as_ptr()) }),
+        ),
+        (
+            "list_seeded(NULL home)",
+            call(|| unsafe { radicle_local_ffi::radicle_node_list_seeded(std::ptr::null()) }),
+        ),
+        (
+            "seed(junk rid)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_seed(
+                    missing_home.as_ptr(),
+                    junk_rid.as_ptr(),
+                    scope.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "seed(junk scope)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_seed(
+                    missing_home.as_ptr(),
+                    rid.as_ptr(),
+                    junk_scope.as_ptr(),
+                )
+            }),
+        ),
+        (
+            "seed(a file as home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_seed(a_file.as_ptr(), rid.as_ptr(), scope.as_ptr())
+            }),
+        ),
+        (
+            "seed(all NULL)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_seed(
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            }),
+        ),
+        (
+            "unseed(junk rid)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_unseed(missing_home.as_ptr(), junk_rid.as_ptr())
+            }),
+        ),
+        (
+            "unseed(a file as home)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_unseed(a_file.as_ptr(), rid.as_ptr())
+            }),
+        ),
+        (
+            "unseed(all NULL)",
+            call(|| unsafe {
+                radicle_local_ffi::radicle_node_unseed(std::ptr::null(), std::ptr::null())
+            }),
+        ),
+    ] {
+        assert_is_error_json(label, &out);
+    }
+}
+
 /// `radicle_free_string(NULL)` is a documented no-op. Worth pinning because
 /// the C++ `take()` helper calls it on every reply, and a crash here would be
 /// a crash on the happy path.

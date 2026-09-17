@@ -14,7 +14,9 @@ pub mod env;
 pub mod gitread;
 pub mod local;
 pub mod node;
+pub mod nodeconfig;
 pub mod profileinit;
+pub mod seeding;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -504,6 +506,108 @@ pub extern "C" fn radicle_node_stop() -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn radicle_node_status() -> *mut c_char {
     guarded(node::status)
+}
+
+// ---------------------------------------------------------------------------
+// The node's own configuration, and its seeding policies.
+//
+// Two stores, deliberately not one call. `config.json` is read by the node when
+// it is CONSTRUCTED, so a change to it reaches a running node at its next start
+// and never before; `policies.db` is read as the node works, so a seeding change
+// takes effect at once. Folding them together would mean one reply whose halves
+// have different answers to "when does this apply", which is precisely what a
+// view has to tell the user.
+//
+// Every one of these takes `home` as a parameter and none resolves one. That is
+// the same rule `radicle_node_start` follows and for a stronger reason here:
+// these WRITE, so a home crossing the boundary from a sandboxed view would be a
+// way to rewrite the configuration of a node this module does not own.
+// ---------------------------------------------------------------------------
+
+/// The node configuration under `home`, as a panel would render it.
+///
+/// -> {"alias","listen":[…],"externalAddresses":[…],"connect":[…],"peers",
+///    "inboundReachable":bool,"restartRequired":bool} or {"error":"…"}
+///
+/// # Safety
+/// `home` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_node_get_config(home: *const c_char) -> *mut c_char {
+    let home = read_str(home);
+    guarded(move || nodeconfig::get(&home))
+}
+
+/// Apply `changes` — a JSON object naming a subset of the exposed fields — to
+/// the node configuration under `home`.
+///
+/// Returns the whole configuration on success, in `radicle_node_get_config`'s
+/// shape, so a caller re-renders from what was stored rather than from what it
+/// submitted. **Every field is validated before the file is opened**, so a
+/// refused call leaves `config.json` exactly as it was.
+///
+/// The reply's `restartRequired` is read after the write, so a change made while
+/// a node runs comes back already asking for a restart. Neither this nor
+/// `radicle_node_get_config` takes the flag as an argument, precisely so no
+/// caller can read it on the wrong side of the write.
+///
+/// -> the same object as `radicle_node_get_config`, or {"error":"…"}
+///
+/// # Safety
+/// `home`, `changes` must each be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_node_set_config(
+    home: *const c_char,
+    changes: *const c_char,
+) -> *mut c_char {
+    let (home, changes) = (read_str(home), read_str(changes));
+    guarded(move || nodeconfig::set(&home, &changes))
+}
+
+/// Every repository the node under `home` is seeding, with each entry's scope.
+///
+/// -> {"items":[{"rid":"rad:…","scope":"all"|"followed"}]} or {"error":"…"}
+///
+/// # Safety
+/// `home` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_node_list_seeded(home: *const c_char) -> *mut c_char {
+    let home = read_str(home);
+    guarded(move || seeding::list(&home))
+}
+
+/// Seed `rid` with `scope` (`all` or `followed`).
+///
+/// -> {"rid":"rad:…","scope":"…"} or {"error":"…"}
+///
+/// # Safety
+/// `home`, `rid`, `scope` must each be NULL or a valid NUL-terminated UTF-8 C
+/// string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_node_seed(
+    home: *const c_char,
+    rid: *const c_char,
+    scope: *const c_char,
+) -> *mut c_char {
+    let (home, rid, scope) = (read_str(home), read_str(rid), read_str(scope));
+    guarded(move || seeding::seed(&home, &rid, &scope))
+}
+
+/// Remove the seeding policy for `rid`.
+///
+/// Unseeding what is not seeded is an answer, not an error — the boolean says
+/// which happened. **Nothing is deleted from storage.**
+///
+/// -> {"unseeded":bool} or {"error":"…"}
+///
+/// # Safety
+/// `home`, `rid` must each be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_node_unseed(
+    home: *const c_char,
+    rid: *const c_char,
+) -> *mut c_char {
+    let (home, rid) = (read_str(home), read_str(rid));
+    guarded(move || seeding::unseed(&home, &rid))
 }
 
 /// Frees a string previously returned by one of the `radicle_local_*`
