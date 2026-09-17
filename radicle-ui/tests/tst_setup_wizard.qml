@@ -102,6 +102,7 @@ Item {
         function reset() {
             callLog = [];
             held = null;
+            heldSeeds = null;
             serving = false;
         }
 
@@ -151,9 +152,36 @@ Item {
                  home: home, socket: "/run/u/radicle.sock", reason: "" });
         }
 
+        /// Whether `seeds()` holds its reply instead of delivering it.
+        ///
+        /// This is the one probe that does NOT gate `preflightDone` — the seed
+        /// list is the network step's data, not a finding — so it is the reply
+        /// that can still be genuinely in flight at the moment the resume lands.
+        /// That makes it the only way this synchronous harness can express the
+        /// hazard the single-assignment landing exists to avoid: a landing that
+        /// bumped the epoch would discard it, and nothing else here would
+        /// notice, because every gating reply has already been written by then.
+        property bool holdSeeds: false
+
         function seeds(cb) {
             callLog.push("listKnownSeeds");
+            if (holdSeeds) {
+                heldSeeds = function () { cb({ items: seedItems }); };
+                return;
+            }
             cb({ items: seedItems });
+        }
+
+        /// Held separately from `held`, so a test can hold the seed reply
+        /// across a landing without disturbing the identity/start holds.
+        property var heldSeeds: null
+
+        function deliverHeldSeeds() {
+            if (heldSeeds === null) return false;
+            var f = heldSeeds;
+            heldSeeds = null;
+            f();
+            return true;
         }
 
         function create(alias, passphrase, cb) {
@@ -267,6 +295,11 @@ Item {
             fake.startListening = [];
             fake.settingRefusal = "";
             fake.holdIdentity = false;
+            fake.holdSeeds = false;
+            fake.seedItems = [
+                { url: "https://seed.radicle.xyz", alias: "radicle",
+                  source: "builtin" }
+            ];
             flow.reset();
             heldFlow.reset();
             fake.reset();
@@ -1086,6 +1119,238 @@ Item {
             compare(heldFlow.nodeStarted, true,
                     "a reply arriving with the user still on the step that "
                     + "issued it must be applied");
+        }
+
+        // ---- re-entry -------------------------------------------------------
+        //
+        // A reopened setup lands at the first step with work left, derived from
+        // what the backend reports. Every write the flow makes is separately
+        // durable — the mode, the identity and the node each land on their own —
+        // so there is no half-committed state to resume into, and the backend is
+        // therefore the authority on what remains.
+
+        /// **Different backend states resume to different steps.**
+        ///
+        /// The whole requirement in one test, and the input-dependence rule
+        /// applied at the level that matters: a `restart()` that always returned
+        /// step 3 would satisfy any single-scenario assertion here. Four
+        /// scenarios, four different answers.
+        function test_different_backend_states_resume_to_different_steps() {
+            var landed = [];
+
+            function raiseAgainst(mode, exists, serving) {
+                fake.mode = mode;
+                fake.capabilitiesMode = "";
+                fake.identityExists = exists;
+                fake.identityNodeId = exists ? "did:key:z6MkEXISTING" : "";
+                fake.serving = serving;
+                flow.restart();
+                landed.push(flow.step);
+            }
+
+            // Mode not yet embedded: the mode write is the work left.
+            raiseAgainst("local", false, false);
+            // Embedded, no identity: creating it is.
+            raiseAgainst("embedded", false, false);
+            // An identity, node not serving: starting it is.
+            raiseAgainst("embedded", true, false);
+            // An identity and a serving node: nothing is, so confirm.
+            raiseAgainst("embedded", true, true);
+
+            compare(landed.join(" "), "embedded identity start confirm",
+                    "the landing step must follow the replies, so a flow given "
+                    + "different replies lands on different steps");
+        }
+
+        /// **The step reached last time does not decide where it reopens.**
+        ///
+        /// A remembered index is a second opinion, and it is wrong whenever
+        /// anything changed between the two showings. So the flow is walked well
+        /// past its landing step, lowered, and raised again — and must come back
+        /// to where the BACKEND says the work is, not to where the user was.
+        function test_the_step_reached_last_time_does_not_decide_where_it_reopens() {
+            fake.mode = "embedded";
+            fake.identityExists = false;
+
+            flow.restart();
+            compare(flow.step, "identity", "precondition: it landed at identity");
+
+            // The user walks on, then closes.
+            verify(harness.advanceTo(flow, "network"));
+            compare(flow.step, "network");
+
+            // Raised again, against an unchanged backend.
+            flow.restart();
+            compare(flow.step, "identity",
+                    "a second showing must re-derive rather than resume at the "
+                    + "step the first was closed on");
+
+            // And with the backend now further along, it lands further along —
+            // which is what a remembered index could never do.
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkEXISTING";
+            fake.serving = true;
+            flow.restart();
+            compare(flow.step, "confirm",
+                    "an identity created and a node started elsewhere must move "
+                    + "the landing step, with nothing here remembering anything");
+        }
+
+        /// **The flow waits at preflight rather than resuming from defaults.**
+        ///
+        /// Every finding has a legitimate falsy value, so a resume that read the
+        /// defaults would land every reopening on the same early step whatever
+        /// the backend holds. The identity reply is HELD, which is the only way
+        /// to express the window at all — a synchronous fake settles before the
+        /// next line of test code runs.
+        function test_the_flow_waits_at_preflight_rather_than_resuming_from_defaults() {
+            fake.mode = "embedded";
+            fake.serving = true;
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkEXISTING";
+            fake.holdIdentity = true;
+
+            flow.restart();
+            compare(flow.preflightDone, false,
+                    "precondition: a probe is still outstanding");
+            compare(flow.step, "preflight",
+                    "the flow must wait at preflight rather than choose a step "
+                    + "from replies that have not arrived");
+
+            verify(fake.deliverHeld(), "the withheld reply now arrives");
+            compare(flow.step, "confirm",
+                    "and only then does it land, on the step the replies chose");
+        }
+
+        /// **The resumed step's findings are populated.**
+        ///
+        /// The spec's scenario, asserted directly: the identity finding carries
+        /// the node id at the step the resume chose, and creation is not offered
+        /// for an identity that exists. The two fail differently — one is a
+        /// display that lost its data, the other a control that would refuse.
+        ///
+        /// **This test does NOT catch a landing that loops `advance()`**, and
+        /// that was verified rather than assumed: the loop left every test in
+        /// this file green. The harness is synchronous, so all three gating
+        /// replies have already been written by the time the landing runs, and
+        /// bumping the epoch afterwards discards nothing. The test that does
+        /// catch it is `test_the_landing_does_not_discard_a_reply_still_in_flight`,
+        /// which holds the one reply that can still be in flight at that moment.
+        /// Recorded here because this is the test a reader would expect to be
+        /// the guard, and it is not.
+        function test_the_resumed_steps_findings_are_populated() {
+            fake.mode = "embedded";
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkDISTINCTIVE";
+            fake.serving = false;
+
+            flow.restart();
+
+            compare(flow.step, "start", "precondition: it landed at start");
+            compare(flow.identityExists, true,
+                    "the identity finding must survive the landing");
+            compare(flow.identityNodeId, "did:key:z6MkDISTINCTIVE",
+                    "carrying the node id the backend reported");
+            compare(flow.preflightDone, true,
+                    "and the preflight must still read as answered");
+            compare(flow.canCreateIdentity, false,
+                    "so creation is not offered for an identity that exists");
+        }
+
+        /// **The landing must not invalidate the preflight's own replies**, and
+        /// this is the test that can see the difference.
+        ///
+        /// `test_the_resumed_steps_findings_are_populated` above asserts the
+        /// findings survive, and CANNOT fail against a landing that loops
+        /// `advance()`: this harness is synchronous, so every gating reply has
+        /// already been written by the time the landing runs, and bumping the
+        /// epoch afterwards discards nothing. That was verified by mutation, not
+        /// assumed — the loop left all 49 tests green.
+        ///
+        /// The reply that IS still in flight at that moment is the seed list,
+        /// because it is the one probe that does not gate `preflightDone`. So it
+        /// is held across the landing and delivered afterwards. A landing that
+        /// bumped the epoch drops it, and the network step the user is about to
+        /// walk to renders no seeds at all — silently, because an empty seed
+        /// list is also what a backend reporting no seeds produces.
+        ///
+        /// **Reverting `landOnFirstUnfinishedStep()` to a loop over `advance()`
+        /// turns this test red, and only this one.**
+        function test_the_landing_does_not_discard_a_reply_still_in_flight() {
+            fake.mode = "embedded";
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkEXISTING";
+            fake.serving = false;
+            fake.seedItems = [
+                { url: "https://seed.one.example", alias: "one" },
+                { url: "https://seed.two.example", alias: "two" }
+            ];
+            fake.holdSeeds = true;
+
+            flow.restart();
+
+            compare(flow.step, "start",
+                    "precondition: it landed, while the seed reply was held");
+            verify(fake.heldSeeds !== null,
+                   "precondition: the seed reply is still in flight");
+
+            verify(fake.deliverHeldSeeds(), "it now arrives");
+            compare(flow.seeds.length, 2,
+                    "a reply issued by the preflight that lands after the "
+                    + "landing must still be applied — the landing moved the "
+                    + "step, so a landing that also moved the epoch would have "
+                    + "discarded it and left the network step with no seeds");
+            compare(flow.seeds[0].alias, "one",
+                    "carrying what the backend reported");
+        }
+
+        /// A resumed step behaves exactly as one reached by advancing. Walked to
+        /// the same step by hand, the flow answers the same questions the same
+        /// way — so "resumed" is not a second kind of state.
+        function test_a_resumed_step_behaves_as_one_reached_by_advancing() {
+            fake.mode = "embedded";
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkEXISTING";
+            fake.serving = false;
+
+            flow.restart();
+            compare(flow.step, "start", "precondition: resumed to start");
+            var resumedCanStart = flow.canStartNode;
+            var resumedCanCreate = flow.canCreateIdentity;
+
+            // The same backend, reached by walking instead.
+            flow.reset();
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "start"));
+            compare(flow.canStartNode, resumedCanStart,
+                    "a resumed start step must gate a start exactly as a walked "
+                    + "one does");
+            compare(flow.canCreateIdentity, resumedCanCreate,
+                    "and must refuse creation for the same reason");
+        }
+
+        /// The resume happens ONCE per showing, not on every later reply.
+        ///
+        /// `preflightDone` goes true once, but a flow that re-derived its step
+        /// whenever the findings moved would yank a user off a step they walked
+        /// to — a node that stops serving while the user is reading the confirm
+        /// step must not throw them back to start.
+        function test_a_later_reply_does_not_move_a_step_the_user_walked_to() {
+            fake.mode = "embedded";
+            fake.identityExists = false;
+
+            flow.restart();
+            compare(flow.step, "identity", "precondition");
+
+            verify(harness.advanceTo(flow, "network"));
+            compare(flow.step, "network");
+
+            // A later reading of the node's state lands, as `refreshNodeStatus`
+            // does after a start. The step in force must not move.
+            flow.refreshNodeStatus();
+            compare(flow.step, "network",
+                    "a reply arriving after the landing must not re-derive the "
+                    + "step the user has since walked to");
         }
     }
 }

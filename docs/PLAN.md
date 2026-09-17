@@ -103,11 +103,16 @@ and the mode-detail slot that would show the embedded DID. Both are a second
 surface with their own height reservation, deliberately not folded in.
 
 **Starting and restarting an existing node are still ahead too**, and belong to
-the configuration panel rather than to the wizard. Both need a passphrase, and
-`getEmbeddedIdentity()` carries no field saying whether an existing key is
-encrypted — so nothing can even tell whether one is needed. The state surface
-therefore names those actions without enabling them, and says so; the rule is
-`embedded-state`'s, and what rules it out is `embedded-setup`'s.
+the configuration panel rather than to the wizard. The state surface names those
+actions without enabling them and says starting is not yet available from here;
+the rule is `embedded-state`'s, what rules it out is `embedded-setup`'s, and the
+four reasons — the last of which is that no reply a later session can obtain
+says whether the key is encrypted — are in the `embedded-node-wizard` change's
+`design.md`, under "Start and restart route nowhere".
+
+**Hosting them is one property.** `Main.qml` reports `embeddedStartHosted`, and
+the panel's enablement is keyed on it, so the panel needs no edit when the
+configuration panel routes a start.
 
 **The configuration panel (Phase 2 step 4).** QML only, and what makes that
 true is now the `node-config` and `node-seeding` capabilities rather than the

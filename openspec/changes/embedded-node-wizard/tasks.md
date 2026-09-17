@@ -40,6 +40,12 @@ tests and every reviewer row need re-running against this; **the runner owns
 re-dispatching them**, and the rows are left as they are for the same reason as
 above.
 
+**`design + code` has now been re-run against that second reopening** — the
+fifth pass below. Its row was already ticked and stays ticked rather than gaining
+a second, for the one-row-per-stage reason above; what that tick now covers is
+five passes, the last being the wizard's host. The reviewer rows still refer only
+to the first pass.
+
 ## Implementation
 
 <!-- The dev-writer owns this section. -->
@@ -268,9 +274,97 @@ exposed.
 ### Not covered, and stated rather than implied
 
 - [ ] **`Main.qml`'s own wiring has no component test.** Nothing instantiates
-      `Main.qml` — `tst_embedded_wiring.qml` reproduces its shape — so
-      `refreshEmbedded()`, the `embeddedSettled` `Connections` and the new
-      properties are covered only by `local.yaml`. A green component suite says
-      nothing about them.
-- [ ] **The panel's action reaches nobody.** The wizard's host is the next
-      piece.
+      `Main.qml` — `tst_embedded_wiring.qml` and `tst_setup_host.qml` reproduce
+      its shape — so `refreshEmbedded()`, the `embeddedSettled` `Connections`,
+      the new properties and the host functions are covered at that layer only
+      as a reproduction. `local.yaml` is what drives the real file.
+- [x] ~~**The panel's action reaches nobody.**~~ Closed by the pass below.
+
+## Implementation — hosting the setup (fifth pass)
+
+`RepoList.embeddedActionTaken(kind)` emitted and nothing listened;
+`SetupWizard.qml` had never been instantiated by anything and its `closed()` had
+no host. Both are closed here. One new QML file's worth of host wiring inside
+`Main.qml`, one new test file, and four new steps in `local.yaml`. No change to
+`radicle/`, `radicle_ui.rep` or the Rust staticlib — every slot the flow drives
+was already exposed.
+
+### The host
+
+- [x] `Main.qml` — `setupOpen`, and a `setupPane` overlay SIBLING to
+      `settingsPane` rather than a `nav.view` destination. Lowering restores what
+      was underneath with no decision to make; a destination would have to choose
+      between the step the user was on and the screen they came from.
+- [x] `openSetup()` and `toggleSettings()` enforce the mutual exclusion **at the
+      raise**, never as a binding — so lowering one raises nothing.
+- [x] `takeEmbeddedAction(kind)` routes on the KIND. `"setup"` raises; `"start"`
+      and `"restart"` reach nothing, which is what makes the rule a property of
+      the function rather than of which states are reachable today.
+- [x] The wizard's seven call functions injected through `callPlain` (reads) and
+      `callSettings` (writes, whose refusal is the useful result).
+- [x] `onClosed` lowers and calls `refreshEmbedded()`, because the flow may have
+      created an identity or started a node and the panel underneath is derived
+      from those replies.
+- [x] `settingsShown`/`setupShown` read off the panes' own `visible`, not off the
+      flags they are keyed on.
+
+### Re-entry
+
+- [x] `SetupFlow.restart()` — reset, arm `resumeWanted`, run the preflight.
+- [x] `resumeIndex` derives the landing step from four reply-derived values;
+      `landOnFirstUnfinishedStep()` assigns `stepIndex` **once** and does not bump
+      `epoch`. Not a loop over `advance()` — see `design.md` for what that breaks
+      and, more importantly, for which test does and does not catch it.
+- [x] The landing fires from `onAllProbesAnsweredChanged`, so the flow **waits at
+      preflight** until the gating replies land rather than choosing from
+      defaults.
+- [x] `resumeWanted` is per-showing, so a later reply does not move a step the
+      user walked to.
+- [x] `SetupWizard.show()` replaces `Component.onCompleted`, because the overlay
+      is not destroyed between showings.
+
+### Only an action something can carry out is enabled
+
+- [x] `EmbeddedState` gains `setupHosted`/`startHosted` inputs and `actionHosted`;
+      `actionEnabled` conjoins it. Both default false — a forgotten wiring gets a
+      disabled action, which is visible.
+- [x] `actionUnavailableNote` says starting is **not yet available from here** —
+      not that it failed, not that it cannot be started.
+- [x] `RepoList` renders the note and guards `onClicked` on `actionEnabled`, so a
+      programmatic emit cannot request an unhosted act either.
+- [x] `Main.qml` reports `embeddedSetupHosted: true`, `embeddedStartHosted:
+      false`. Hosting a start later is that one property.
+
+### Tests
+
+- [x] `tst_setup_host.qml` — 8 tests against the host's shape: the panel's action
+      raises the setup, selecting Embedded does not, a start request does not, the
+      two surfaces exclude each other, lowering one raises nothing, the flow's
+      report lowers it, lowering refreshes, and raising restarts the flow.
+      Count with `grep -c "function test_"`; the runner's total is two higher.
+- [x] `tst_setup_wizard.qml` — six re-entry tests, including one that holds the
+      seed reply across the landing.
+- [x] `tst_embedded_state.qml` / `tst_embedded_panel.qml` — the hosted-ness
+      scenarios, and the four assertions that became named-action assertions.
+- [x] `local.yaml` — four steps: the setup is not raised until asked for, the
+      click raises it over the unchanged view, the close control lowers it, and
+      the screen underneath is unchanged. The existing select-Embedded step now
+      also proves selecting does not auto-open, because the observable exists.
+- [x] Mutations run and reverted, each reddening a NAMED test: land by looping
+      `advance()` (1 red, and **not** the test that restates the scenario — see
+      `design.md`); rely on `Component.onCompleted` (1 red); route every kind to
+      `openSetup()` (1 red); drop the exclusion on raise (1 red); drop
+      `!startPending` from `actionEnabled` (1 red, in the test that arms
+      `startHosted` — the spec-writer's warning that the old proof had lapsed was
+      correct, and re-verified rather than trusted).
+- [x] Full suite green from this worktree: `sh radicle-ui/tests/run-qml-tests.sh`
+      — 31 files, 0 failed.
+- [x] `lgs basecamp build --variant lgx --module radicle_ui` green, run from this
+      worktree's root.
+
+### Not covered
+
+- [ ] **`local.yaml` raises the setup and lowers it without walking a step**,
+      deliberately: every step after preflight writes, and a spec that ran them
+      would leave a provisioned embedded home behind on every run. The flow's own
+      behaviour stays at the component layer, where the calls are injected.

@@ -560,6 +560,68 @@ steps:
     expect:
       state: "root.navError === ''"
 
+  # ---- the setup, raised and lowered --------------------------------------
+  #
+  # The panel's action emitted `embeddedActionTaken` and NOTHING LISTENED. A
+  # user in the state this spec is now in — Embedded, a real home, no identity —
+  # got a button that did nothing at all when clicked. That is the dead end this
+  # milestone exists to remove, and it was invisible to every layer: the
+  # component suite asserted the signal was emitted, which it was.
+  #
+  # So the assertion is on the HOST, through the real click. `Main.qml` has no
+  # component test — nothing instantiates it, and `tst_setup_host.qml`
+  # reproduces its shape rather than driving it — so these four steps are the
+  # only thing in any layer that can see the real button reaching the real host.
+  #
+  # The step before this one is what closes the other half of the rule: it
+  # asserted the panel rendering after Embedded was SELECTED, and `setupShown`
+  # is false there, so "selecting Embedded must not auto-open the setup" is
+  # already proved by the time this clicks anything. That is why no separate
+  # step asserts it — the observable existing is what made the existing step
+  # cover it.
+  - name: the setup is not raised until it is asked for
+    expect:
+      state:
+        - "root.setupShown === false"
+        - "root.settingsShown === false"
+
+  - name: take the panel's setup action
+    click: { objectName: "embeddedStateAction" }
+
+  # Raised OVER the view, not navigated to. Both halves are asserted because
+  # they fail differently: a setup hosted as a navigation destination would
+  # satisfy `setupShown === true` while `navView` moved off the repository list,
+  # and a setup raised alongside settings would satisfy it while leaving the
+  # other surface unreachable behind it.
+  - name: the setup is raised over the screen that was there
+    wait_for:
+      state:
+        - "root.setupShown === true"
+        - "root.settingsShown === false"
+        - "root.navView === 'repos'"
+    timeout: 30s
+
+  # The way OUT, clicked rather than called — the whole defect class here is a
+  # control that reaches no handler, so invoking `closed()` directly would
+  # assert the handler works while leaving the door shut. Same reasoning as the
+  # Settings Back control above.
+  - name: close the setup
+    click: { objectName: "wizardClose" }
+
+  # Lowering restores exactly what was underneath and raises nothing in its
+  # place. `reposEmbeddedPanel` is re-asserted because the panel is what was
+  # under the overlay: a lowering that left the screen in some other state would
+  # satisfy `setupShown === false` on its own.
+  - name: the setup is lowered and the screen underneath is unchanged
+    wait_for:
+      state:
+        - "root.setupShown === false"
+        - "root.settingsShown === false"
+        - "root.navView === 'repos'"
+        - "root.mode === 'embedded'"
+        - "root.reposEmbeddedPanel === true"
+    timeout: 30s
+
   # ---- back to the seed ---------------------------------------------------
   #
   # Switching back must reset cleanly: a repository id from local storage is

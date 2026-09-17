@@ -513,25 +513,205 @@ E1, so the spec names E1 — and `reposSayingNothing === false`, two steps earli
 in the same spec, becomes genuinely meaningful for the first time, because the
 thing it now reads is the panel.
 
-### The panel's action emits a signal that nothing listens to
+### The panel's action emits a signal, and `Main.qml` now listens
 
 `RepoList.embeddedActionTaken(kind)` is emitted with `"setup"`, `"start"` or
-`"restart"`. **Nothing connects to it in `Main.qml` today**, deliberately: the
-wizard's host is the next piece, and start/restart need a passphrase prompt this
-screen has no place for.
+`"restart"`. **`Main.qml` connects to it**, routing `"setup"` into `openSetup()`
+and nothing else anywhere — see *Start and restart route nowhere* for why the
+other two have no destination and are rendered not-enabled rather than wired to
+one that could not perform them.
 
-The alternative — no control at all until a host exists — would have left E1 with
-a sentence and no next step, which is the dead end this capability was written to
-remove. The alternative in the other direction — performing the act here — is
-refused by the spec and by the shape: `RepoList` is injected with one `call`
-function, so every backend call it could make is in the test's log, which makes
-"rendering the state writes nothing" structural rather than a promise
-(`test_rendering_the_state_writes_nothing`).
+The `NO SPEC:` marker on the signal is gone with the gap it named.
 
-So the control is real, the signal is real, and it reaches nobody. That is
-marked `NO SPEC:` on the signal rather than left to be discovered, and it is the
-one thing in this change a reviewer should check has not quietly become
-permanent.
+Performing the act in `RepoList` is still refused, by the spec and by the shape:
+the list is injected with one `call` function, so every backend call it could
+make is in the test's log, which makes "rendering the state writes nothing"
+structural rather than a promise (`test_rendering_the_state_writes_nothing`).
+The panel requests; the host decides.
+
+### Hosting the setup extended `embedded-setup` rather than adding a capability
+
+The obvious alternative was a capability of its own — "the setup's host" —
+covering where the flow is reached from, what raising it does to the surfaces
+beside it, and where a reopened flow lands. It was rejected, and the reason is
+the re-entry rule rather than tidiness.
+
+**Re-entry decides which of the six steps is in force.** "A reopened setup lands
+at the first step with work left" is a statement about the step in force, which
+is the thing the six-steps requirement already owns: the resume is the one move
+other than advance and back that changes it, and the requirement on advancing
+has to except it explicitly ("Exactly one other thing moves the step in force").
+Split across two capabilities, that exception would point at a requirement in
+another document, and the rule "advance MUST NOT skip" would read as violated by
+a landing the reader cannot see. They are one subject.
+
+The same argument does not obviously cover raising and lowering, which is about
+surfaces rather than steps — and that is the honest weak point of the choice. It
+went the same way because the two are decided together: the host raises, and the
+raise is what triggers the resume. A capability boundary between them would put
+`openSetup()`'s two lines in two documents.
+
+What a separate capability would have bought is a home for the *durable settings
+surface* later — and that surface is getting one (`embedded-node-config`'s
+`node-config`). So the boundary that matters is setup-versus-durable-panel, which
+this change respects, not host-versus-flow.
+
+### Start and restart route nowhere, rather than into the wizard's start step
+
+The state panel names a start for **stopped** and **start failed**, and a restart
+for **not serving**. Routing those into this setup was considered and is wrong on
+four counts, three structural and one decisive:
+
+- **The start step is gated on no node answering the socket.** `canStartNode` is
+  `gitFound && !alreadyServing && !startPending`, and a restart's node is
+  answering it — that is what makes it a restart. So the flow would raise, run
+  its preflight, and land on a start step with its control disabled and
+  `startBlockedReason` explaining that a node is already there. The user asked to
+  restart and was shown a refusal to start.
+- **It offers no stop**, so a restart's two calls cannot be sequenced from it.
+  `stopNode` and `startNode` compose, but nothing in this flow reports the pair,
+  and the two refusals are different sentences a user should see separately.
+- **It starts the node with the passphrase its own identity step took, in the
+  same showing.** A later showing does not have it, and the field is deliberately
+  cleared once `nodeStarted` goes true.
+- **Decisively: nothing can tell whether a passphrase is needed at all.**
+  `getEmbeddedIdentity()` reports `home`, `exists`, `nodeId` and `problem` — and
+  no `encrypted` field. Only `createEmbeddedIdentity`'s reply carries one
+  (`radicle/src/radicle_impl.h:275`), which is the reply a later session by
+  definition does not have. So a host that wanted to prompt for a passphrase
+  cannot know whether to, and one that wanted to skip the prompt cannot know
+  whether it may.
+
+This last point is the one worth writing down, because a future reader will
+otherwise re-derive it from the header — and the natural conclusion from reading
+`createEmbeddedIdentity` alone is that the field exists. It does, on the wrong
+reply.
+
+So both acts belong to the durable settings surface, which is where a passphrase
+can be asked for, and until it exists the panel **names them without enabling
+them** and says starting is not yet available from here. The wording is careful
+about three claims it could have made and does not: not that a start *failed*
+(none was attempted), not that the node *cannot be started* (it can, from a
+command line), but that it is not yet available *from here*. That turns a dead
+end into a wait, and names the surface it is waiting on.
+
+**Keyed on hosted-ness, not on the state.** `EmbeddedState` takes `setupHosted`
+and `startHosted` as inputs and derives `actionHosted` from `actionKind`;
+`Main.qml` reports `embeddedSetupHosted: true` and `embeddedStartHosted: false`.
+The requirement is explicit that hosting an action must enable it with nothing
+else changed, and this is what makes that structural: the day the settings
+surface routes a start, one property flips and nothing in `RepoList` or
+`EmbeddedState` is edited. A component that hard-coded "setup is enabled, start
+is not" would have to be found and changed by someone who has to notice it.
+
+Both flags default to **false**, so a caller that forgets to wire one gets a
+named-but-disabled action — visible — rather than an enabled one reaching
+nobody, which is the defect.
+
+**What breaks without each guard:**
+
+- Deleting the `actionHosted` term from `actionEnabled` reddens
+  `test_hosting_an_action_is_what_enables_it` and
+  `test_an_unhosted_action_is_named_but_not_enabled_and_says_so`.
+- Deleting the `!page.embedded.actionEnabled` early return in `RepoList`'s
+  `onClicked` reddens `test_an_action_that_is_not_enabled_emits_no_request`.
+  That guard is separate from `enabled: false` on purpose: `enabled` stops a
+  pointer, not a programmatic emit, and the requirement is about the request.
+- Routing every kind to `openSetup()` in the host reddens
+  `test_a_start_request_does_not_raise_the_setup`. Verified by mutation. That
+  test drives `takeEmbeddedAction` directly rather than through a control,
+  because no control offers a start today — a click-driven test could not
+  express the request, and the rule would hold only by accident of what is
+  reachable.
+
+**One consequence worth stating:** three scenarios in `embedded-state` changed
+from asserting an enabled action to asserting a named one, and one —
+`test_a_blocked_home_offers_no_action_that_would_write` — had to be
+*restrengthened*. Its control leg cleared `pathsProblem` and asserted
+`actionEnabled` on the resulting stopped node, which with start unhosted became
+an assertion nothing could fail: a derivation returning `false` for every input
+passed both halves. The leg now moves to the no-identity state, whose setup
+action *is* hosted, so it discriminates again.
+
+### The resume sets `stepIndex` once, and the test that proves it is not the obvious one
+
+`landOnFirstUnfinishedStep()` assigns `stepIndex = resumeIndex` and emits
+`stepMoved()`. It does **not** loop `advance()`, and it does **not** bump
+`epoch`.
+
+The reason is the staleness guard. Every call the flow issues captures `epoch`,
+and every step change bumps it — so a landing that advanced step by step would
+move the epoch past the preflight replies that *decided where it was going*. The
+findings that chose the destination would be discarded on arrival: the identity
+finding blank at a step reached because an identity exists, and creation offered
+for an identity the backend just reported. It also cannot be expressed as an
+advance at all, because `canAdvance` refuses to leave the embedded step until
+capabilities report `embedded` — correct for a user's control, wrong for a move
+the backend itself chose.
+
+**The test that catches this is not the one a reader would expect, and that is
+worth recording because I got it wrong first.** The obvious guard is
+`test_the_resumed_steps_findings_are_populated`, which asserts exactly the
+scenario above. It **cannot fail** against a looping landing: the harness is
+synchronous, so all three gating replies have been written by the time the
+landing runs, and bumping the epoch afterwards discards nothing. Verified by
+mutation — the loop left all 49 tests in the file green.
+
+The reply that *is* still in flight at that moment is the **seed list**, because
+`listKnownSeeds` is the one probe that does not gate `preflightDone`. So
+`test_the_landing_does_not_discard_a_reply_still_in_flight` holds it across the
+landing and delivers it afterwards. **Reverting to a loop reddens that test and
+only that one** — confirmed in both directions.
+
+This is the repo's own lesson in a new form: an assertion that cannot distinguish
+the correct implementation from the broken one is decoration, however exactly it
+restates the requirement. The scenario the spec names and the test that can fail
+are two different things here, and both are kept.
+
+`epoch` is deliberately *not* bumped by the landing for the same reason: no call
+was issued under a step this move invalidates, and bumping would drop the
+preflight's own replies.
+
+**Why `restart()` rather than `reset()` + `runPreflight()`.** `reset()` means
+"forget everything" and is what a flow wants when it is being discarded;
+`restart()` means "ask the backend where we are", which is what a *showing*
+wants. `resumeWanted` is held per-showing and cleared by the landing, so the
+resume happens once rather than on every later reply — otherwise a node that
+stopped serving while the user read the confirm step would throw them back to
+start. `test_a_later_reply_does_not_move_a_step_the_user_walked_to` pins that.
+
+### The wizard is begun by its host, not by its construction
+
+`SetupWizard` had `Component.onCompleted: setupFlow.runPreflight()`. That is
+correct for a component instantiated per showing and wrong for one hosted in an
+overlay, because the overlay is not destroyed when it is lowered — `Main.qml`
+keeps one instance and toggles `visible`. So construction fires for the first
+showing only, and every later showing would sit on whatever step the previous
+user left behind: precisely the remembered-index second opinion the requirement
+forbids, arrived at by accident rather than by decision.
+
+`show()` replaces it, called by `openSetup()`. **Reverting to
+`Component.onCompleted` reddens `test_raising_the_setup_restarts_the_flow`**,
+with the second showing stuck on `network` — verified by mutation.
+
+The alternative — destroying and recreating the wizard per showing, with a
+`Loader` — would also have worked and was rejected as more machinery for the same
+outcome: it makes the flow's identity depend on the overlay's lifecycle, and
+`SettingsPanel` beside it already establishes the keep-one-instance pattern.
+
+### `settingsShown` moved from the flag to the pane
+
+It was `readonly property bool settingsShown: settingsOpen` — a copy of the
+condition the pane is keyed on. `setupShown` is the new observable beside it, and
+both now read the pane's own `visible`.
+
+The reason is the one `reposEmbeddedPanel` documents: a copy of a condition
+agrees with the item whether or not the item draws, so an assertion on it cannot
+see a surface that was raised and never rendered — which is a blank screen, and
+which a screenshot cannot distinguish from a working one either. Moving
+`settingsShown` was not strictly required by this change; it is a one-word fix to
+an observable that was already weaker than it looked, made while the file was
+open, and `local.yaml` already asserts on it.
 
 ### The generic unstartable copy stopped naming Embedded
 
@@ -581,11 +761,25 @@ write for the same reason.
   refresh rather than immediately, which the `notServing` sentence handles
   honestly once it does arrive.
 - **`Main.qml`'s own wiring has no component test.** No test instantiates
-  `Main.qml` — `tst_embedded_wiring.qml` reproduces its shape with the real
-  components — so `refreshEmbedded()`, the `embeddedSettled` `Connections` and
-  the new `app` properties are covered only by `local.yaml` at the end-to-end
-  layer. That is a real gap and it is stated rather than papered over: the
-  component suite being green says nothing about them.
+  `Main.qml` — `tst_embedded_wiring.qml` and now `tst_setup_host.qml` reproduce
+  its shape with the real components — so `refreshEmbedded()`, the
+  `embeddedSettled` `Connections`, the new `app` properties and the host's
+  `openSetup`/`takeEmbeddedAction`/`toggleSettings` are covered at the component
+  layer only as a *reproduction*. A divergence between those fixtures and
+  `Main.qml` is invisible to both. `local.yaml` is what closes it — it drives
+  the real file through the real clicks — and the four steps added there are the
+  only thing in any layer that can see the real button reaching the real host.
+  Neither layer is sufficient alone: the component file can ask questions a spec
+  cannot (a start request that no control offers), and the spec can see the
+  wiring the component file reproduces. The component suite being green still
+  says nothing about `Main.qml` itself.
+- **Nothing exercises the wizard against the real backend.** `local.yaml` raises
+  the setup and lowers it again without walking a step, deliberately: the steps
+  after preflight write — an identity, a mode, a node — and a spec that ran them
+  would leave a provisioned embedded home behind on every CI run and on any
+  developer machine it was run against. What is asserted is the hosting, which
+  is what this piece adds. The flow's own behaviour stays at the component
+  layer, where the calls are injected and nothing is written.
 
 ## Open questions
 
@@ -593,10 +787,17 @@ Two choices were made that the spec does not require. Both are marked `NO SPEC:`
 in the code and both have a test, so they are visible to review rather than
 becoming permanent by accident.
 
-- **Where the flow is entered from**, and what closing it does. This change
+- ~~**Where the flow is entered from**, and what closing it does. This change
   wires no entry point into `Main.qml`; the close control emits `closed()`
   rather than deciding, so the host's choice stays open. The surrounding surface
-  is the configuration panel change's. Marked on `SetupWizard.qml`'s `closed()`.
+  is the configuration panel change's. Marked on `SetupWizard.qml`'s
+  `closed()`.~~ **Answered, and it is no longer a choice this change declines to
+  make.** `embedded-setup` gained four requirements naming it: the setup is
+  raised over the view rather than navigated to, it is mutually exclusive with
+  the settings surface, it opens only for an act that names opening it, and a
+  reopened flow re-derives its step. `Main.qml` hosts it — see *Hosting the setup
+  extended `embedded-setup`* and the two entries after it. The `NO SPEC:` marker
+  on `closed()` is gone with the question.
 - **What a preflight finding shows before its probe has answered.** The spec
   requires four findings each reported as its own outcome, but says nothing
   about the window before a reply lands. Every finding has a legitimate falsy

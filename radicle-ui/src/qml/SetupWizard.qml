@@ -57,12 +57,10 @@ Item {
     /// The user is done, or gave up. The HOST decides what that means — this
     /// screen does not close itself, the same rule SettingsPanel follows.
     ///
-    /// NO SPEC: `embedded-setup` defines the flow's six steps and what each
-    /// must state, but says nothing about where the flow is ENTERED from or
-    /// what closing it does. Nothing in this change wires an entry point into
-    /// `Main.qml`, and the close control emits rather than deciding — so the
-    /// host's choice stays open and no unspecified navigation is baked in here.
-    /// The surrounding surface belongs to the configuration panel change.
+    /// The requirement is explicit that the surface reports and the module that
+    /// raised it lowers it: a surface that closed itself would leave whatever
+    /// raised it still believing the surface is up. `Main.qml` is the host — see
+    /// its `setupPane`.
     signal closed()
 
     implicitWidth: 560
@@ -83,7 +81,21 @@ Item {
         id: setupFlow
     }
 
-    Component.onCompleted: setupFlow.runPreflight()
+    /// Begin a showing.
+    ///
+    /// **Called by the host each time it raises this, not once at
+    /// instantiation.** The overlay hosting it is not destroyed when it is
+    /// lowered — `Main.qml` keeps one instance and toggles `visible` — so
+    /// `Component.onCompleted` fires exactly once, for the first showing only.
+    /// A second showing driven by it would resume nothing, re-run no preflight,
+    /// and sit on whatever step the previous user left behind, which is
+    /// precisely the remembered-index second opinion the requirement forbids.
+    ///
+    /// `restart()` rather than `runPreflight()`: the landing step is derived
+    /// from the replies this preflight is about to collect.
+    function show() {
+        setupFlow.restart();
+    }
 
     // The passphrase the identity step took, held here because the START step
     // needs it: the node is handed an already-decrypted signing key when it is

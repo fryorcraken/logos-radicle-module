@@ -394,7 +394,83 @@ QtObject {
         capabilitiesAnswered && identityAnswered && nodeStatusAnswered
 
     onAllProbesAnsweredChanged: {
-        if (allProbesAnswered) preflightDone = true;
+        if (allProbesAnswered) {
+            preflightDone = true;
+            if (resumeWanted) {
+                resumeWanted = false;
+                landOnFirstUnfinishedStep();
+            }
+        }
+    }
+
+    // ---- re-entry ---------------------------------------------------------
+    //
+    // A showing that was asked to RESUME lands at the first step whose work the
+    // backend reports as not yet done, rather than at step 0 or at the step the
+    // previous showing was closed on.
+
+    /// Whether this showing is waiting for the preflight so it can resume.
+    ///
+    /// Set by `restart()` and cleared by the landing, so the resume happens once
+    /// per showing. Held rather than inferred, because "the preflight has
+    /// answered" is true for every later refresh too, and a flow that re-derived
+    /// the step on each of them would yank a user off a step they walked to.
+    property bool resumeWanted: false
+
+    /// Begin a showing: preflight, then land on the first step with work left.
+    ///
+    /// **This is what a host calls when it raises the setup**, in place of
+    /// `reset()` + `runPreflight()`. The two are kept apart because `reset()` is
+    /// "forget everything" and this is "ask the backend where we are", and only
+    /// the second is correct for a flow whose every write is separately durable.
+    function restart() {
+        reset();
+        resumeWanted = true;
+        runPreflight();
+    }
+
+    /// The index of the first step whose work the backend has not reported done.
+    ///
+    /// Derived from the preflight replies, in the order the spec states:
+    ///
+    ///   mode not `embedded`                      -> embedded
+    ///   mode `embedded`, no identity             -> identity
+    ///   identity, node not serving               -> start
+    ///   identity, node serving                   -> confirm
+    ///
+    /// A pure function of the four reply-derived values, so a flow given
+    /// different replies answers differently — which is what makes "it derived
+    /// the resume point" distinguishable from "it always returned step 3".
+    readonly property int resumeIndex: {
+        if (!modeIsEmbedded) return steps.indexOf("embedded");
+        if (!identityExists) return steps.indexOf("identity");
+        if (!alreadyServing) return steps.indexOf("start");
+        return steps.indexOf("confirm");
+    }
+
+    /// Put `resumeIndex` in force, **as a single assignment**.
+    ///
+    /// **Not by looping `advance()`, and that is the whole of this function.**
+    /// Every step change bumps `epoch`, and the preflight replies that decided
+    /// where this is going were issued under the epoch the preflight ran at.
+    /// Advancing step by step moves the epoch past them, so
+    /// the findings that chose the destination are discarded on arrival: the
+    /// resumed step renders an unpopulated identity finding and offers creation
+    /// for an identity that exists. Assigning once leaves the epoch where the
+    /// replies were issued, so everything they populated is still in force.
+    ///
+    /// It also cannot be expressed as an advance at all: `canAdvance` refuses to
+    /// leave the embedded step until capabilities report `embedded`, which is
+    /// correct for a user's control and wrong for a move the backend itself
+    /// chose.
+    ///
+    /// `stepMoved()` is emitted so a view can react, but `epoch` is deliberately
+    /// NOT bumped: no call was issued under a step this move invalidates, and
+    /// bumping would drop the preflight's own replies if any are still in
+    /// flight — the seed list in particular, which does not gate the landing.
+    function landOnFirstUnfinishedStep() {
+        stepIndex = resumeIndex;
+        stepMoved();
     }
 
     /// The first non-empty sentence, falling back to the flow's own wording.
@@ -604,6 +680,10 @@ QtObject {
     function reset() {
         stepIndex = 0;
         epoch = epoch + 1;
+        // A pending resume belongs to the showing being discarded. `restart()`
+        // re-arms it after calling this, so the flag is per-showing rather than
+        // surviving one.
+        resumeWanted = false;
         preflightDone = false;
         capabilitiesAnswered = false;
         identityAnswered = false;
