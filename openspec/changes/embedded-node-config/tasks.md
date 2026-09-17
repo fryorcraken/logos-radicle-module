@@ -6,7 +6,7 @@
 - [x] design + code — `dev-writer`
 - [ ] tests — `tester`
 - [x] review: correctness — `code-reviewer`
-- [ ] review: security — `code-reviewer`
+- [x] review: security — `code-reviewer`
 - [x] review: readability — `code-reviewer`
 - [x] review: architecture — `code-reviewer`
 - [ ] review: spec-test — `spec-test-reviewer`
