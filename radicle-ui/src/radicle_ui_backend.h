@@ -37,6 +37,11 @@ public:
     QString startNode(QString passphrase) override;
     QString stopNode() override;
     QString getNodeStatus() override;
+    QString getNodeConfig() override;
+    QString setNodeConfig(QString changes) override;
+    QString listSeeded() override;
+    QString seedRepo(QString rid, QString scope) override;
+    QString unseedRepo(QString rid) override;
 
     // Remote — proxied to a seed node over HTTPS
     QString remoteListRepos(QString query, int page, int perPage) override;

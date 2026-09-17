@@ -140,12 +140,19 @@ fn a_node_starts_answers_its_socket_and_stops() {
             "a started node must report the identity it is serving as"
         );
 
-        // Outbound-only. Asserted rather than assumed, because it is a real
-        // limitation a UI has to state: peers cannot fetch from this node.
+        // Outbound-only, because this fixture's `config.json` has never set
+        // `listen` — not because `start` overrides it any more. Asserted rather
+        // than assumed, because it is a real limitation a UI has to state:
+        // peers cannot fetch from this node.
+        //
+        // This assertion alone does NOT show the configuration is honoured: it
+        // is equally true of a start that discards `listen`, which is what this
+        // code used to do. `a_configured_listen_address_is_what_the_node_binds`
+        // is the test that discriminates.
         assert_eq!(
             reply["listening"],
             serde_json::json!([]),
-            "the embedded node must bind no port"
+            "a node whose config sets no listen address must bind no port"
         );
 
         // A started node reports both halves of its state, and the socket it is
@@ -715,6 +722,260 @@ fn a_node_started_against_one_home_reports_that_home_and_not_another() {
             status["home"],
             serde_json::json!(fx.home()),
             "status must report the home the node was actually started against"
+        );
+
+        stop_and_forget();
+    });
+}
+
+/// Bind an ephemeral port and hand back both the listener and the port.
+///
+/// Used to find a port that is free (by binding it and letting it go) and, in
+/// the collision test, to hold one occupied while a node tries for it.
+fn ephemeral_port() -> (std::net::TcpListener, u16) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("could not bind an ephemeral port");
+    let port = l.local_addr().expect("local_addr").port();
+    (l, port)
+}
+
+#[test]
+fn a_configured_listen_address_is_what_the_node_binds() {
+    // **This is the test the two `vec![]` overrides made impossible.** Before
+    // this change `start` discarded the configuration's `listen` at both sites,
+    // so every node bound nothing and a user who edited `config.json` by hand
+    // got silence.
+    //
+    // It is written as two configurations producing two different `listening`
+    // values, because a single one does not discriminate: `listening` comes
+    // from `runtime.local_addrs`, and against the old code the empty half of
+    // this test passed while the non-empty half could not.
+    with_socket("listen-honoured", |socket| {
+        let fx = init_profile("node-listen-honoured");
+        let home = fx.home();
+
+        // Half one: nothing configured, nothing bound. Green before and after
+        // this change — which is exactly why it is not the whole test.
+        let quiet = parse(&node::start(&home, socket, ""));
+        assert_eq!(quiet["started"], serde_json::json!(true), "{quiet}");
+        assert_eq!(quiet["listening"], serde_json::json!([]));
+        stop_and_forget();
+
+        // Half two: a port in the configuration, that port bound. Red against
+        // the old code.
+        let (probe, port) = ephemeral_port();
+        drop(probe);
+        let reply = parse(&radicle_local_ffi::nodeconfig::set(
+            &home,
+            &serde_json::json!({ "listen": [format!("127.0.0.1:{port}")] }).to_string(),
+        ));
+        assert!(reply.get("error").is_none(), "{reply}");
+
+        let loud = parse(&node::start(&home, socket, ""));
+        assert_eq!(loud["started"], serde_json::json!(true), "{loud}");
+        let listening = loud["listening"].as_array().expect("listening");
+        assert!(
+            !listening.is_empty(),
+            "a configured listen address must be bound: {loud}"
+        );
+        assert!(
+            listening
+                .iter()
+                .any(|a| a.as_str().is_some_and(|s| s.ends_with(&format!(":{port}")))),
+            "the bound address must name the configured port {port}: {loud}"
+        );
+
+        stop_and_forget();
+    });
+}
+
+#[test]
+fn what_the_node_advertises_and_what_it_bound_are_the_same_configured_address() {
+    // **This is the assertion that was missing, and its absence let a real
+    // divergence ship green.**
+    //
+    // `start_inner` hands `Runtime::init` two separate things that must agree:
+    // the `Config` — what the node holds and reports about itself — and a
+    // `listen` argument, which is what the reactor binds. Its comment says
+    // "both sites had to change together, and changing one alone is the trap".
+    // Nothing asserted it. `a_configured_listen_address_is_what_the_node_binds`
+    // reads `listening`, which comes from `runtime.local_addrs` and is the bind
+    // side ONLY; `getNodeConfig` reads `config.json`, which is the file and is
+    // neither side.
+    //
+    // Measured before writing this: zeroing `config.listen` while passing the
+    // real value as `Runtime::init`'s `listen` argument left every test in this
+    // crate green — the node bound the port, reported the port, and privately
+    // held a configuration saying it listened on nothing. A node in that state
+    // announces an address it never bound, or stays silent about one it did.
+    //
+    // `node::advertised_listen` asks the running node over its control socket
+    // (`Command::Config`), so the answer is the object `Runtime::init` was
+    // actually given rather than a re-read of the file the mutation does not
+    // touch. Comparing it against `listening` from the same start is what ties
+    // the two sites to one value.
+    with_socket("listen-agrees", |socket| {
+        let fx = init_profile("node-listen-agrees");
+        let home = fx.home();
+
+        let (probe, port) = ephemeral_port();
+        drop(probe);
+        let configured = format!("127.0.0.1:{port}");
+        let reply = parse(&radicle_local_ffi::nodeconfig::set(
+            &home,
+            &serde_json::json!({ "listen": [configured.clone()] }).to_string(),
+        ));
+        assert!(reply.get("error").is_none(), "{reply}");
+
+        let started = parse(&node::start(&home, socket, ""));
+        assert_eq!(started["started"], serde_json::json!(true), "{started}");
+
+        // The bind side, as the existing test reads it.
+        let bound: Vec<String> = started["listening"]
+            .as_array()
+            .expect("listening")
+            .iter()
+            .map(|a| a.as_str().expect("an address string").to_string())
+            .collect();
+
+        // The node's own side, asked of the node.
+        let advertised = node::advertised_listen(&home)
+            .expect("a running node must answer what its own configuration listens on");
+
+        assert_eq!(
+            advertised,
+            vec![configured.clone()],
+            "the running node's own configuration must carry the configured \
+             listen address, not an empty list: bound {bound:?}"
+        );
+        assert_eq!(
+            advertised, bound,
+            "what the node advertises and what it bound must be the same value — \
+             a divergence here is the trap `start_inner`'s comment names"
+        );
+
+        stop_and_forget();
+    });
+}
+
+#[test]
+fn a_node_that_was_never_started_advertises_nothing_rather_than_an_empty_list() {
+    // The discriminating control for the test above. `advertised_listen` must
+    // distinguish "the node says it listens on nothing" (`Some(vec![])`) from
+    // "there is no node to ask" (`None`) — otherwise the assertion above would
+    // pass against a function that always returned `Some(vec![])`, which is
+    // exactly the constant-answer fake shape CLAUDE.md warns about.
+    let fx = init_profile("node-listen-unasked");
+    assert_eq!(
+        node::advertised_listen(&fx.home()),
+        None,
+        "with no node running there is nothing to ask, and that is not the same \
+         answer as a node that listens on nothing"
+    );
+}
+
+#[test]
+fn a_listen_port_that_cannot_be_bound_fails_the_start_rather_than_falling_back() {
+    // Falling back to binding nothing would report success for a configuration
+    // the node did not honour — a node the user believes is reachable and is
+    // not. The failure has to be loud.
+    with_socket("listen-collision", |socket| {
+        let fx = init_profile("node-listen-collision");
+        let home = fx.home();
+
+        // Held for the whole test, so the port really is occupied.
+        let (_occupant, port) = ephemeral_port();
+
+        let reply = parse(&radicle_local_ffi::nodeconfig::set(
+            &home,
+            &serde_json::json!({ "listen": [format!("127.0.0.1:{port}")] }).to_string(),
+        ));
+        assert!(reply.get("error").is_none(), "{reply}");
+
+        let refused = parse(&node::start(&home, socket, ""));
+        assert!(
+            refused["error"].as_str().is_some(),
+            "a port already bound must fail the start: {refused}"
+        );
+
+        let status = parse(&node::status());
+        assert_eq!(
+            status["running"],
+            serde_json::json!(false),
+            "a failed start must leave no node running: {status}"
+        );
+
+        stop_and_forget();
+    });
+}
+
+#[test]
+fn a_configuration_change_while_a_node_runs_asks_for_a_restart_and_a_restart_clears_it() {
+    // `restartRequired` is a comparison against the file the running node was
+    // built from, not a flag raised by any write. This drives all three states
+    // in one test, because each is only meaningful against the others: a
+    // constant `false` passes the first assertion, a constant `true` passes the
+    // second, and only the sequence rules out both.
+    with_socket("restart-required", |socket| {
+        let fx = init_profile("node-restart-required");
+        let home = fx.home();
+
+        // Nothing running: nothing to restart, whatever the file says.
+        assert!(
+            !node::restart_required(&home),
+            "with no node running there is nothing to restart"
+        );
+
+        let started = parse(&node::start(&home, socket, ""));
+        assert_eq!(started["started"], serde_json::json!(true), "{started}");
+
+        // Running and unchanged.
+        assert!(
+            !node::restart_required(&home),
+            "an untouched configuration must not ask for a restart"
+        );
+
+        assert_eq!(
+            parse(&radicle_local_ffi::nodeconfig::get(&home))["restartRequired"],
+            serde_json::json!(false)
+        );
+
+        // Running and changed. **The reply to the write itself must already say
+        // so** — that is the ordering the whole thing turns on: a panel that
+        // saved a change and re-rendered from a reply saying `false` would show
+        // no banner for a change the node has not picked up.
+        let written = parse(&radicle_local_ffi::nodeconfig::set(
+            &home,
+            &serde_json::json!({ "alias": "changed-while-running" }).to_string(),
+        ));
+        assert!(written.get("error").is_none(), "{written}");
+        assert_eq!(
+            written["restartRequired"],
+            serde_json::json!(true),
+            "the write's own reply must ask for the restart it just made \
+             necessary: {written}"
+        );
+        assert!(
+            node::restart_required(&home),
+            "a configuration changed under a running node must ask for a restart"
+        );
+
+        // The running node is untouched by the write — it read its
+        // configuration once, at construction.
+        let status = parse(&node::status());
+        assert_eq!(status["running"], serde_json::json!(true), "{status}");
+
+        // And a restart clears it, by construction rather than by resetting
+        // anything: the new node captures the file it actually started with.
+        stop_and_forget();
+        let again = parse(&node::start(&home, socket, ""));
+        assert_eq!(again["started"], serde_json::json!(true), "{again}");
+        assert!(
+            !node::restart_required(&home),
+            "a restart must clear the pending state"
+        );
+        assert_eq!(
+            parse(&radicle_local_ffi::nodeconfig::get(&home))["restartRequired"],
+            serde_json::json!(false)
         );
 
         stop_and_forget();

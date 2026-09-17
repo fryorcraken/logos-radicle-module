@@ -64,7 +64,10 @@ the config panel exists to remove:
 
 - `rad init` + `rad id update --allow` is **not enough** to replicate a private
   repo; every other node must *also* `rad seed <RID> --scope all`, or `rad sync`
-  times out with "All seeds timed out".
+  times out with "All seeds timed out". The surface that removes this is
+  specified in `node-seeding` and **built** — `listSeeded`, `seedRepo`,
+  `unseedRepo`, against the policies database. The capability also requires a
+  view to state both halves; what is ahead is the panel that shows it.
 - A fresh node's routing table may list only the public community seeds, so
   `rad clone` fails with "no seeds found" while connected to a peer holding the
   data. The fix is an explicit `--seed <NID>`.
@@ -97,14 +100,25 @@ for the control socket, show the NID, and say why on failure); and confirm,
 restating the "this is a new identity" consequence with the
 `rad id update --allow <DID>` line ready to copy.
 
-The panel is backed by `node/config.rs`'s real fields, nothing invented:
-identity (alias, NID/DID read-only and copyable, change passphrase); tools (the
-git path, blank meaning auto-detect, with resolved path and version shown);
-network (inbound on/off plus port, `externalAddresses`, persistent peers);
-seeding (seeded RIDs with scope, which is the fix for the allow-is-not-enough
-footgun); node control (start/stop/restart, connections, sync status); and
-diagnostics (node log tail, because making the failure visible is this repo's
-first rule).
+The panel is backed by real fields, nothing invented: identity (alias, NID/DID
+read-only and copyable, change passphrase); tools (the git path, blank meaning
+auto-detect, with resolved path and version shown); network (inbound on/off plus
+port, `externalAddresses`, and the peers to stay connected to); seeding (seeded
+RIDs with scope, which is the fix for the allow-is-not-enough footgun); node
+control (start/stop/restart, connections, sync status); and diagnostics (node
+log tail, because making the failure visible is this repo's first rule).
+
+~~The read/write surface those fields need~~ — **built.** The node's own
+`config.json` (`alias`, `listen`, `externalAddresses`, `connect`, `peers`) and
+the per-repo seeding policies are a module surface in the `node-config` and
+`node-seeding` capabilities, with the git path's negative cases added to
+`module-settings`. Which store each of those lives in, and why the two answer
+"when does this apply" differently, is in the `embedded-node-config` change's
+`design.md`.
+
+What remains ahead here is the **panel itself** — QML only, plus the parts that
+are not configuration: node control's restart button, the connections list, sync
+status, the log tail, and changing the passphrase.
 
 **Phase 3 — writes against the embedded node.** Folds in the remaining write
 features (issues, comments, labels) now that a signer and a passphrase flow
@@ -151,11 +165,16 @@ archived `design.md`, and the consequence the UI owes the user is specified in
 `source-modes` and `embedded-identity`. What remains ahead is only that the
 wizard must state it at the moment a user picks Embedded.
 
-**`listen: []` is the embedded default, and the UI must be honest about it.** A
-node with no listen address is outbound-only: it can fetch and announce, but
-peers cannot fetch *from* it. For a desktop user behind NAT that is correct, but
-"allow inbound connections" belongs in the panel as an explicit opt-in with a
-port field, defaulting off, saying plainly what leaving it off means.
+~~**`listen: []` is the embedded default, and the UI must be honest about it.**~~
+— **built.** Specified in `node-config` and implemented: inbound defaults off, a
+configured `listen` is now what the node binds rather than being overridden at
+start, and the reported `listening` comes from the addresses actually bound so a
+test can tell an honoured configuration from an ignored one. Why the override
+had to go at *two* sites rather than one, and what the old code reported for a
+port it never tried to bind, is in the `embedded-node-config` change's
+`design.md`. The outbound-only consequence — the node can fetch and announce, but
+peers cannot fetch *from* it — is a sentence the surface requires a view to
+state. What remains ahead is the port field itself.
 
 **Windows and macOS are out of scope to support, and worth not hard-coding
 against.** `radicle-node` carries `uds_windows` and `radicle-windows`
@@ -182,11 +201,12 @@ cannot fail is easiest to write:
   Init *two* profiles in two temp homes and assert their NIDs differ and neither
   wrote to the other. A fixture with one home cannot tell isolation from its
   absence — the same trap as a fake returning identical data for every branch.
-- **The git-path setting needs a negative test or it proves nothing.** A test
-  that configures a valid git and sees success passes equally against a resolver
-  that ignores the setting and falls back to `PATH`. Pin it with a path that
-  does not exist, asserting the failure names that path, and with a
-  real-but-not-git binary, asserting `git --version` validation rejects it.
+- ~~**The git-path setting needs a negative test or it proves nothing.**~~ —
+  the negative cases are now **required by `module-settings`** rather than only
+  advised here: a nonexistent path, a real-but-not-git binary, a non-zero exit,
+  a relative path, and no fallback to `PATH`. The general lesson stands and is
+  why the requirement is written as it is — a test configuring a valid git and
+  seeing success passes equally against a resolver that ignores the setting.
 - **Never point a test at the developer's real Radicle home.** The `probe_*`
   examples do, deliberately, and are correctly not tests. Keep that line.
 - **An embedded node is easier to e2e than the current setup**, because a spec

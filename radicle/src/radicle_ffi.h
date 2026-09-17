@@ -274,9 +274,13 @@ char* radicle_local_init_profile(const char* home, const char* alias,
 /// decrypted signing key, so there is no later point to supply one. Phase 0 left
 /// this open; `tests/node_lifecycle.rs` now measures it in both directions.
 ///
-/// The node binds **no TCP port** (`listen: []`): it can fetch and announce, but
-/// peers cannot fetch from it. That is the right default for a desktop behind
-/// NAT and a real limitation a UI must state; `listening` reports it.
+/// The node binds what the home's `config.json` sets as `listen`, which for a
+/// home that has never been configured is nothing: it can fetch and announce,
+/// but peers cannot fetch from it. That is the right default for a desktop
+/// behind NAT and a real limitation a UI must state. `listening` reports the
+/// addresses the node **actually bound** — not an echo of the configuration,
+/// which would read the same whether the configuration was honoured or (as this
+/// once did) discarded.
 ///
 /// Returns only once the control socket answers, or with an error saying why it
 /// never did — a spawned thread is not a started node.
@@ -308,6 +312,92 @@ char* radicle_node_stop(void);
 ///
 /// -> {"running":bool,"home":"…","socket":"…","serving":bool,"reason":"…"}
 char* radicle_node_status(void);
+
+// ---------------------------------------------------------------------------
+// The node's configuration and its seeding policies.
+//
+// Two stores under one home, and the difference is when a change takes effect.
+// `config.json` is read when the node is CONSTRUCTED, so a write reaches a
+// running node at its next start and never before. `policies.db` is read as the
+// node works, so a seeding write applies at once. That is why they are separate
+// calls with separate doc comments rather than one configuration surface.
+//
+// All of them take `home` and none resolves one, the same rule the node trio
+// above follows. It matters more here because these WRITE: a home arriving from
+// a sandboxed view would be a way to rewrite a node this module does not own.
+// ---------------------------------------------------------------------------
+
+/// The node configuration under `home`, in the shape a panel renders.
+///
+/// A home with no `config.json` is an error naming the home, never a set of
+/// defaults: defaults presented as a configuration look exactly like a real one
+/// on screen, and a view would offer to edit a node that does not exist.
+///
+/// `restartRequired` is computed on the Rust side by comparing the file against
+/// what the node running against this home was started with. It is deliberately
+/// not a parameter: the flag has to be read *after* a write, and a caller that
+/// supplied it could read it on the wrong side.
+///
+/// -> {"alias":"…","listen":[…],"externalAddresses":[…],"connect":[…],
+///     "peers":"static"|"dynamic","inboundReachable":bool,
+///     "restartRequired":bool}
+/// -> {"error":"…"}
+char* radicle_node_get_config(const char* home);
+
+/// Applies `changes` — a JSON object naming a subset of the settable fields — to
+/// the node configuration under `home`, and returns the whole configuration.
+///
+/// **The whole object, not a diff**, so a caller re-renders from what was stored
+/// rather than from what it submitted.
+///
+/// Every value is validated with the `radicle` crate's own parsers before the
+/// file is opened, so a refused call leaves `config.json` exactly as it was, and
+/// an accepted value is one the node can load at its next start.
+///
+/// **A key this build has no field for survives the write.** The crate's
+/// `node::Config.extra` is `skip_serializing`, so a load-modify-store through
+/// that type would silently delete every such key; this edits the file's JSON in
+/// place instead and validates the result.
+///
+/// The reply's `restartRequired` is read **after** the write, so a change made
+/// while a node is running comes back already asking for a restart.
+///
+/// -> the same shape as `radicle_node_get_config`, or {"error":"…"}
+char* radicle_node_set_config(const char* home, const char* changes);
+
+/// Every repository the node under `home` is seeding, with each entry's scope.
+///
+/// Reports POLICIES, never a filter over storage. A repository can be seeded
+/// with nothing yet replicated, and can sit in storage with no policy seeding
+/// it; `radicle_local_list_repos(…, "seeded", …)` answers the other question.
+///
+/// An unopenable store is an error rather than an empty list — those are
+/// different facts, and a view acting on the wrong one would offer to seed a
+/// repository that is already seeded.
+///
+/// -> {"items":[{"rid":"rad:…","scope":"all"|"followed"}]} or {"error":"…"}
+char* radicle_node_list_seeded(const char* home);
+
+/// Seeds `rid` under `home` with `scope` (`all` or `followed`).
+///
+/// The scope is never defaulted on the caller's behalf: `all` seeds every
+/// remote and is what a private repository needs, `followed` seeds only
+/// delegates and followed nodes, and the difference decides whether a private
+/// repository replicates at all. An unknown scope is refused naming both.
+///
+/// Re-seeding at a different scope replaces it rather than adding a row.
+///
+/// -> {"rid":"rad:…","scope":"…"} or {"error":"…"}
+char* radicle_node_seed(const char* home, const char* rid, const char* scope);
+
+/// Removes the seeding policy for `rid` under `home`.
+///
+/// Unseeding what is not seeded is an answer rather than an error, and the
+/// boolean is what distinguishes the two. **Nothing is deleted from storage** —
+/// a policy is reversible where deleted storage is not.
+///
+/// -> {"unseeded":bool} or {"error":"…"}
+char* radicle_node_unseed(const char* home, const char* rid);
 
 /// Releases a string returned by any of the above. Passing anything else, or
 /// freeing twice, is undefined behaviour — the same contract as `free()`.

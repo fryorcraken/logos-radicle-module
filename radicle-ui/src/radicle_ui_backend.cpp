@@ -101,6 +101,46 @@ QString RadicleUiBackend::getNodeStatus()
     return modules().radicle.getNodeStatus();
 }
 
+QString RadicleUiBackend::getNodeConfig()
+{
+    // A plain read. Nothing changes, so nothing is refreshed.
+    return modules().radicle.getNodeConfig();
+}
+
+QString RadicleUiBackend::setNodeConfig(QString changes)
+{
+    // **Deliberately does NOT refresh capabilities**, unlike every other write
+    // forwarded from this file.
+    //
+    // A node-configuration change does not alter what the module can do: the
+    // same home is resolved, the same identity is in force, the node is neither
+    // more nor less available, and git is where it was. Refreshing would spawn
+    // `git --version` and probe a socket to learn nothing.
+    //
+    // What it DOES change is whether the running node is up to date, and the
+    // reply's `restartRequired` carries that — already in front of the caller,
+    // without a second round trip.
+    return modules().radicle.setNodeConfig(changes);
+}
+
+QString RadicleUiBackend::listSeeded()
+{
+    return modules().radicle.listSeeded();
+}
+
+QString RadicleUiBackend::seedRepo(QString rid, QString scope)
+{
+    // No refresh either, for the same reason: a seeding policy changes what the
+    // node will replicate, not what this module can do. Nothing in
+    // `getCapabilities()` reports seeding.
+    return modules().radicle.seedRepo(rid, scope);
+}
+
+QString RadicleUiBackend::unseedRepo(QString rid)
+{
+    return modules().radicle.unseedRepo(rid);
+}
+
 // --- remote ----------------------------------------------------------------
 
 QString RadicleUiBackend::remoteListRepos(QString query, int page, int perPage)

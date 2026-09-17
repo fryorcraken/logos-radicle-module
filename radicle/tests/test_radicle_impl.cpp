@@ -1242,6 +1242,56 @@ LOGOS_TEST(capabilities_report_the_git_preflight)
     // With no configured path, any git found was auto-detected — so the flag
     // that distinguishes the two must say so.
     LOGOS_ASSERT_FALSE(caps["gitConfigured"].get<bool>());
+
+    // `gitProblem` MUST be empty exactly when `gitFound` is true. Asserting the
+    // positive direction here is what stops the four keys' presence standing in
+    // for their values: a build reporting a problem alongside a working git
+    // would otherwise pass.
+    if (caps["gitFound"].get<bool>())
+        LOGOS_ASSERT_TRUE(caps["gitProblem"].get<std::string>().empty());
+}
+
+LOGOS_TEST(a_refused_configured_git_path_is_still_reported_as_configured)
+{
+    // **The negative half of "configured" vs "detected", which nothing asserted.**
+    //
+    // The spec requires a refused configured path to report `gitConfigured`
+    // true, `gitFound` false and a non-empty `gitProblem` — the three together
+    // are what let a view say "the git you chose is not working" rather than the
+    // much less useful "no git found", which would send a user looking for a
+    // problem in their PATH when the problem is their own setting.
+    //
+    // Written straight into the settings file rather than through `setSetting`,
+    // which validates by running the path and would refuse it. That refusal is
+    // the right behaviour and is covered by
+    // `set_setting_refuses_a_git_path_that_does_not_exist_and_names_it`; what is
+    // under test here is the state that refusal cannot prevent — a path that
+    // validated when it was set and has since been removed, renamed or upgraded
+    // away. `SettingsStore::load()` does not re-validate `gitPath`, so this is
+    // reachable in the ordinary course of things rather than only by hand.
+    ScopedRadHome home("caps-git-bad");
+    const auto path = scratchSettingsPath("caps-git-bad");
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << nlohmann::json{
+            {"mode", "explore"},
+            {"radHome", ""},
+            {"radSocket", ""},
+            {"gitPath", "/definitely/not/here/git"},
+            {"remoteSeed", ""},
+        }.dump();
+    }
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_TRUE(caps["gitConfigured"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["gitFound"].get<bool>());
+    // Non-empty, and naming the path — a reason that does not say which path
+    // failed leaves the user no action to take.
+    LOGOS_ASSERT_FALSE(caps["gitProblem"].get<std::string>().empty());
+    LOGOS_ASSERT_CONTAINS(caps["gitProblem"].get<std::string>(),
+                          std::string("/definitely/not/here/git"));
 }
 
 LOGOS_TEST(a_persisted_seed_is_adopted_when_the_module_starts)
@@ -1518,4 +1568,194 @@ LOGOS_TEST(a_too_long_socket_is_reported_before_a_start_is_attempted)
     // it win here would replace the one message that names the cap with one that
     // does not — the exact substitution this ordering exists to prevent.
     LOGOS_ASSERT_TRUE(error.find("no signing key") == std::string::npos);
+}
+
+// ===========================================================================
+// The node's own configuration, and its seeding policies.
+//
+// Same boundary as the node block above: this file owns the GATING — which
+// modes may read and which may write — and `rust-ffi/tests/node_config.rs` and
+// `node_seeding.rs` own what the two stores actually do. Every test here drives
+// a path that returns before the backend is reached.
+//
+// The one thing this layer decides that the layer below cannot is the
+// **read/write asymmetry in `local`**: reading the user's own node's
+// configuration is useful, writing it is not this module's business. Nothing in
+// the Rust side knows which mode is in force, so nothing there could enforce it.
+// ===========================================================================
+
+LOGOS_TEST(the_node_configuration_is_readable_in_local_mode_but_not_writable)
+{
+    // The asymmetry, in one test, because each half is only meaningful against
+    // the other: a module that refused both would pass an "it refuses writes"
+    // test, and one that allowed both would pass an "it allows reads" test.
+    ScopedRadHome home("nodeconfig-local");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("nodeconfig-local");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("nodeconfig-local")});
+    impl.setSetting("mode", "local");
+
+    // The control: the profile IS readable here, so a refusal below cannot be
+    // passing for an unrelated reason.
+    LOGOS_ASSERT_TRUE(parse(impl.getCapabilities())["localAvailable"].get<bool>());
+
+    // The READ is not refused by the mode. The scratch home has no `config.json`
+    // — `makeStorage()` creates `storage/` only — so the backend answers with its
+    // own error about that, which is a different sentence from the mode refusal.
+    //
+    // **An absence assertion alone does not discriminate**, which a reviewer
+    // caught: `find("you run yourself") == npos` is true of any other refusal
+    // too, including a broken gate returning something generic. So the positive
+    // half is asserted as well — the backend's message names the HOME PATH, and
+    // only code that actually reached the backend can produce that. A mode
+    // refusal names modes, never a path.
+    //
+    // Still short of the real thing. A read against a home that HOLDS a
+    // `config.json`, asserting the configuration comes back, is the scenario
+    // that matters, and it is open as a finding for `spec-writer`: the spec does
+    // not say what fixture that scenario should stand up, and inventing one here
+    // would pin behaviour nobody specified.
+    const auto read = parse(impl.getNodeConfig());
+    if (read.contains("error")) {
+        const std::string error = read["error"].get<std::string>();
+        LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+        LOGOS_ASSERT_CONTAINS(error, home.dir);
+    }
+
+    // The WRITE is refused, by the mode, naming it and the alternative.
+    const auto written = parse(impl.setNodeConfig(R"({"alias":"renamed"})"));
+    LOGOS_ASSERT_TRUE(written.contains("error"));
+    const std::string error = written["error"].get<std::string>();
+    LOGOS_ASSERT_CONTAINS(error, std::string("local"));
+    LOGOS_ASSERT_CONTAINS(error, std::string("embedded"));
+    LOGOS_ASSERT_CONTAINS(error, std::string("you run yourself"));
+}
+
+LOGOS_TEST(seeding_is_listable_in_local_mode_but_not_changeable)
+{
+    // The same asymmetry for the other store, asserted separately because the
+    // two go through different backends and a gate applied to one is not a gate
+    // applied to the other.
+    ScopedRadHome home("seeding-local");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("seeding-local");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("seeding-local")});
+    impl.setSetting("mode", "local");
+
+    LOGOS_ASSERT_TRUE(parse(impl.getCapabilities())["localAvailable"].get<bool>());
+
+    // As in the `getNodeConfig` twin above: the absence of the mode's words is
+    // not on its own evidence the gate passed the call through, so the positive
+    // signal is asserted too. `seeding.rs` names the home in every failure it
+    // can produce here; the mode refusal names modes and no path.
+    const auto listed = parse(impl.listSeeded());
+    if (listed.contains("error")) {
+        const std::string error = listed["error"].get<std::string>();
+        LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+        LOGOS_ASSERT_CONTAINS(error, home.dir);
+    }
+
+    for (const auto& reply : {parse(impl.seedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn", "all")),
+                              parse(impl.unseedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn"))}) {
+        LOGOS_ASSERT_TRUE(reply.contains("error"));
+        const std::string error = reply["error"].get<std::string>();
+        LOGOS_ASSERT_CONTAINS(error, std::string("local"));
+        LOGOS_ASSERT_CONTAINS(error, std::string("embedded"));
+    }
+}
+
+LOGOS_TEST(explore_mode_refuses_every_node_configuration_and_seeding_call)
+{
+    // `explore` resolves no home at all, so there is no file to read and no
+    // policy store to open — both halves are refused, unlike `local`.
+    //
+    // The refusal must NOT be the local-mode sentence: that would tell a user
+    // their own node is in the way when they have not selected a node at all.
+    // Without this negative assertion the two refusals could collapse into one
+    // message and every positive assertion here would still pass.
+    ScopedRadHome home("nodeconfig-explore");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("nodeconfig-explore");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("nodeconfig-explore")});
+    impl.setSetting("mode", "explore");
+
+    for (const auto& reply : {parse(impl.getNodeConfig()),
+                              parse(impl.setNodeConfig(R"({"alias":"x"})")),
+                              parse(impl.listSeeded()),
+                              parse(impl.seedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn", "all")),
+                              parse(impl.unseedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn"))}) {
+        LOGOS_ASSERT_TRUE(reply.contains("error"));
+        const std::string error = reply["error"].get<std::string>();
+        LOGOS_ASSERT_CONTAINS(error, std::string("explore"));
+        LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+    }
+}
+
+LOGOS_TEST(embedded_mode_reaches_the_backend_rather_than_being_refused_by_the_gate)
+{
+    // The positive half of the gate, and the only thing that separates a working
+    // gate from one that refuses everything: in `embedded` all five calls get
+    // past the mode check and fail — if they fail — for the backend's own
+    // reasons, in the backend's own words.
+    //
+    // The scratch embedded home has no identity, so `config.json` is absent and
+    // the policy store cannot be opened. Both of those are the layer below
+    // speaking, which is exactly what this asserts.
+    ScopedRadHome home("nodeconfig-embedded");
+    home.makeStorage();
+    ScopedXdgDataHome xdg("nodeconfig-embedded");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("nodeconfig-embedded")});
+    impl.setSetting("mode", "embedded");
+
+    for (const auto& reply : {parse(impl.getNodeConfig()),
+                              parse(impl.setNodeConfig(R"({"alias":"x"})")),
+                              parse(impl.listSeeded()),
+                              parse(impl.seedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn", "all")),
+                              parse(impl.unseedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn"))}) {
+        // Whatever the outcome, it must not be a mode refusal. Both mode
+        // messages name a mode and offer another; neither sentence below belongs
+        // to any backend error.
+        if (reply.contains("error")) {
+            const std::string error = reply["error"].get<std::string>();
+            LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+            LOGOS_ASSERT_TRUE(error.find("browses a seed") == std::string::npos);
+        }
+    }
+}
+
+LOGOS_TEST(a_node_configuration_key_is_not_a_module_setting)
+{
+    // The two surfaces stay apart, asserted from both directions.
+    //
+    // `getSettings` must not grow a node key, and `setSetting` must refuse one —
+    // otherwise a panel would have two places to write `listen` and no way to
+    // know which one the node reads.
+    ScopedXdgDataHome xdg("settings-not-node-config");
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                SettingsStore{scratchSettingsPath("settings-not-node-config")});
+
+    const auto settings = parse(impl.getSettings());
+    LOGOS_ASSERT_TRUE(settings.contains("mode"));
+    LOGOS_ASSERT_TRUE(settings.contains("radHome"));
+    LOGOS_ASSERT_TRUE(settings.contains("radSocket"));
+    LOGOS_ASSERT_TRUE(settings.contains("gitPath"));
+    LOGOS_ASSERT_TRUE(settings.contains("remoteSeed"));
+    // Exactly five, so a node key added later fails here rather than quietly
+    // giving the panel a second place to look.
+    LOGOS_ASSERT_TRUE(settings.size() == 5);
+
+    for (const char* key : {"listen", "alias", "connect", "peers", "externalAddresses"}) {
+        const auto reply = parse(impl.setSetting(key, "anything"));
+        LOGOS_ASSERT_TRUE(reply.contains("error"));
+        LOGOS_ASSERT_CONTAINS(reply["error"].get<std::string>(), std::string(key));
+    }
 }

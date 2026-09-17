@@ -135,6 +135,23 @@ struct Node {
     /// informational: it is what [`status`] probes to tell a live node from a
     /// thread that panicked.
     socket: String,
+    /// The contents of `config.json` at the moment this node was started.
+    ///
+    /// **This is what makes `restartRequired` a comparison rather than a flag.**
+    /// The question is whether the file on disk still says what the running node
+    /// was built from, and the node reads its configuration once, at
+    /// construction — so the only way to answer it is to have kept what was read.
+    ///
+    /// A flag set by every write would be wrong in both directions: a write that
+    /// changes nothing would raise it, and a change undone would leave it raised
+    /// for ever. Comparing also makes the flag clear itself on restart by
+    /// construction, since a new `Node` captures the file it actually started
+    /// with rather than relying on anyone remembering to reset anything.
+    ///
+    /// `None` when the file could not be read at start. A later read that also
+    /// fails compares equal and reports no pending restart, which is the honest
+    /// answer: nothing is known to have changed.
+    started_with: Option<String>,
     /// The signal channel `Runtime::init` was handed the receiving end of.
     /// Sending `Terminate` is one stop path.
     notify: mpsc::SyncSender<radicle_signals::Signal>,
@@ -314,17 +331,25 @@ fn socket_answers(socket: &str) -> bool {
 /// not set. Embedded's promise is a separate identity, and it has to hold
 /// structurally rather than because nothing happened to export those variables.
 ///
-/// ## `listen: []` — outbound-only, and stated as a limitation
+/// ## `listen` comes from the configuration, and defaults to outbound-only
 ///
-/// The node binds **no TCP port**. That is the right default for a desktop
-/// behind NAT: it needs no port, no firewall rule, and cannot collide with a
-/// node the user already runs on 8776. It is also a real limitation the UI must
-/// be honest about — an outbound-only node can fetch and announce, but peers
-/// **cannot fetch from it**. The reply reports `listening` so a caller states
-/// what is true rather than implying a full node.
+/// A home whose `config.json` has never set `listen` binds **no TCP port**.
+/// That is the right default for a desktop behind NAT: it needs no port, no
+/// firewall rule, and cannot collide with a node the user already runs on 8776.
+/// It is also a real limitation a view must be honest about — an outbound-only
+/// node can fetch and announce, but peers **cannot fetch from it**.
 ///
-/// Accepting inbound connections is a config-panel opt-in with a port field
-/// (plan §"The configuration panel"), not a default, and not this step.
+/// The default is the crate's own `#[serde(default)]` on the field rather than
+/// an override here. This function used to force `vec![]` at two sites, which
+/// meant a user who edited `config.json` had their listen addresses discarded
+/// with nothing saying so. Turning inbound on is now a `setNodeConfig` write,
+/// and this function honours it.
+///
+/// `listening` in the reply is built from `runtime.local_addrs` — the addresses
+/// the reactor actually bound, not an echo of the configuration. That
+/// distinction is what lets a caller tell an honoured configuration from an
+/// ignored one: a reply repeating its own input would read identically either
+/// way.
 ///
 /// ## The passphrase, and the question Phase 0 left open
 ///
@@ -478,10 +503,33 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
     // ask for.
     let config = radicle::profile::Config::load(radicle_home.config().as_path())
         .map_err(|e| format!("could not read the node configuration at {home}: {e}"))?;
-    let mut config = config.node;
-    // Outbound-only. See the doc comment: the safe default, and a real
-    // limitation the reply reports rather than hides.
-    config.listen = vec![];
+    let config = config.node;
+
+    // **The configured `listen` is honoured, and this line used to be
+    // `config.listen = vec![]`.**
+    //
+    // Outbound-only is still the default, but it is now the default *in the
+    // file*: a home whose `config.json` has never set `listen` deserializes it
+    // as `vec![]` (`#[serde(default)]` on `node/config.rs:601`). That is a
+    // better guarantee than the override was, because the default and a user's
+    // choice now arrive through one mechanism instead of a default that
+    // silently outranked the setting.
+    //
+    // **Both sites had to change together**, and changing one alone is the
+    // trap: the `listen` passed to `Runtime::init` below is what the reactor
+    // binds, while `config.listen` is what the node advertises about itself. A
+    // configuration honoured in only one of them produces a node that binds a
+    // port and tells nobody, or tells everybody about a port it never bound.
+    //
+    // **That claim is asserted, not just stated here.**
+    // `node_lifecycle.rs::what_the_node_advertises_and_what_it_bound_are_the_same_configured_address`
+    // asks the running node for its own `Config` over the control socket and
+    // compares it against the bound addresses from the same start. Adding
+    // `config.listen = vec![]` on the next line reddens that test and **only**
+    // that test — measured, and the reason it exists: every other check here
+    // reads the bind side (`runtime.local_addrs`) or the file, and neither can
+    // see the two values come apart.
+    let listen = config.listen.clone();
 
     // The caller owns the signal channel; `radicle_signals::install()` is never
     // called from this crate.
@@ -533,9 +581,11 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
         config,
         socket_path.clone(),
         // `listen` here is the runtime's own argument, separate from
-        // `config.listen`. Both are empty: outbound-only, no port bound, and
-        // therefore no way to collide with a node the user already runs.
-        vec![],
+        // `config.listen` — and it is the one that actually reaches `bind`.
+        // Both now carry the configured value; see the comment where `listen`
+        // is taken. An empty list binds no port, which is the outbound-only
+        // default a home that has never been configured produces.
+        listen,
         signals,
         signer,
     )
@@ -565,6 +615,9 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
     let mut node = Node {
         home: home.to_string(),
         socket: socket.to_string(),
+        // Captured here rather than before `Runtime::init`, so it records the
+        // file as it stood when the node was actually built from it.
+        started_with: crate::nodeconfig::fingerprint(home),
         notify,
         handle: runtime.handle.clone(),
         thread: None,
@@ -750,8 +803,9 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
         "home": home,
         "socket": socket,
         "nodeId": node_id,
-        // Reported so a caller can state that peers cannot fetch from this node
-        // rather than implying a full one. Empty is the expected value today.
+        // What the reactor actually bound, from `runtime.local_addrs` — not an
+        // echo of `config.listen`. Empty means outbound-only, which is what a
+        // home whose `listen` nobody has set produces.
         "listening": listening,
     })
     .to_string())
@@ -967,6 +1021,85 @@ fn stop_inner() -> Result<Option<()>, String> {
         return Ok(None);
     };
     node.shut_down().map(Some)
+}
+
+/// Whether the configuration under `home` has changed since the node running
+/// against it was started.
+///
+/// False when nothing is running, when the running node is against a different
+/// home, or when the file still says what that node was built from. **A node
+/// reads its configuration once, when it is constructed** — `Runtime::init`
+/// takes it by value — so there is no later point at which a change could reach
+/// a running node, and "restart to apply" is the only honest thing a view can
+/// say.
+///
+/// Scoped to *this process's* node, like [`status`]. A node the user started
+/// from a terminal reports false, because this module does not know what that
+/// node read at its start and inventing an answer would be worse than declining
+/// to give one.
+pub fn restart_required(home: &str) -> bool {
+    let started_with = {
+        let guard = locked();
+        match guard.as_ref() {
+            // A finished thread is not a running node, so there is nothing to
+            // restart — the same liveness test `status` reports as `running`.
+            Some(n) if n.home == home && n.thread.as_ref().is_some_and(|t| !t.is_finished()) => {
+                n.started_with.clone()
+            }
+            _ => return false,
+        }
+    };
+
+    // Read outside the lock: this is file I/O on a call a UI polls, and holding
+    // the process's one node lock across it would block `start` and `stop`.
+    started_with != crate::nodeconfig::fingerprint(home)
+}
+
+/// The `listen` addresses the **running node's own `Config`** carries, asked of
+/// the node rather than read from a file.
+///
+/// ## This exists to tie the two `listen` sites together
+///
+/// [`start_inner`] hands `Runtime::init` two things that must agree: the
+/// `Config` (what the node holds and reports about itself) and a separate
+/// `listen` argument (what the reactor binds). Its comment says "both sites had
+/// to change together, and changing one alone is the trap" — and until this
+/// function existed, nothing checked it. `listening` in the start reply comes
+/// from `runtime.local_addrs`, which is the **bind** side only, so a mutation
+/// that zeroes `config.listen` while leaving the bind argument intact produced a
+/// node that bound the right port, reported the right port, and held a `Config`
+/// saying it listened on nothing. Measured: every test in the crate stayed
+/// green.
+///
+/// `Handle::config()` round-trips `Command::Config` over the control socket
+/// (`radicle-node-0.21.1/src/control.rs:131`), so the answer is the object the
+/// node is actually running with — not a re-read of `config.json`, which the
+/// mutation leaves untouched and which therefore cannot discriminate.
+///
+/// `None` when no node is running in this process, when the running node is
+/// against a different home, or when the round trip fails. A caller that cannot
+/// tell "the node says nothing" from "the node was not asked" would be worse
+/// than one that declines to answer.
+///
+/// Scoped to *this process's* node, like [`status`] and [`restart_required`].
+pub fn advertised_listen(home: &str) -> Option<Vec<String>> {
+    // The handle is cloned out under the lock and the round trip made after it
+    // is released, for the reason `status` gives: this is I/O, and holding the
+    // process's one node lock across it blocks `start` and `stop`.
+    let handle = {
+        let guard = locked();
+        match guard.as_ref() {
+            Some(n) if n.home == home && n.thread.as_ref().is_some_and(|t| !t.is_finished()) => {
+                n.handle.clone()
+            }
+            _ => return None,
+        }
+    };
+
+    handle
+        .config()
+        .ok()
+        .map(|c| c.listen.iter().map(|a| a.to_string()).collect())
 }
 
 /// What this process's node is doing.

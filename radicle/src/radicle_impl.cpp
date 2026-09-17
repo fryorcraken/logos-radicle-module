@@ -203,6 +203,10 @@ RadicleImpl::RadicleImpl()
     // The writer takes the store's SOCKET as well as its home: the announce
     // step needs it, and the store is the one place that resolves it.
     , m_localWriter(m_local.home(), m_local.socket())
+    // The node's own config and policy stores are files under the home, reached
+    // without the control socket — so this takes the home alone. See
+    // `node_config.h`.
+    , m_nodeConfig(m_local.home())
 {
     adoptPersistedSettings();
 
@@ -219,6 +223,18 @@ RadicleImpl::RadicleImpl()
     if (!gitPath.empty()) radicle::LocalReader::applyGitPath(gitPath);
 }
 
+void RadicleImpl::rebuildFromSettings()
+{
+    // The same chain the constructor's init list follows, and for the same
+    // reason: the settings decide the home, the home decides the store, and
+    // everything below is built from the store. See the member declarations in
+    // `radicle_impl.h`.
+    m_local = storeForSettings(m_settings);
+    m_localReader = radicle::LocalReader(m_local.home());
+    m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
+    m_nodeConfig = radicle::NodeConfig(m_local.home());
+}
+
 void RadicleImpl::adoptPersistedSettings()
 {
     // A persisted seed must survive a restart — that is the cheapest proof the
@@ -233,13 +249,20 @@ void RadicleImpl::setDependenciesForTest(radicle::SeedClient seed, radicle::Loca
     m_seed = std::move(seed);
     m_local = std::move(local);
     m_settings = std::move(settings);
-    // Rebuilt from the new LocalStore's home, exactly as the constructor
-    // above builds them the first time — a test that changes `local`
-    // (typically after pointing RAD_HOME at a scratch directory) must see
-    // its reader/writer follow, not keep reading whatever home the
-    // zero-arg constructor resolved first.
+    // Rebuilt from the injected store's home, exactly as the constructor above
+    // builds them the first time — a test that changes `local` (typically after
+    // pointing RAD_HOME at a scratch directory) must see its reader, writer and
+    // node-config follow, not keep reading whatever home the zero-arg
+    // constructor resolved first.
+    //
+    // NOT `rebuildFromSettings()`: that one derives the store FROM the settings,
+    // which would discard the `local` this method was handed. This site is the
+    // reason that method takes no argument and this one does not call it — the
+    // two differ in exactly which store wins, and collapsing them would make an
+    // injected store silently ignored.
     m_localReader = radicle::LocalReader(m_local.home());
     m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
+    m_nodeConfig = radicle::NodeConfig(m_local.home());
 
     // And adoption runs again over the injected settings and seed client, so
     // the instance a test holds is the one a restart would produce. Without
@@ -406,9 +429,7 @@ std::string RadicleImpl::setSetting(const std::string& key, const std::string& v
     if (key == radicle::SettingsStore::kKeyMode
         || key == radicle::SettingsStore::kKeyRadHome
         || key == radicle::SettingsStore::kKeyRadSocket) {
-        m_local = storeForSettings(m_settings);
-        m_localReader = radicle::LocalReader(m_local.home());
-        m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
+        rebuildFromSettings();
         // Which node is in use is exactly what this event exists to announce.
         localAvailabilityChanged(getCapabilities());
     }
@@ -546,9 +567,7 @@ std::string RadicleImpl::createEmbeddedIdentity(const std::string& alias,
     // node up for later is a control doing more than it said.
     if (m_settings.get(radicle::SettingsStore::kKeyMode)
         == radicle::SettingsStore::kModeEmbedded) {
-        m_local = storeForSettings(m_settings);
-        m_localReader = radicle::LocalReader(m_local.home());
-        m_localWriter = radicle::LocalWriter(m_local.home(), m_local.socket());
+        rebuildFromSettings();
         // Which identity is in force is exactly what this event announces, and
         // it has just changed from none to one.
         localAvailabilityChanged(getCapabilities());
@@ -606,6 +625,15 @@ std::string RadicleImpl::startNode(const std::string& passphrase)
     // actually happens — a socket over the 108-byte cap — surfaces from the
     // crate as "path must be shorter than SUN_LEN", naming neither the path nor
     // the limit. `pathsProblem` names all three.
+    //
+    // **Spelled out here rather than reusing `nodeWriteRefused`**, which pairs
+    // this same check with the config/seeding mode gate. This method's gate is a
+    // different one: it refuses `local` with "your node is already yours to
+    // run", where the config gate refuses it with "yours to configure", and it
+    // needs the `available()` check below that the config methods deliberately
+    // skip. Sharing the paths half alone would mean a function taking a
+    // pre-computed refusal, which is the parameter-threading shape `design.md`
+    // rejected for `restartRequired`.
     if (!m_local.pathsProblem().empty())
         return dump(radicle::makeError(m_local.pathsProblem()));
 
@@ -657,6 +685,174 @@ std::string RadicleImpl::getNodeStatus()
     // answer outside Embedded would leave a UI unable to explain a node it can
     // see is still running.
     return radicle::EmbeddedNode::status();
+}
+
+// ===========================================================================
+// THE NODE'S OWN CONFIGURATION, and its seeding policies.
+//
+// Two stores under the home `m_local` resolved, reached through `m_nodeConfig`.
+// Neither goes through the control socket: `config.json` is a file the node
+// reads when it is constructed, `policies.db` is a database it reads as it
+// works, and both are edited on disk with the node running or stopped.
+//
+// The gating below is a READ/WRITE split rather than the embedded-only rule the
+// node trio uses, and the asymmetry is deliberate — see `nodeReadRefusalForMode`
+// and `nodeWriteRefusalForMode`. Each of the five methods calls exactly one
+// gate, `nodeReadRefused` or `nodeWriteRefused`, which carries the mode check
+// and the home's paths check together.
+// ===========================================================================
+
+namespace {
+
+/// Refuse a node-configuration or seeding READ on the mode alone, or return an
+/// empty string.
+///
+/// Only `explore` is refused, because it resolves no home at all — there is no
+/// file to read and no policy store to open. `local` is allowed: the home is the
+/// user's own, and showing a user what their own node is set to is the reason a
+/// panel exists.
+///
+/// Callers go through `nodeReadRefused`/`nodeWriteRefused` rather than calling
+/// this directly, so the paths check travels with the mode check.
+std::string nodeReadRefusalForMode(const std::string& mode)
+{
+    if (mode == radicle::SettingsStore::kModeExplore) {
+        return dump(radicle::makeError(
+            "the '" + mode + "' mode has no Radicle node — it browses a seed "
+            "over HTTP, so there is no node configuration to read. Switch to '"
+            + radicle::SettingsStore::kModeLocal + "' or '"
+            + radicle::SettingsStore::kModeEmbedded + "' to see one."));
+    }
+    return {};
+}
+
+/// Refuse a node-configuration or seeding WRITE on the mode alone, or return an
+/// empty string.
+///
+/// **`local` is readable and not writable, and that asymmetry is the point.**
+/// In that mode the node is the user's own: this module did not create it, does
+/// not run it, and a write here would change the configuration of something
+/// outside its control — for a node it cannot even restart to apply the change
+/// to. Refusing names the mode rather than failing obscurely.
+///
+/// The message is deliberately different from `explore`'s, for the same reason
+/// `startNode`'s two refusals are: one says "that node is yours to configure",
+/// the other says "pick a mode that has a node", and they prompt different
+/// actions.
+std::string nodeWriteRefusalForMode(const std::string& mode)
+{
+    if (mode == radicle::SettingsStore::kModeLocal) {
+        return dump(radicle::makeError(
+            "the '" + mode + "' mode uses a Radicle node you run yourself, so "
+            "this module does not change its configuration. Edit it with `rad "
+            "config` or by hand, or switch to '"
+            + radicle::SettingsStore::kModeEmbedded
+            + "' for a node Basecamp configures."));
+    }
+    if (mode != radicle::SettingsStore::kModeEmbedded) {
+        return dump(radicle::makeError(
+            "the '" + mode + "' mode has no Radicle node — it browses a seed "
+            "over HTTP, so there is no node configuration to change. Switch to '"
+            + radicle::SettingsStore::kModeEmbedded + "' to configure one."));
+    }
+    return {};
+}
+
+/// Everything that must hold before a node-configuration or seeding call
+/// reaches the backend: the mode allows it, AND the home it would act on is
+/// usable.
+///
+/// **One function because these are one gate, not two.** Each of the five
+/// methods below needs both checks, in this order, with the same messages — and
+/// the earlier shape spelled the paths half out at every site, five identical
+/// copies of a two-line `if` sitting directly beneath a mode check that was
+/// already shared. That is the guard-copying shape CLAUDE.md names: byte-
+/// identical today, and one edit away from five call sites where four agree.
+/// A sixth caller (`startNode`) keeps its own copy deliberately — see there.
+///
+/// A path problem is surfaced BEFORE the backend, for the reason `startNode`
+/// gives: this module's message names the path, its length and the limit, where
+/// the failure it would otherwise be replaced by names none of the three.
+std::string nodeReadRefused(const std::string& mode, const radicle::LocalStore& local)
+{
+    if (auto refused = nodeReadRefusalForMode(mode); !refused.empty())
+        return refused;
+    if (!local.pathsProblem().empty())
+        return dump(radicle::makeError(local.pathsProblem()));
+    return {};
+}
+
+/// The write half of [`nodeReadRefused`], same shape and same reasoning.
+std::string nodeWriteRefused(const std::string& mode, const radicle::LocalStore& local)
+{
+    if (auto refused = nodeWriteRefusalForMode(mode); !refused.empty())
+        return refused;
+    if (!local.pathsProblem().empty())
+        return dump(radicle::makeError(local.pathsProblem()));
+    return {};
+}
+
+} // namespace
+
+std::string RadicleImpl::getNodeConfig()
+{
+    if (const auto refused
+        = nodeReadRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
+        !refused.empty())
+        return refused;
+
+    // Deliberately NOT gated on `m_local.available()`, which looks for
+    // `storage/`. The question here is whether there is a `config.json`, and the
+    // backend answers it with a message naming the home and saying no identity
+    // has been created there — which is more use than "no local profile". A
+    // half-created home has `storage/` and no config, so the two genuinely
+    // disagree and the backend's answer is the right one.
+    return m_nodeConfig.get();
+}
+
+std::string RadicleImpl::setNodeConfig(const std::string& changes)
+{
+    if (const auto refused
+        = nodeWriteRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
+        !refused.empty())
+        return refused;
+
+    // No `localAvailabilityChanged` here, and that is not an omission. A
+    // configuration change does not alter what this module CAN do — the node is
+    // no more or less available, git is where it was, the same identity is in
+    // force. `restartRequired` in the reply is how a view learns the one thing
+    // that did change, and it is already in front of it.
+    return m_nodeConfig.set(changes);
+}
+
+std::string RadicleImpl::listSeeded()
+{
+    if (const auto refused
+        = nodeReadRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
+        !refused.empty())
+        return refused;
+
+    return m_nodeConfig.listSeeded();
+}
+
+std::string RadicleImpl::seedRepo(const std::string& rid, const std::string& scope)
+{
+    if (const auto refused
+        = nodeWriteRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
+        !refused.empty())
+        return refused;
+
+    return m_nodeConfig.seed(rid, scope);
+}
+
+std::string RadicleImpl::unseedRepo(const std::string& rid)
+{
+    if (const auto refused
+        = nodeWriteRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
+        !refused.empty())
+        return refused;
+
+    return m_nodeConfig.unseed(rid);
 }
 
 // ===========================================================================

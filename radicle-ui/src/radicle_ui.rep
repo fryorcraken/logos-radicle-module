@@ -66,6 +66,38 @@ class RadicleUi
     SLOT(QString stopNode())
     SLOT(QString getNodeStatus())
 
+    // The node's own configuration, and its seeding policies. Two stores, and a
+    // view has to tell the user which one it just wrote: a config change reaches
+    // the node at its NEXT START (it reads config.json when it is constructed,
+    // so there is no later point), while a seeding change applies at once.
+    // getNodeConfig's `restartRequired` is what says a change is pending, and it
+    // is a comparison against what the running node started with rather than a
+    // flag — so undoing a change clears it.
+    //
+    // None of them takes a home, for the reason the node slots above take none,
+    // and it matters more here because three of them WRITE: a home crossing this
+    // boundary from a sandboxed view would let it rewrite the configuration and
+    // seeding policies of a node the module does not own.
+    //
+    // setNodeConfig takes a JSON object naming a SUBSET of alias, listen,
+    // externalAddresses, connect and peers, and returns the WHOLE configuration
+    // — so a panel re-renders from what was stored rather than from what it
+    // submitted. A refusal names the value and the spelling expected; show it
+    // verbatim, because the two address fields are not interchangeable (connect
+    // carries a node id, externalAddresses does not) and a paraphrase loses the
+    // one thing that says which.
+    //
+    // seedRepo's scope is `all` or `followed` and is never defaulted here: `all`
+    // is what a PRIVATE repository needs, and a view offering this must state
+    // that a delegate allow-listing this node's DID is not sufficient on its own
+    // — this node must also seed the repository. That pair is the footgun the
+    // surface exists to remove.
+    SLOT(QString getNodeConfig())
+    SLOT(QString setNodeConfig(QString changes))
+    SLOT(QString listSeeded())
+    SLOT(QString seedRepo(QString rid, QString scope))
+    SLOT(QString unseedRepo(QString rid))
+
     // --- remote: proxied to a public seed, no local node needed ------------
     SLOT(QString remoteListRepos(QString query, int page, int perPage))
     SLOT(QString remoteGetRepo(QString rid))
