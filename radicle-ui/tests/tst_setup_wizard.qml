@@ -58,8 +58,8 @@ Item {
         /// the setting holds", which is the ordinary case.
         ///
         /// It exists so a test can tell "the flow re-read capabilities" apart
-        /// from "the flow trusted the argument it passed to chooseMode" — two
-        /// behaviours that are indistinguishable while the two values agree.
+        /// from "the flow trusted the value it wrote" — two behaviours that are
+        /// indistinguishable while the two values agree.
         property string capabilitiesMode: ""
 
         property bool identityExists: false
@@ -280,21 +280,22 @@ Item {
                     "back must not be offered on the first step");
         }
 
-        /// **Before capabilities have answered, the mode step does not
+        /// **Before capabilities have answered, the embedded step does not
         /// advance.** Found by two tests of this file failing: they walked the
-        /// sequence without running the preflight, and stalled at mode because
-        /// `modeInForce` was still "".
+        /// sequence without running the preflight, and stalled at the embedded
+        /// step because `modeInForce` was still "".
         ///
-        /// That is the flow being right — "advancing past the mode step MUST
-        /// require that the mode in force is embedded", and an unanswered
-        /// backend has not reported embedded. Pinned deliberately, because the
-        /// tempting "fix" is to treat an empty mode as permission to continue,
-        /// which would let the four node steps run against a module in explore.
+        /// That is the flow being right — "advancing past the embedded step
+        /// MUST require that `getCapabilities().mode` reports `embedded`", and
+        /// an unanswered backend has not reported embedded. Pinned
+        /// deliberately, because the tempting "fix" is to treat an empty mode
+        /// as permission to continue, which would let the four node steps run
+        /// against a module in explore.
         function test_an_unanswered_mode_does_not_advance() {
             compare(flow.modeInForce, "",
                     "precondition: capabilities have not answered");
-            verify(flow.advance(), "preflight -> mode is always permitted");
-            compare(flow.step, "mode");
+            verify(flow.advance(), "preflight -> embedded is always permitted");
+            compare(flow.step, "embedded");
             compare(flow.canAdvance, false,
                     "an unknown mode in force must not continue into the four "
                     + "steps that are about an embedded node");
@@ -305,12 +306,12 @@ Item {
         /// of the array would pass — `steps[6]` is undefined, which is not a
         /// step but is also not obviously wrong from one assertion.
         function test_advancing_walks_the_sequence_without_skipping() {
-            // The preflight has to have answered, because the mode step will
-            // not advance until capabilities report `embedded` in force — the
-            // scenario's default. Without this the walk stalls at mode, which
-            // is the flow being right rather than the walk being wrong.
+            // The preflight has to have answered, because the embedded step
+            // will not advance until capabilities report `embedded` in force —
+            // the scenario's default. Without this the walk stalls there,
+            // which is the flow being right rather than the walk being wrong.
             flow.runPreflight();
-            var want = ["mode", "identity", "network", "start", "confirm"];
+            var want = ["embedded", "identity", "network", "start", "confirm"];
             for (var i = 0; i < want.length; i++) {
                 verify(flow.advance(), "advance " + i + " must be permitted");
                 compare(flow.step, want[i],
@@ -328,7 +329,7 @@ Item {
             verify(flow.back());
             compare(flow.step, "identity");
             verify(flow.back());
-            compare(flow.step, "mode");
+            compare(flow.step, "embedded");
         }
 
         /// Returning to a step that already acted must report what it did
@@ -551,16 +552,20 @@ Item {
                     + "the block with nothing else changed");
         }
 
-        // ---- the mode step --------------------------------------------------
+        // ---- the embedded step ----------------------------------------------
+        //
+        // A CONFIRMATION, not a pick. The flow sets up one mode, so there is no
+        // `chooseMode(mode)` to drive with `explore` — `confirmEmbedded()` takes
+        // no argument and the only write it can express is `mode=embedded`.
 
         function test_only_embedded_continues_the_flow() {
             fake.mode = "local";
             flow.runPreflight();
-            verify(harness.advanceTo(flow, "mode"));
+            verify(harness.advanceTo(flow, "embedded"));
             compare(flow.modeInForce, "local", "precondition");
             compare(flow.canAdvance, false,
-                    "the four steps after mode are about a node no other mode "
-                    + "runs");
+                    "the four steps after this one are about a node no other "
+                    + "mode runs");
             verify(flow.advanceBlockedReason !== "",
                    "and the refusal must be stated rather than left as a "
                    + "disabled control");
@@ -572,63 +577,215 @@ Item {
                     "Embedded must continue the flow");
         }
 
-        /// **A successful mode write persists it and then re-reads what is in
-        /// force.** The refusal test below covers the other branch; this one
-        /// covers the success path, which is where "the flow keeps no second
-        /// opinion" is actually at risk.
+        /// **Arriving at the step writes no mode.** A mode written on arrival
+        /// would put a module into Embedded because someone opened a screen,
+        /// and would make the step's stated consequence something the user was
+        /// shown rather than something they answered.
         ///
-        /// The assertion is built so that trusting the argument cannot pass it.
-        /// `capabilitiesMode` lets the backend report a mode DIFFERENT from the
-        /// one the write was given, so `modeInForce` can only be right if it
-        /// came from a fresh `getCapabilities()` — a flow assigning
-        /// `modeInForce = mode` would report "embedded" where the backend says
-        /// "local".
-        function test_a_successful_mode_write_persists_it_and_re_reads_in_force() {
+        /// Asserted on the call log rather than on `modeInForce`, because a
+        /// flow that wrote `embedded` against a backend already reporting
+        /// `local` would leave `modeInForce` untouched and look innocent.
+        function test_arriving_at_the_embedded_step_writes_no_mode() {
             fake.mode = "local";
             flow.runPreflight();
-            verify(harness.advanceTo(flow, "mode"));
-            compare(flow.modeInForce, "local", "precondition");
             fake.reset();
 
-            // The backend will accept the write but keep reporting `local` as
-            // the mode in force. A flow that trusted its own argument says
-            // "embedded"; a flow that re-reads says "local".
-            fake.capabilitiesMode = "local";
-            flow.chooseMode("embedded");
+            verify(harness.advanceTo(flow, "embedded"));
+            for (var i = 0; i < fake.callLog.length; i++)
+                verify(String(fake.callLog[i]).indexOf("setSetting") !== 0,
+                       "arriving must write no setting, got: "
+                       + JSON.stringify(fake.callLog));
+            compare(flow.modeInForce, "local",
+                    "and the mode in force must not have moved");
+        }
+
+        /// **Going back from the step writes no mode either.** The same
+        /// requirement on the other exit: a user who opened the flow and
+        /// thought better of it is in the mode they started in.
+        function test_going_back_from_the_embedded_step_writes_no_mode() {
+            fake.mode = "local";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+            fake.reset();
+
+            verify(flow.back());
+            compare(flow.step, "preflight");
+            for (var i = 0; i < fake.callLog.length; i++)
+                verify(String(fake.callLog[i]).indexOf("setSetting") !== 0,
+                       "going back must write no setting, got: "
+                       + JSON.stringify(fake.callLog));
+            compare(flow.modeInForce, "local",
+                    "and the mode in force must not have moved");
+        }
+
+        /// **The step's control puts Embedded in force**, and exactly one write
+        /// goes out carrying key `mode` and value `embedded`.
+        function test_the_control_puts_embedded_in_force() {
+            fake.mode = "local";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+            compare(flow.canAdvance, false, "precondition: not yet permitted");
+            fake.reset();
+
+            verify(flow.confirmEmbedded());
+
+            var writes = [];
+            for (var i = 0; i < fake.callLog.length; i++)
+                if (String(fake.callLog[i]).indexOf("setSetting") === 0)
+                    writes.push(String(fake.callLog[i]));
+            compare(writes.length, 1,
+                    "exactly one setting write, got: "
+                    + JSON.stringify(fake.callLog));
+            compare(writes[0], "setSetting:mode:embedded",
+                    "with key `mode` and value `embedded`");
+            compare(flow.modeInForce, "embedded");
+            compare(flow.canAdvance, true, "and advancing must be permitted");
+        }
+
+        /// **The mode in force is the reply, not the value written.** The
+        /// backend accepts the write and goes on reporting `local`; a flow
+        /// recording its own copy would say `embedded` and let the user walk
+        /// into four steps about a node the module is not running.
+        ///
+        /// `capabilitiesMode` is what makes this expressible: while the written
+        /// value and the reported one agree, "re-read capabilities" and
+        /// "trusted the value written" are indistinguishable.
+        ///
+        /// **What the `modeInForce` assertion alone cannot catch**, and why the
+        /// call-log one is here rather than being belt-and-braces: the fake is
+        /// synchronous, so `refreshCapabilities()` settles before the next line
+        /// of test code. A flow that assigned `modeInForce = "embedded"` AND
+        /// then re-read would have the assignment overwritten within the same
+        /// turn, and every value assertion below would stay green. Proven by
+        /// mutation — adding that assignment before the refresh reddens
+        /// nothing. The `getCapabilities` entry in the call log is what
+        /// actually pins "re-read"; deleting the refresh reddens exactly that
+        /// assertion.
+        function test_the_mode_in_force_is_the_reply_not_the_value_written() {
+            fake.mode = "local";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+            fake.reset();
+
+            fake.capabilitiesMode = "local";   // accepted, still reports local
+            verify(flow.confirmEmbedded());
 
             verify(fake.callLog.indexOf("setSetting:mode:embedded") !== -1,
-                   "the chosen mode must be persisted through setSetting, "
-                   + "got: " + JSON.stringify(fake.callLog));
+                   "the write must have gone out, got: "
+                   + JSON.stringify(fake.callLog));
             verify(fake.callLog.indexOf("getCapabilities") !== -1,
                    "and capabilities must be re-read rather than the flow "
                    + "recording its own copy, got: "
                    + JSON.stringify(fake.callLog));
             compare(flow.modeInForce, "local",
-                    "the mode in force must be what capabilities REPORTS, not "
-                    + "the value the flow asked for");
+                    "the mode in force must be what capabilities REPORTS");
+            compare(flow.canAdvance, false,
+                    "and a backend that has not reported embedded has not "
+                    + "confirmed the write landed");
 
-            // And when the backend does report the new mode, the flow follows
-            // it — without this, a flow that never updated `modeInForce` at all
-            // would pass the assertion above.
+            // And when the backend does report it, the flow follows — without
+            // which a flow that never updated `modeInForce` would pass above.
             fake.capabilitiesMode = "";
             flow.refreshCapabilities();
             compare(flow.modeInForce, "embedded",
                     "a backend reporting the new mode must move the mode in "
                     + "force");
+            compare(flow.canAdvance, true);
         }
 
-        /// The mode in force comes from capabilities, never from what the flow
-        /// asked for — so a refused write leaves the mode where it was.
+        /// **A refused write neither advances nor moves the mode in force**,
+        /// and the refusal is displayed.
         function test_a_refused_mode_write_does_not_move_the_mode_in_force() {
             fake.mode = "local";
             flow.runPreflight();
-            fake.settingRefusal = "unknown mode 'turbo'";
+            verify(harness.advanceTo(flow, "embedded"));
+            fake.settingRefusal = "the settings store refused: a distinctive "
+                                + "sentence";
 
-            flow.chooseMode("turbo");
-            compare(flow.lastError, "unknown mode 'turbo'",
-                    "the refusal must be displayed");
+            verify(flow.confirmEmbedded());
+            compare(flow.lastError, fake.settingRefusal,
+                    "the refusal must be displayed as the backend worded it");
             compare(flow.modeInForce, "local",
                     "and the mode in force must not have moved");
+            compare(flow.canAdvance, false,
+                    "and advancing must not be permitted");
+            compare(flow.step, "embedded",
+                    "and the step in force must still be the embedded step");
+        }
+
+        /// **Returning with Embedded already in force does not re-offer it.**
+        /// The write is idempotent, so this is about not asking a question the
+        /// backend has already answered — which is why the flow still permits
+        /// advancing rather than treating the step as unfinished.
+        ///
+        /// The second half is what stops a flow that never offers the control
+        /// from passing: with `local` in force it must be offered.
+        function test_returning_with_embedded_in_force_does_not_re_offer_it() {
+            fake.mode = "embedded";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+
+            compare(flow.canConfirmEmbedded, false,
+                    "the control must not be offered when the backend has "
+                    + "already answered the question it asks");
+            compare(flow.canAdvance, true,
+                    "and advancing must still be permitted");
+
+            flow.reset();
+            fake.reset();
+            fake.mode = "local";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+            compare(flow.canConfirmEmbedded, true,
+                    "and it MUST be offered when Embedded is not in force");
+        }
+
+        /// **No other mode is expressible.** `confirmEmbedded()` takes no
+        /// argument, so the flow has no way to write `explore` or `local` — the
+        /// requirement holds in the state object rather than only in what the
+        /// screen happens to draw.
+        ///
+        /// Asserted as the absence of the old entry point rather than by trying
+        /// to call it: `flow.chooseMode` existing again would mean a mode
+        /// argument is expressible again, which is the regression.
+        function test_the_flow_cannot_express_another_mode() {
+            compare(typeof flow.chooseMode, "undefined",
+                    "a function taking a mode argument must not exist on this "
+                    + "flow — the only write it can express is mode=embedded");
+            compare(flow.confirmEmbedded.length, 0,
+                    "and the confirm control must take no mode argument");
+        }
+
+        /// **What the startable set reports changes nothing here.** The flow
+        /// does not read `startableModes` at all, so a backend reporting all
+        /// three and one reporting only `embedded` are indistinguishable to it
+        /// — which is the point: a flow setting up one mode has no unstartable
+        /// alternative to caption.
+        function test_the_startable_set_does_not_reach_this_step() {
+            compare(flow.startableModes, undefined,
+                    "the flow must not hold the startable set: with no value "
+                    + "to caption FROM, no annotation can be reintroduced "
+                    + "without first reintroducing the property");
+
+            fake.mode = "embedded";
+            fake.startableModes = ["explore", "local", "embedded"];
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+            var withAll = flow.canConfirmEmbedded + "|" + flow.canAdvance
+                        + "|" + flow.advanceBlockedReason;
+
+            flow.reset();
+            fake.reset();
+            fake.mode = "embedded";
+            fake.startableModes = ["embedded"];
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "embedded"));
+            var withOne = flow.canConfirmEmbedded + "|" + flow.canAdvance
+                        + "|" + flow.advanceBlockedReason;
+
+            compare(withOne, withAll,
+                    "what the step offers must be unchanged by the startable "
+                    + "set");
         }
 
         // ---- the identity step ----------------------------------------------

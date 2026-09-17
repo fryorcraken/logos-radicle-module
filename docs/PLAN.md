@@ -145,8 +145,8 @@ accepted rather than designed around, and the two rejected non-goals that follow
 acted on; the reasoning is in the `m3-embedded-node-foundations` change's
 archived `design.md`, and the consequence the UI owes the user is specified in
 `source-modes` and `embedded-identity`. The wizard's duty to state it at the
-moment a user picks Embedded is now `embedded-setup`'s, at both the mode step
-and the confirm step; nothing about it remains ahead.
+moment a user picks Embedded is now `embedded-setup`'s, at both the embedded
+step and the confirm step; nothing about it remains ahead.
 
 **`listen: []` is the embedded default, and the UI must be honest about it.** A
 node with no listen address is outbound-only: it can fetch and announce, but
