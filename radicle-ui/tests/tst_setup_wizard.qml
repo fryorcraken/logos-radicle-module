@@ -53,6 +53,15 @@ Item {
         property string mode: "embedded"
         property var startableModes: ["explore", "local", "embedded"]
 
+        /// What `getCapabilities()` reports as the mode in force, when that has
+        /// to differ from what `setSetting` was given. Empty means "whatever
+        /// the setting holds", which is the ordinary case.
+        ///
+        /// It exists so a test can tell "the flow re-read capabilities" apart
+        /// from "the flow trusted the argument it passed to chooseMode" — two
+        /// behaviours that are indistinguishable while the two values agree.
+        property string capabilitiesMode: ""
+
         property bool identityExists: false
         property string identityNodeId: ""
         property string identityProblem: ""
@@ -84,15 +93,22 @@ Item {
         /// late", which is exactly the requirement being pinned.
         property var held: null
 
+        /// Clears what was OBSERVED, and the node state the fake mutates.
+        ///
+        /// `serving` is in here because `start()` now sets it — a started node
+        /// answers its socket. Everything else is a scenario the test sets
+        /// itself, and is deliberately left alone so a mid-test `reset()` does
+        /// not silently undo the scenario the test just established.
         function reset() {
             callLog = [];
             held = null;
+            serving = false;
         }
 
         function capabilities(cb) {
             callLog.push("getCapabilities");
             cb({
-                mode: mode,
+                mode: capabilitiesMode !== "" ? capabilitiesMode : mode,
                 startableModes: startableModes,
                 modeUnavailableReason: "",
                 gitFound: gitFound,
@@ -137,6 +153,13 @@ Item {
         function start(passphrase, cb) {
             callLog.push("startNode:" + passphrase);
             if (startRefusal !== "") { cb({ error: startRefusal }); return; }
+            // A started node is one the socket answers for: the real
+            // `startNode` returns only once the control socket responds, so a
+            // fake that reported `started:true` while `getNodeStatus` kept
+            // saying `serving:false` would be modelling a state the backend
+            // cannot produce — and a test written against it would be asserting
+            // about a node that does not exist.
+            if (startStarted) serving = true;
             cb({ started: startStarted, home: home,
                  socket: "/run/u/radicle.sock",
                  nodeId: startNodeId, listening: startListening });
@@ -215,6 +238,7 @@ Item {
             fake.gitProblem = "";
             fake.pathsProblem = "";
             fake.mode = "embedded";
+            fake.capabilitiesMode = "";
             fake.startableModes = ["explore", "local", "embedded"];
             fake.identityExists = false;
             fake.identityNodeId = "";
@@ -501,6 +525,51 @@ Item {
                     "Embedded must continue the flow");
         }
 
+        /// **A successful mode write persists it and then re-reads what is in
+        /// force.** The refusal test below covers the other branch; this one
+        /// covers the success path, which is where "the flow keeps no second
+        /// opinion" is actually at risk.
+        ///
+        /// The assertion is built so that trusting the argument cannot pass it.
+        /// `capabilitiesMode` lets the backend report a mode DIFFERENT from the
+        /// one the write was given, so `modeInForce` can only be right if it
+        /// came from a fresh `getCapabilities()` — a flow assigning
+        /// `modeInForce = mode` would report "embedded" where the backend says
+        /// "local".
+        function test_a_successful_mode_write_persists_it_and_re_reads_in_force() {
+            fake.mode = "local";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "mode"));
+            compare(flow.modeInForce, "local", "precondition");
+            fake.reset();
+
+            // The backend will accept the write but keep reporting `local` as
+            // the mode in force. A flow that trusted its own argument says
+            // "embedded"; a flow that re-reads says "local".
+            fake.capabilitiesMode = "local";
+            flow.chooseMode("embedded");
+
+            verify(fake.callLog.indexOf("setSetting:mode:embedded") !== -1,
+                   "the chosen mode must be persisted through setSetting, "
+                   + "got: " + JSON.stringify(fake.callLog));
+            verify(fake.callLog.indexOf("getCapabilities") !== -1,
+                   "and capabilities must be re-read rather than the flow "
+                   + "recording its own copy, got: "
+                   + JSON.stringify(fake.callLog));
+            compare(flow.modeInForce, "local",
+                    "the mode in force must be what capabilities REPORTS, not "
+                    + "the value the flow asked for");
+
+            // And when the backend does report the new mode, the flow follows
+            // it — without this, a flow that never updated `modeInForce` at all
+            // would pass the assertion above.
+            fake.capabilitiesMode = "";
+            flow.refreshCapabilities();
+            compare(flow.modeInForce, "embedded",
+                    "a backend reporting the new mode must move the mode in "
+                    + "force");
+        }
+
         /// The mode in force comes from capabilities, never from what the flow
         /// asked for — so a refused write leaves the mode where it was.
         function test_a_refused_mode_write_does_not_move_the_mode_in_force() {
@@ -648,6 +717,47 @@ Item {
             verify(fake.deliverHeld());
             compare(heldFlow.startPending, false,
                     "and must be released when the reply lands");
+        }
+
+        /// **A successful start withdraws the start control.** The spec makes
+        /// start non-reversible through this flow ("a step that has performed
+        /// one MUST report what it did when it is returned to, rather than
+        /// offering to do it again"), and `startBlockedReason` already names
+        /// the contention for the case the PREFLIGHT detected. The same
+        /// contention is reachable through this flow's own start button after
+        /// its own successful start, which is what this pins.
+        ///
+        /// The second half is the one that makes the first mean something: a
+        /// flow that withdrew the control unconditionally would pass the
+        /// `canStartNode === false` assertion while being broken. So a start
+        /// that FAILED must leave the control offered, because retrying is the
+        /// correct response to a refusal.
+        function test_a_successful_start_withdraws_the_start_control() {
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "start"));
+            compare(flow.canStartNode, true, "precondition: start is offered");
+
+            verify(flow.submitStart("pw"));
+            compare(flow.nodeStarted, true, "precondition: it started");
+            compare(flow.canStartNode, false,
+                    "a node this flow started is a node already answering on "
+                    + "the socket — starting a second would contend for it");
+            verify(flow.startBlockedReason !== "",
+                   "and the reason must be stated rather than left as a "
+                   + "disabled control with no explanation");
+
+            // The other direction, so the assertion above cannot pass against
+            // a flow that simply never offers start twice.
+            flow.reset();
+            fake.reset();
+            fake.startRefusal = "the node refused to start";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "start"));
+            flow.submitStart("pw");
+            compare(flow.nodeStarted, false, "precondition: it did not start");
+            compare(flow.canStartNode, true,
+                    "a start that FAILED must leave the control offered — "
+                    + "retrying is the correct response to a refusal");
         }
 
         /// An EMPTY listening list is the expected value and must be rendered

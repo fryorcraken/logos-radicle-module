@@ -118,7 +118,16 @@ QtObject {
     /// getEmbeddedIdentity().problem, verbatim.
     property string identityProblem: ""
 
-    /// From getNodeStatus().serving — a node already answering on the socket.
+    /// Whether a node is answering on the resolved socket, from
+    /// getNodeStatus().serving.
+    ///
+    /// **Updated by every reading of the node's state, not only by the
+    /// preflight's** — including the one that follows this flow's own
+    /// successful start. A node this flow started is just as much a node
+    /// answering on the socket as one it found there, and the contention from
+    /// starting a second is identical. Holding this as a preflight-only memory
+    /// left `canStartNode` true after a success, so the start button stayed
+    /// enabled and a second node could be started over the first.
     property bool alreadyServing: false
 
     /// Whether a home could be resolved to write into at all: a non-empty
@@ -270,24 +279,40 @@ QtObject {
 
     // ---- the preflight ----------------------------------------------------
 
-    /// Ask all four questions. Writes nothing: no createEmbeddedIdentity, no
-    /// startNode, no setSetting is reachable from here, which is a property of
-    /// this function's body rather than a promise.
+    /// Ask the backend everything the preflight needs. Writes nothing: no
+    /// createEmbeddedIdentity, no startNode, no setSetting is reachable from
+    /// here, which is a property of this function's body rather than a promise.
+    ///
+    /// ## Three counts that are deliberately not the same number
+    ///
+    /// This function issues **four calls**; the preflight reports **four
+    /// findings**; and **three answers** make `preflightDone` true. None of
+    /// those fours is the other four, and the three is not a subset of either:
+    ///
+    ///  - the four calls are `getCapabilities`, `getEmbeddedIdentity`,
+    ///    `getNodeStatus` and `listKnownSeeds`;
+    ///  - the four findings are git, identity, node socket and home — and the
+    ///    home finding has no call of its own, because it is derived from
+    ///    `pathsProblem` (capabilities) and `home` (identity);
+    ///  - `listKnownSeeds` populates the network step's seed list, which is not
+    ///    a finding and gates nothing, so it is the one call that does NOT mark
+    ///    an answer. Three gating calls, therefore, not four.
+    ///
+    /// Which of the three has answered is tracked as three named booleans
+    /// rather than a counter compared against a literal, so adding or removing
+    /// a probe cannot leave a threshold behind to be updated separately.
     function runPreflight() {
         var issuedAt = epoch;
         preflightDone = false;
+        capabilitiesAnswered = false;
+        identityAnswered = false;
+        nodeStatusAnswered = false;
 
         if (fetchCapabilities) {
             fetchCapabilities(function (caps) {
                 if (!isCurrent(issuedAt) || !caps) return;
-                flow.gitFound = caps.gitFound === true;
-                flow.gitProblem = caps.gitProblem || "";
-                flow.pathsProblem = caps.pathsProblem || "";
-                flow.modeInForce = caps.mode || "";
-                flow.startableModes = caps.startableModes || [];
-                flow.modeUnavailableReason = caps.modeUnavailableReason || "";
-                if (flow.nodeId === "") flow.nodeId = caps.nodeId || "";
-                flow.notePreflightAnswer();
+                flow.applyCapabilities(caps);
+                flow.capabilitiesAnswered = true;
             });
         }
 
@@ -300,7 +325,7 @@ QtObject {
                 flow.embeddedHome = reply.home || "";
                 if (flow.identityExists && flow.nodeId === "")
                     flow.nodeId = reply.nodeId || "";
-                flow.notePreflightAnswer();
+                flow.identityAnswered = true;
             });
         }
 
@@ -308,10 +333,12 @@ QtObject {
             fetchNodeStatus(function (reply) {
                 if (!isCurrent(issuedAt) || !reply) return;
                 flow.alreadyServing = reply.serving === true;
-                flow.notePreflightAnswer();
+                flow.nodeStatusAnswered = true;
             });
         }
 
+        // The one call that marks no answer: the seed list is the network
+        // step's data, not a finding, and gates nothing. See the header.
         if (fetchSeeds) {
             fetchSeeds(function (reply) {
                 if (!isCurrent(issuedAt) || !reply) return;
@@ -320,18 +347,35 @@ QtObject {
         }
     }
 
-    /// How many of the three preflight probes have answered.
+    /// Which preflight probes have answered — one named flag per gating call.
     ///
-    /// Counted rather than inferred from the values themselves: every finding
+    /// Tracked rather than inferred from the findings themselves: every finding
     /// has a legitimate falsy value, so "gitFound is false" cannot distinguish
     /// "git is missing" from "nobody has asked yet". That distinction is the
     /// whole reason `preflightDone` exists — a UI that read the defaults as
     /// answers would report four failures before issuing a single call.
-    property int preflightAnswers: 0
+    ///
+    /// **Three flags rather than a counter compared against `3`.** The literal
+    /// was several lines from the calls that determined it, so a fifth probe,
+    /// or a probe made optional, would have left the threshold to be found and
+    /// updated separately — and getting it wrong fires `preflightDone` early
+    /// (reporting an unasked question as answered) or never. As a conjunction
+    /// of named flags, adding a probe means adding a flag the conjunction will
+    /// not be satisfied without, and removing one means deleting a name the
+    /// compiler-equivalent — an unresolved property reference — complains
+    /// about. The invariant holds by construction instead of by arithmetic.
+    property bool capabilitiesAnswered: false
+    property bool identityAnswered: false
+    property bool nodeStatusAnswered: false
 
-    function notePreflightAnswer() {
-        preflightAnswers = preflightAnswers + 1;
-        if (preflightAnswers >= 3) preflightDone = true;
+    /// True once every gating probe has answered. `listKnownSeeds` is
+    /// deliberately absent: it feeds the network step's seed list, which is not
+    /// a finding and blocks nothing.
+    readonly property bool allProbesAnswered:
+        capabilitiesAnswered && identityAnswered && nodeStatusAnswered
+
+    onAllProbesAnsweredChanged: {
+        if (allProbesAnswered) preflightDone = true;
     }
 
     /// The first non-empty sentence, falling back to the flow's own wording.
@@ -372,18 +416,36 @@ QtObject {
         });
     }
 
+    /// Everything a `getCapabilities()` reply says, written to the properties
+    /// that hold it.
+    ///
+    /// One function rather than the same seven assignments at each call site.
+    /// Both callers — the preflight and `refreshCapabilities` — need exactly
+    /// this mapping, and a hand-written second copy is the shape CLAUDE.md
+    /// names as this repo's standing defect: the `wantRid`/`syncEpoch` guard
+    /// was written out four slightly different times and dropped a different
+    /// field each time. A third caller now inherits the mapping instead of
+    /// re-deriving it.
+    ///
+    /// `nodeId` is the one conditional assignment: capabilities carries it only
+    /// as a fallback, so a DID already reported by `createEmbeddedIdentity` or
+    /// `startNode` — both more specific — is not overwritten by it.
+    function applyCapabilities(caps) {
+        gitFound = caps.gitFound === true;
+        gitProblem = caps.gitProblem || "";
+        pathsProblem = caps.pathsProblem || "";
+        modeInForce = caps.mode || "";
+        startableModes = caps.startableModes || [];
+        modeUnavailableReason = caps.modeUnavailableReason || "";
+        if (nodeId === "") nodeId = caps.nodeId || "";
+    }
+
     function refreshCapabilities() {
         if (!fetchCapabilities) return;
         var issuedAt = epoch;
         fetchCapabilities(function (caps) {
             if (!isCurrent(issuedAt) || !caps) return;
-            flow.modeInForce = caps.mode || "";
-            flow.startableModes = caps.startableModes || [];
-            flow.modeUnavailableReason = caps.modeUnavailableReason || "";
-            flow.gitFound = caps.gitFound === true;
-            flow.gitProblem = caps.gitProblem || "";
-            flow.pathsProblem = caps.pathsProblem || "";
-            if (flow.nodeId === "") flow.nodeId = caps.nodeId || "";
+            flow.applyCapabilities(caps);
         });
     }
 
@@ -455,6 +517,13 @@ QtObject {
             // flow still asks, because `serving` is the field that notices a
             // node whose threads die afterwards.
             flow.nodeServing = true;
+            // A node this flow just started is a node answering on the socket.
+            // Withdrawing the start control here is what stops a second node
+            // being started over the first — the same contention
+            // `startBlockedReason` names for the case the preflight found. Set
+            // before the refresh rather than waiting for it, so the control is
+            // not offered during the window where that reply is outstanding.
+            flow.alreadyServing = true;
             flow.refreshNodeStatus();
         });
         return true;
@@ -472,6 +541,17 @@ QtObject {
         fetchNodeStatus(function (reply) {
             if (!isCurrent(issuedAt) || !reply) return;
             flow.nodeServing = reply.serving === true;
+            // One question, one answer: "is a node answering on the socket" is
+            // the same question the preflight asked, so a later reading of it
+            // updates the same value rather than a second copy that can
+            // disagree. A node whose threads have since died therefore offers
+            // the start control again, which is correct.
+            // One question, one answer: "is a node answering on the socket" is
+            // the same question the preflight asked, so a later reading of it
+            // updates the same value rather than a second copy that can
+            // disagree. A node whose threads have since died therefore offers
+            // the start control again, which is correct.
+            flow.alreadyServing = reply.serving === true;
         });
     }
 
@@ -495,7 +575,9 @@ QtObject {
         stepIndex = 0;
         epoch = epoch + 1;
         preflightDone = false;
-        preflightAnswers = 0;
+        capabilitiesAnswered = false;
+        identityAnswered = false;
+        nodeStatusAnswered = false;
         gitFound = false;
         gitProblem = "";
         identityExists = false;

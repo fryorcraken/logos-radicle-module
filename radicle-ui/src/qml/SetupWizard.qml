@@ -497,6 +497,31 @@ Item {
                         onClicked: setupFlow.submitStart(wizard.passphrase)
                     }
 
+                    // The passphrase is cleared once the node has started,
+                    // which is the moment both calls that need it have been
+                    // made — createEmbeddedIdentity at the identity step and
+                    // startNode here.
+                    //
+                    // It has to be cleared explicitly because the field is
+                    // never destroyed: StackLayout instantiates every child
+                    // eagerly, so nothing goes away when the step changes and
+                    // a plaintext secret would stay resident for the rest of
+                    // the wizard's life. This repo's dev Basecamp ships the
+                    // QML inspector compiled in, which reads live object
+                    // properties — so "resident" means readable.
+                    //
+                    // Keyed on `nodeStarted` rather than done inside the click
+                    // handler: the handler runs before the reply, and clearing
+                    // there would destroy the passphrase a retry needs after a
+                    // refusal.
+                    Connections {
+                        target: setupFlow
+                        function onNodeStartedChanged() {
+                            if (setupFlow.nodeStarted)
+                                passphraseField.text = "";
+                        }
+                    }
+
                     Text {
                         objectName: "startedNodeId"
                         visible: setupFlow.nodeStarted
@@ -627,9 +652,24 @@ Item {
         /// A finding that reports WHAT IS THERE rather than pass/fail. The
         /// identity finding is one: an existing identity is not a broken
         /// preflight, it is a fact that blocks one later step.
+        ///
+        /// Neutral governs how the outcome is COLOURED, not whether a failure
+        /// can be reported. A neutral finding whose probe supplied a problem
+        /// sentence still shows it: `neutral` means "no identity yet is not a
+        /// failure", never "this probe cannot fail". Folding the two together
+        /// is what made a real `getEmbeddedIdentity().problem` unreachable —
+        /// the spec requires a backend sentence be displayed verbatim, and a
+        /// permissions error reading the identity store is exactly such a
+        /// sentence.
         property bool neutral: false
         property string okText: ""
         property string failText: ""
+
+        /// Whether this finding has something to report as failed. A neutral
+        /// finding fails only when it was given a sentence to show; a
+        /// pass/fail one fails whenever `ok` is false.
+        readonly property bool failed:
+            neutral ? failText !== "" : !ok
 
         spacing: 0
 
@@ -650,11 +690,10 @@ Item {
             // failed one unless it is named.
             text: !parent.answered
                   ? "checking…"
-                  : (parent.neutral || parent.ok ? parent.okText
-                                                 : parent.failText)
+                  : (parent.failed ? parent.failText : parent.okText)
             color: !parent.answered ? Theme.textFaint
-                   : (parent.neutral ? Theme.text
-                      : (parent.ok ? Theme.good : Theme.bad))
+                   : (parent.failed ? Theme.bad
+                      : (parent.neutral ? Theme.text : Theme.good))
             font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
         }
