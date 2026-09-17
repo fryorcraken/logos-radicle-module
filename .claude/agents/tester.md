@@ -181,18 +181,21 @@ rather than writing a test that cannot fail.
 
 ## Where your work lands
 
-**Enter the piece's worktree first** — `EnterWorktree(path: <the absolute path your
-brief names>)` — then use plain relative paths. `cd <dir> && cargo test` costs an
-approval click on every call even though `cargo test` is allow-listed, because the
-permission checker cannot analyse a compound command. Pass `path`, never `name`:
-`name` branches a new tree from `origin/main` and would strand you in a tree
-holding none of the piece's code.
+**Work through absolute paths under the piece's worktree, and `git -C <the
+worktree path> …` for every git command.** `cd <dir> && cargo test` costs an
+approval click on every call even though `cargo test` is allow-listed, because
+the permission checker cannot analyse a compound command; `git -C` is one plain
+command and costs nothing. For a test run in a subdirectory, prefer the tool's
+own path flag — `cargo test --manifest-path <absolute path>/Cargo.toml` — over
+moving directory.
 
-**The call can be refused**, measured here for a session whose working directory is
-the repository root: it answers that "switching is only available to sessions whose
-working directory is inside a worktree". The documented fallback is absolute paths
-plus `git -C <the worktree path> …` for every git command — and **say in your
-report** that you worked that way.
+**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
+root, and the tool refuses that every time: *"switching is only available to
+sessions whose working directory is inside a worktree of this repository"*. And
+`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
+the switch, and **every Bash call is refused** for resolving to "the shared
+checkout", which for you means no test ever runs. `README.md`'s "Handing over
+between agents" has both probes verbatim.
 
 **Commit straight to `piece/<name>`** — the piece's one branch, the one its PR is
 open on — and **tick the tests row** in `tasks.md`'s stage block in the same commit.
@@ -200,10 +203,18 @@ Same when you come back to act on a finding: you are the only agent writing test
 on the piece either time, so no side branch and no cherry-pick are needed.
 
 **Push `piece/<name>` once you are done**, and do not open a PR — the
-`dev-writer` opened it before you ran. Push by name, `git push origin
-piece/<name>`, after checking `git branch -vv`: a worktree inherits its parent
-branch's upstream, so a bare `git push` can land commits somewhere you did not
-name.
+`dev-writer` opened it before you ran. Check `git config --get-regexp
+"^branch\.piece"` first and expect **nothing** back: the branch is created with
+`git worktree add --no-track` and has no upstream, which is what makes a stray
+push impossible. `merge refs/heads/main` coming back means the branch was made
+without the flag and is configured to push to `main` — stop and say so. `git
+branch -vv` is not the check; it prints `[origin/main]` either way.
+
+With no upstream, push the refspec in full:
+
+```
+git push origin refs/heads/piece/<name>:refs/heads/piece/<name>
+```
 
 **Never `git add -A`** — commit your test files by name; the tree carries build
 output that is not yours to commit. The README's branch section has the artefact

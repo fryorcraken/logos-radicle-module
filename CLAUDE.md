@@ -173,16 +173,29 @@ The ones that catch people repeatedly:
   has run went through unprompted, and the single prompt came from prefixing
   one with a `cd`.
 
-  **When the working directory genuinely is wrong, `EnterWorktree` moves the
-  session rather than prefixing a command.** An agent working in a worktree
-  enters it once with `EnterWorktree(path: <absolute path>)` and then uses
+  **When the working directory genuinely is wrong, `EnterWorktree` moves a
+  session rather than prefixing a command** — an interactive session enters a
+  worktree once with `EnterWorktree(path: <absolute path>)` and then uses
   ordinary relative paths: no `cd` for the checker to trip over, and no
-  `git -C <dir>` spread through every git call. That is the shape to put in an
-  agent's brief — see [`.claude/agents/README.md`](.claude/agents/README.md).
-  Pass `path` and never `name`: `name` creates a *new* worktree branched from
-  `origin/main`, so an agent meant to work on an existing piece lands in a tree
-  holding none of its commits. Note the tool moves only the agent that calls it,
-  so a runner cannot enter a worktree on a subagent's behalf.
+  `git -C <dir>` spread through every git call. Pass `path` and never `name`:
+  `name` creates a *new* worktree branched from `origin/main`.
+
+  **This does not work for a dispatched agent, and one must not call it.** A
+  subagent starts with its working directory at the repository root, and the tool
+  refuses exactly that: *"Cannot enter worktree: the current working directory
+  /…/radicle-logos-module is the repository root, not an isolated worktree —
+  switching is only available to sessions whose working directory is inside a
+  worktree of this repository."* The refusal is certain, not occasional.
+  `isolation: "worktree"` is not the way round it — with the working directory
+  pinned inside a throwaway worktree the call *succeeds*, and then Read follows
+  the switch while **every Bash call is refused** for resolving to "the shared
+  checkout". That route is the trap, because it looks like it worked until the
+  first shell command. **A dispatched agent works through absolute paths and
+  `git -C <worktree> …`**, which is one plain command and costs no approval
+  click; that is the shape to put in its brief — see
+  [`.claude/agents/README.md`](.claude/agents/README.md), which has both probes
+  verbatim. The tool moves only the session that calls it, so a runner cannot
+  enter a worktree on a subagent's behalf either.
 - **A long output is not a reason to pipe.** This is the most common way the rule
   above gets broken by someone who already knows it: appending `| tail -30` to
   keep a test run's output manageable turns a call the checker would have
@@ -515,6 +528,28 @@ them came off a third commit. **Read files from the worktree rather than
 trusting a copy already in context**, including this one. A stale `CLAUDE.md`
 is the most likely thing to mislead you, because it is the file most likely to
 be in context from the start and least likely to be re-read.
+
+**Create the worktree with `--no-track`, or the branch is configured to push to
+`main`:**
+
+```
+git worktree add --no-track -b <branch> .claude/worktrees/<name> origin/main
+```
+
+Branching from a remote-tracking ref makes git's `branch.autoSetupMerge` default
+write `remote = origin` and `merge = refs/heads/main` into the new branch's
+config. That — not anything about worktrees inheriting state — is why a bare
+`git push` from one has landed commits on `main` here. Measured: `git config
+--get-regexp "^branch\.piece"` returned `merge refs/heads/main` for both piece
+branches created without the flag, and one branch's `git push origin
+piece/embedded-node-wizard` was **rejected by branch protection for
+`refs/heads/main`**.
+
+**Check it with `git config --get-regexp "^branch\.<name>"`, which returns
+nothing when the branch is right.** `git branch -vv` cannot catch this: it prints
+`[origin/main]`, and nothing in that output distinguishes an intended upstream
+from a wrong one. A `--no-track` branch has no upstream, so push the refspec in
+full: `git push origin refs/heads/<branch>:refs/heads/<branch>`.
 
 **The stash stack is shared with the main checkout and every other worktree,
 and other sessions may be using it concurrently.** Never bare `git stash` /

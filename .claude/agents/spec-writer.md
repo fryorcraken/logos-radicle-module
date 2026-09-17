@@ -13,11 +13,23 @@ was reversed.
 
 **You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
 on, and the same tree the `dev-writer` and `tester` use. You share it because you
-never overlap: at most one of the three runs at a time. **Enter it first** —
-`EnterWorktree(path: <the absolute path your brief names>)` — then use plain
-relative paths; `cd <dir> && …` costs an approval click on every call, and
-`openspec` resolves its root from the cwd besides. If the call is refused, work
-through absolute paths and `git -C <worktree> …`, and say so in your report.
+never overlap: at most one of the three runs at a time. **Work through absolute
+paths under it, and `git -C <worktree> …` for every git command** — `cd <dir> &&
+…` costs an approval click on every call.
+
+**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
+root, which the tool refuses every time (*"switching is only available to
+sessions whose working directory is inside a worktree of this repository"*), and
+`isolation: "worktree"` does not rescue it — the call succeeds and then every
+Bash call is refused instead. `README.md`'s "Handing over between agents" has
+both probes verbatim.
+
+One consequence for you specifically: **`openspec` resolves its root from the
+cwd and has no `-C` flag**, so from the repository root it will not see a change
+that lives in the worktree. It is also not worth a compound command to work
+around — `cd <worktree> && openspec …` prompts even though `Bash(openspec:*)` is
+allow-listed. If you cannot run it plainly, skip it and say so in your report;
+validation is the `closer`'s row.
 
 Commit there directly; do not push or open a PR — the `dev-writer` does both at
 the end of its pass, and the PR carries your spec commits with it.

@@ -233,18 +233,21 @@ track.
 ## Your worktree, and deleting it when you are done
 
 The runner gives you a worktree under `.claude/worktrees/` and a branch named
-`review/<name>/<dimension>`. **Enter it first** — `EnterWorktree(path: <the absolute
-path you were given>)` — and then work with plain relative paths, rather than
-prefixing every call with `cd <dir> && …`, which costs an approval click each time.
-Pass `path`, never `name`: `name` creates a *new* worktree branched from
-`origin/main`, which would leave you reviewing none of the piece's commits.
+`review/<name>/<dimension>`. **Work through absolute paths under it, and `git -C
+<the worktree path> …` for every git command** — never `cd <dir> && …`, which
+costs an approval click each time. For a suite that runs in a subdirectory, reach
+for the tool's own path flag (`cargo test --manifest-path <absolute
+path>/Cargo.toml`) rather than moving directory.
 
-**The call can be refused**, measured here for a session whose working directory is
-the repository root: it answers that "switching is only available to sessions whose
-working directory is inside a worktree". That is not a reason to improvise. The
-documented fallback is to use absolute paths and `git -C <the worktree path> …` for
-every git command, and to **say in your report** that you worked that way, so the
-extra Bash clicks it cost are attributable.
+**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
+root, which the tool refuses every time: *"switching is only available to
+sessions whose working directory is inside a worktree of this repository"*. And
+`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
+the switch, and **every Bash call is refused** for resolving to "the shared
+checkout". For you that would mean no mutation run ever executes, while the files
+you read look right; it is the more dangerous of the two failures because it
+looks like it worked. `README.md`'s "Handing over between agents" has both probes
+verbatim.
 
 **Mutate it freely** — breaking the code to see whether a test notices is the job,
 and a `cargo mutants` run over `radicle/rust-ffi` will break dozens of lines.
@@ -262,9 +265,10 @@ uncommitted work and cannot be undone:**
 - **The path is the one your dispatch named**, not one you inferred. Removing the
   piece's own tree would destroy whatever the writers had not committed.
 - **You are not standing in it.** `git rev-parse --show-toplevel` must not be that
-  path — which is what `ExitWorktree(action: "keep")` is for. Confirm it returned
-  you to the main checkout before running the removal; `git worktree remove` refuses
-  the directory you are in, and that refusal reads like a permissions problem.
+  path; `git worktree remove` refuses the directory you are in, and that refusal
+  reads like a permissions problem. As a dispatched agent you never moved your
+  working directory, so this holds already — check it rather than assume it, but
+  there is no step-out to perform first.
 - **Your findings commit is cherry-picked onto `piece/<name>` already.** It is the
   one thing in that tree you cannot recreate.
 
@@ -272,13 +276,13 @@ If any of the three does not hold, **stop and report it** rather than forcing. O
 then:
 
 ```
-ExitWorktree(action: "keep")
 git worktree remove <the absolute path you were given> --force
 ```
 
-`ExitWorktree` first, for the reason above — and `keep` rather than `remove`,
-because `ExitWorktree` only deletes worktrees it created itself and the runner made
-this one, so `remove` would do nothing and the tree would survive.
+One command, and no `ExitWorktree` before it. This file used to prescribe
+`ExitWorktree(action: "keep")` first, to step out of a tree you had entered — but
+a dispatched agent cannot enter one in the first place, so the step guarded
+against a state you can never be in.
 
 Verify the piece branch is clean afterwards, and say in your report that you
 removed the tree.

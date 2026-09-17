@@ -218,11 +218,25 @@ that does damage, so it is stated first. **This is the canonical copy of the art
 list**; each agent file states the rule and points here rather than repeating the
 list, which is the part that changes.
 
-**Check `git branch -vv` before any git write** — a worktree created from a branch
-inherits that branch's upstream, and a bare `git push` has landed commits directly
-on `main` here more than once. CLAUDE.md's "Working in a git worktree" has the rest —
-in particular that worktrees branch from `origin/main`, and that the stash stack is
-shared with every other worktree, so never bare `git stash pop`.
+**Check `git config --get-regexp "^branch\.<name>"` before any git write, and
+expect it to return nothing.** A bare `git push` has landed commits directly on
+`main` here more than once, and the cause is the creation command: `git worktree
+add <path> -b piece/<name> origin/main` branches from a remote-tracking ref, so
+`branch.autoSetupMerge` writes `merge = refs/heads/main` into the new branch's
+config — measured, for both piece branches made that way. `git worktree add
+--no-track` is the fix and `RUNNER.md` carries it; a branch made with the flag
+returns nothing from that `git config` call.
+
+**`git branch -vv` does not catch this**, which is why it is no longer the
+prescribed check: it prints `[origin/main]`, and nothing in that output
+distinguishes an intended upstream from a wrong one.
+
+A `--no-track` branch has no upstream, so push the refspec in full:
+`git push origin refs/heads/piece/<name>:refs/heads/piece/<name>`.
+
+CLAUDE.md's "Working in a git worktree" has the rest — in particular that
+worktrees branch from `origin/main`, and that the stash stack is shared with
+every other worktree, so never bare `git stash pop`.
 
 ## Two files carry the state of a change
 
@@ -314,51 +328,71 @@ does not reach you is its *report*, which returns to the runner; so anything an
 agent needs passed on must be in a file, not in a report.
 
 **A brief points at the work; it does not contain it.** A dispatch is which piece,
-which worktree, which file — and it tells the agent to enter that worktree first:
+which worktree, which file — and it tells the agent how to reach that worktree,
+which is through absolute paths:
 
 > Act on the findings for `dev-writer` in
 > `openspec/changes/embedded-node-wizard/findings/`. Piece branch
-> `piece/embedded-wizard`, worktree `.claude/worktrees/piece-embedded` — enter it
-> with `EnterWorktree(path: "…/.claude/worktrees/piece-embedded")` before anything
-> else, then use plain relative paths.
+> `piece/embedded-wizard`, worktree
+> `/…/.claude/worktrees/piece-embedded`. **Do not call `EnterWorktree`** — work
+> through absolute paths under that worktree, and
+> `git -C /…/.claude/worktrees/piece-embedded …` for every git command.
 
-**Say that in every brief, because it is what keeps an agent out of the shapes
-that cost a permission click.** An agent that never moves its working directory
-reaches for `cd <dir> && …` or `git -C <dir> …` on every call — the first is the
-single biggest source of prompts here, and the second spreads an absolute path
-through every git command an agent writes. `EnterWorktree` moves the session into
-the tree once, and everything after is an ordinary relative-path command in the
-right place.
+**A dispatched agent must not call `EnterWorktree`.** Not "should try and fall
+back" — the call cannot succeed usefully, and two probes measured both routes:
 
-Two things about the tool that decide how it is used here:
+- **Dispatched normally**, working directory at the repository root, worktree
+  correctly registered in `git worktree list`. Verbatim: *"Cannot enter worktree:
+  the current working directory /…/radicle-logos-module is the repository root,
+  not an isolated worktree — switching is only available to sessions whose
+  working directory is inside a worktree of this repository."* The repository
+  root is where every dispatched agent starts, so this refusal is certain rather
+  than possible.
+- **Dispatched with `isolation: "worktree"`**, which pins the working directory
+  inside a throwaway worktree and so clears that precondition. The call
+  **succeeded** and an environment update reported the directory change — then
+  the agent was split: the Read tool followed the switch and read the piece
+  branch by relative path, while **every Bash call was refused** with *"This
+  agent is isolated in the worktree …/agent-<id>, but this command's working
+  directory resolved to the shared checkout (…). Refusing to run it there — a
+  worktree-isolated agent's commands must run inside its worktree."*
 
-- **`path` enters an existing worktree; `name` creates one.** The runner has
-  already made the piece's worktree with `git worktree add`, so a dispatched agent
-  passes `path` and never `name` — `name` would branch from `origin/main` and
-  strand the agent in an empty tree with none of the piece's commits.
-- **It only moves the agent that calls it.** From an agent whose directory was
-  pinned at launch, the switch affects that agent alone. So the runner cannot
-  enter a worktree on an agent's behalf; the instruction has to be in the brief,
-  which is why it belongs in the dispatch shape above rather than in a setup step.
-- **It can refuse, and the fallback matters.** A session sitting at the repository
-  root has been refused with *"switching is only available to sessions whose
-  working directory is inside a worktree"* — measured here, by a reviewer that was
-  then unable to follow its own file. **If the call is refused, work through
-  absolute paths and `git -C <worktree> …`, and say so in your report.** `git -C`
-  is one plain command and costs no approval click, unlike the `cd <dir> && …`
-  chain this rule exists to avoid.
+**There is no supported way to place a dispatched subagent inside a pre-existing
+worktree with full tool access.** Route 2 is the more dangerous of the two
+because it *looks* like it worked: nothing goes wrong until the first Bash call,
+long after the agent has concluded it is in the right place. Do not reach for
+`isolation: "worktree"` on discovering route 1 — that is the trap this paragraph
+exists to close.
+
+So: **absolute paths, and `git -C <worktree> …` for git.** `git -C` is one plain
+command and costs no approval click, unlike the `cd <dir> && …` chain that an
+agent improvises when its instructions have failed and named no alternative.
+That improvisation is the measured cost: four agents in one session hit the
+refusal, and two spent significant time on workarounds (`env -C`, `cd &&`) that
+cost approval clicks, because the documents described the shape as working.
+
+**The tool itself is not broken — it is for a session moving itself**, which is
+what `CLAUDE.md` describes and what it is built for. The distinction is who
+calls it, not whether it works.
+
+One consequence for a dispatched agent's git commands: since it never moves its
+working directory, it is never standing in the worktree. **A reviewer therefore
+needs no `ExitWorktree` step before removing its tree** — `git worktree remove`
+refuses only the directory you are in, and a dispatched reviewer is in the main
+checkout throughout.
 
 The runner itself stays in the main checkout. It dispatches and reads; it is the
 agents that need to be somewhere specific.
 
-**A reviewer has to step out before it deletes its tree.** `git worktree remove`
-cannot remove the directory you are standing in, so the last two acts are
-`ExitWorktree(action: "keep")` — which returns the session to where it started and
-leaves the tree alone — and then the `git worktree remove <absolute-path> --force`
-its own file already specifies. `keep` is the right action there rather than
-`remove`: `ExitWorktree` only removes worktrees it created itself, and these were
-made by the runner with `git worktree add`, so asking it to remove one does
-nothing and the tree would survive.
+**A reviewer removes its tree with one command**, the `git worktree remove
+<absolute-path> --force` its own file specifies. There is no step-out to do
+first: `git worktree remove` refuses only the directory you are standing in, and
+a dispatched reviewer never entered the worktree, so it is standing in the main
+checkout. This section used to prescribe `ExitWorktree(action: "keep")` ahead of
+the removal; that step guarded against a state a dispatched agent cannot reach,
+and it went when `EnterWorktree` did. The condition it enforced is still worth
+checking, and `git rev-parse --show-toplevel` is how — it must not be the path
+being removed.
 
 **If you are writing out what a finding says, you have the wrong shape.** The
 reviewer already wrote it with the measurement behind it; a restatement puts a

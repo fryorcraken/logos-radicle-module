@@ -156,17 +156,18 @@ writers (`dev-writer`, `tester`) push the piece. Never `git add -A`.
 
 ## Your worktree, and deleting it when you are done
 
-**Enter it before you start** — `EnterWorktree(path: <the absolute path the runner
-gave you>)`, then plain relative paths, rather than `cd <dir> && …` on every call,
-which costs an approval click each time. Pass `path` and never `name`: `name`
-creates a new tree branched from `origin/main`, holding none of the piece's
-commits.
+**Work through absolute paths under it, and `git -C <the worktree path> …` for
+every git command**, rather than `cd <dir> && …` on every call, which costs an
+approval click each time.
 
-**The call can be refused**, measured here for a session whose working directory is
-the repository root: it answers that "switching is only available to sessions whose
-working directory is inside a worktree". The documented fallback is absolute paths
-plus `git -C <the worktree path> …` for every git command — and **say in your
-report** that you worked that way.
+**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
+root, which the tool refuses every time: *"switching is only available to
+sessions whose working directory is inside a worktree of this repository"*. And
+`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
+the switch, and **every Bash call is refused** for resolving to "the shared
+checkout". That is the more dangerous route, because it looks like it worked
+until the first shell command. `README.md`'s "Handing over between agents" has
+both probes verbatim.
 
 **If you were given no worktree path, stop and ask for one** rather than mutating
 the tree you were launched in, which is the piece's own — and do not make one
@@ -181,19 +182,20 @@ every edit you made.
 **`--force` discards uncommitted work irreversibly, so confirm three things
 first:** the path is the one your dispatch named rather than one you inferred
 (removing the piece's own tree would destroy uncommitted writer work); you are not
-standing in it — that is what `ExitWorktree(action: "keep")` is for, so confirm it
-returned you to the main checkout, because `git worktree remove` refuses the
-directory you are in and that refusal reads like a permissions problem; and your
+standing in it — `git rev-parse --show-toplevel` must not be that path, which
+holds already because a dispatched agent never moves its working directory, and
+`git worktree remove` refuses the directory you are in with a message that reads
+like a permissions problem; and your
 findings commit is already on `piece/<name>`. If any does not hold, **stop and
 report it** rather than forcing. Only then:
 
 ```
-ExitWorktree(action: "keep")
 git worktree remove <the absolute path you were given> --force
 ```
 
-`keep` rather than `remove`, because `ExitWorktree` only deletes worktrees it
-created itself and the runner made this one.
+One command, and no step-out before it. This file used to prescribe
+`ExitWorktree(action: "keep")` first — a step that only made sense for an agent
+standing inside the tree, which a dispatched one never is.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
 each entry is for.

@@ -30,13 +30,26 @@ goes back to the runner with the evidence attached.
    them where they do not.
 6. **Merge.**
 
-**Enter the piece's worktree before anything else** — `EnterWorktree(path:
-<the absolute path your brief names>)`, then plain relative paths. Every step
-below runs from inside that tree, and `openspec` in particular resolves its root
-from the cwd, so running from the main checkout makes the change simply not
-listed. If the call is refused — it is, for a session sitting at the repository
-root — work through absolute paths and `git -C <worktree> …` instead, and say so
-in your report.
+**Work through absolute paths under the piece's worktree, and `git -C <the
+worktree path> …` for every git command.** **Do not call `EnterWorktree`**: a
+dispatched agent starts at the repository root, which the tool refuses every
+time, and `isolation: "worktree"` does not rescue it — the call succeeds and then
+every Bash call is refused instead. `README.md`'s "Handing over between agents"
+has both probes verbatim.
+
+**`openspec` is the one command this costs you something real.** It resolves its
+root from the cwd and has **no `-C` flag**, so from the repository root it will
+not list a change that lives in the worktree — and `cd <worktree> && openspec …`
+prompts even though `Bash(openspec:*)` is allow-listed, because the checker
+cannot analyse a compound command. Two honest options, in order:
+
+- **Run it from the main checkout** where the change folder is also visible,
+  once the piece branch is merged or the folder is present there.
+- **Ask the user to run it**, or report that validation did not run and why.
+
+**Do not report a validation you did not perform**, and do not let a skipped
+`validate --strict` pass silently into the merge — an unrun gate is worse than a
+red one, because the row gets ticked either way.
 
 ## Step 1 — is the piece finished?
 
@@ -213,9 +226,19 @@ paths. Most of the diff is renames — the change folder is *moved* into
 the one real deletion, so say so in the commit message, or the diff reads as
 though it is removing review evidence.
 
-**Then push it** — `git push origin piece/<name>`, by name, after checking
-`git branch -vv`, because a worktree inherits its parent branch's upstream and a
-bare `git push` can land commits somewhere you did not name. This is the one push
+**Then push it** — check `git config --get-regexp "^branch\.piece"` first and
+expect **nothing** back, because the branch is created with `git worktree add
+--no-track` and has no upstream. `merge refs/heads/main` coming back means it was
+made without the flag and is configured to push to `main`; stop and say so. `git
+branch -vv` is not the check — it prints `[origin/main]` either way, which is how
+a bare `git push` has landed commits on `main` here more than once. With no
+upstream, name the refspec in full:
+
+```
+git push origin refs/heads/piece/<name>:refs/heads/piece/<name>
+```
+
+This is the one push
 you make, and it is an ordinary commit on top of a branch nobody else is on. It
 also matters for the next step: CI runs on the PR, so the archive has to be on the
 remote before the run you watch is the run that tests what you are merging.
@@ -326,12 +349,13 @@ succeeded; only the local delete failed, and that non-zero exit reads exactly
 like a failed merge. Check `gh pr view <n> --json state` before believing the
 exit code.
 
-Leaving the worktree is the last act, and it is
-`ExitWorktree(action: "keep")` — the runner made the tree with `git worktree
-add`, and `ExitWorktree` only removes trees it created itself, so `remove` would
-do nothing. Removing the piece's worktree is not yours in any case: CLAUDE.md's
+**There is no worktree to leave at the end.** You never entered one — a
+dispatched agent works through absolute paths and `git -C` — so there is no
+step-out act, and this file's former `ExitWorktree(action: "keep")` last step is
+gone with it. Removing the piece's worktree is not yours either: CLAUDE.md's
 worktree section makes cleanup a post-merge step, and this repo has reached
-fifteen stale worktrees at once by nobody owning it.
+fifteen stale worktrees at once by nobody owning it. **Say in your report that
+the tree is ready to prune**, since the runner is the one holding that list.
 
 ## What you never do
 

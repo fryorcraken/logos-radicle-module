@@ -149,12 +149,21 @@ on, and the same tree the `spec-writer` and `tester` use. You share it because y
 never overlap: at most one of the three runs at a time. Reviewers get separate
 trees because they are concurrent; you do not need one.
 
-**Enter it first** — `EnterWorktree(path: <the absolute path your brief names>)` —
-and then use plain relative paths. Not `cd <dir> && …`: the permission checker
-cannot analyse a compound command, so that shape costs the user an approval click
-on every call even when the command itself is allow-listed. If the call is
-refused, work through absolute paths and `git -C <worktree> …`, and say so in your
-report.
+**Work through absolute paths under it, and `git -C <worktree> …` for every git
+command.** Not `cd <dir> && …`: the permission checker cannot analyse a compound
+command, so that shape costs the user an approval click on every call even when
+the command itself is allow-listed. `git -C` is one plain command and costs
+nothing.
+
+**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
+root, and the tool refuses that with *"switching is only available to sessions
+whose working directory is inside a worktree of this repository"* — certain, not
+occasional. Nor does `isolation: "worktree"` rescue it: with the working
+directory pinned inside a throwaway worktree the call succeeds, and then Read
+follows the switch while **every Bash call is refused** for resolving to "the
+shared checkout". That route is the dangerous one, because it looks like it
+worked until the first shell command. `README.md`'s "Handing over between agents"
+has both probes verbatim.
 
 **Commit straight to that branch.** Both on the first pass and when you come back
 to act on findings: you are the only agent writing code on the piece at either
@@ -179,9 +188,22 @@ On the findings pass the PR is already open: commit, push to it, and never open 
 second. One piece is one PR, so `gh pr list --head piece/<name>` before you
 create.
 
-**Check `git branch -vv` first** and push by name, `git push origin piece/<name>`.
-A worktree inherits its parent branch's upstream, and a bare `git push` has landed
-commits on `main` here more than once.
+**Check `git config --get-regexp "^branch\.piece"` first, and expect nothing
+back.** The piece branch is created with `git worktree add --no-track`, which
+leaves it with no upstream — so that command returning nothing is the positive
+signal that it is safe to push. If it returns `merge refs/heads/main`, the branch
+was made without the flag and is configured to push to `main`; stop and say so.
+
+**`git branch -vv` is not the check**, though this file used to say it was: it
+prints `[origin/main]` either way, and an agent has no way to tell an intended
+upstream from a wrong one. That is why a bare `git push` has landed commits on
+`main` here more than once.
+
+With no upstream, push the refspec in full:
+
+```
+git push origin refs/heads/piece/<name>:refs/heads/piece/<name>
+```
 
 The title says what the change does, not which stage produced it; the body says
 why it exists and names every `NO SPEC:` you left. Do not narrate your commits —

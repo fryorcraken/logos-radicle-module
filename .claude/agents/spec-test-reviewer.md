@@ -28,18 +28,19 @@ the piece's own, and do not make one of your own. A worktree is made with
 repo into itself. Mutation runs collide: two reviewers sharing a tree see each
 other's broken code and cannot tell it from the author's.
 
-**Enter it before you start** — `EnterWorktree(path: <the absolute path you were
-given>)` — and then run everything with plain relative paths. `cd <dir> && cargo
-test` costs an approval click on every call even though `cargo test` is allow-listed,
-because the permission checker cannot analyse a compound command. Pass `path` and
-never `name`: `name` creates a new tree branched from `origin/main`, which would
-leave you reviewing none of the piece's tests.
+**Work through absolute paths under it, and `git -C <the worktree path> …` for
+every git command.** `cd <dir> && cargo test` costs an approval click on every
+call even though `cargo test` is allow-listed, because the permission checker
+cannot analyse a compound command; for a suite in a subdirectory use the tool's
+own path flag, `cargo test --manifest-path <absolute path>/Cargo.toml`.
 
-**The call can be refused**, measured here for a session whose working directory is
-the repository root: it answers that "switching is only available to sessions whose
-working directory is inside a worktree". The documented fallback is absolute paths
-plus `git -C <the worktree path> …` for every git command — and **say in your report**
-that you worked that way.
+**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
+root, which the tool refuses every time: *"switching is only available to
+sessions whose working directory is inside a worktree of this repository"*. And
+`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
+the switch, and **every Bash call is refused** for resolving to "the shared
+checkout", which for you means no test run ever executes while the files you read
+look right. `README.md`'s "Handing over between agents" has both probes verbatim.
 
 **When you finish, step out of the worktree and remove it rather than restoring it.**
 Restoring depends on your having tracked every edit, and one missed restore ships a
@@ -50,20 +51,21 @@ nothing you want lives there.
 **`--force` discards uncommitted work irreversibly, so check three things before you
 run it:** the path is the one your dispatch named and not one you inferred (removing
 the piece's own tree would destroy uncommitted writer work); you are not standing in
-it — `git rev-parse --show-toplevel` must not be that path, which is what
-`ExitWorktree(action: "keep")` is for, so confirm it returned you to the main
-checkout, because `git worktree remove` refuses the directory you are in and that
-refusal reads like a permissions problem; and your findings commit is already
-cherry-picked onto `piece/<name>`. If any does not hold, **stop and report it**
-rather than forcing. Only then:
+it — `git rev-parse --show-toplevel` must not be that path, because `git worktree
+remove` refuses the directory you are in and that refusal reads like a
+permissions problem; and your findings commit is already cherry-picked onto
+`piece/<name>`. If any does not hold, **stop and report it** rather than forcing.
+Only then:
 
 ```
-ExitWorktree(action: "keep")
 git worktree remove <the absolute path you were given> --force
 ```
 
-`keep` rather than `remove`, because `ExitWorktree` only deletes worktrees it created
-itself and the runner made this one.
+One command, and no step-out before it. This file used to prescribe
+`ExitWorktree(action: "keep")` first — but a dispatched agent never entered the
+worktree, so it is standing in the main checkout already and the step guarded
+against a state you cannot reach. Check the condition; there is nothing to
+perform.
 
 (The per-mutation restore in part 2 is different and still necessary — that is what
 lets the *next* mutation mean something.)

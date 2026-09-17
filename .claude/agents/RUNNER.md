@@ -15,7 +15,8 @@ first dispatch; [`README.md`](README.md) is the flow itself.
   someone who has read the change. The `closer` does it.
 - **You stay in the main checkout.** Agents go to worktrees; you do not.
 
-Yours besides dispatching: `git worktree add`, and the reading below.
+Yours besides dispatching: `git worktree add --no-track` (the flag is
+load-bearing — see "Create worktrees with `--no-track`"), and the reading below.
 
 ### What you read, and what you only point at
 
@@ -119,24 +120,48 @@ of the shapes that cost a permission click:
 
 > Act on the findings for `dev-writer` in
 > `openspec/changes/<name>/findings/`. Piece branch `piece/<name>`, worktree
-> `.claude/worktrees/piece-<name>` — enter it with
-> `EnterWorktree(path: "…/.claude/worktrees/piece-<name>")` before anything
-> else, then use plain relative paths.
+> `/…/.claude/worktrees/piece-<name>`. **Do not call `EnterWorktree`** — work
+> through absolute paths under that worktree, and
+> `git -C /…/.claude/worktrees/piece-<name> …` for every git command.
 
-**Pass `path`, never `name`** — `name` branches from `origin/main` and strands
-the agent in an empty tree. You cannot enter a worktree on an agent's behalf,
-which is why this belongs in the brief.
+**A dispatched agent cannot enter a worktree, and the brief must say so.** This
+is not a contingency to plan for; it is what happens every time. Two probes
+measured it, and both routes fail:
 
-**`EnterWorktree` can refuse, and the brief has to say what to do then.** A
-session whose working directory is the repository root — which is where a
-dispatched agent starts — has been refused with *"switching is only available to
-sessions whose working directory is inside a worktree"*. The message reads like a
-permissions problem and names no fallback, so an agent that takes "before
-anything else" literally does nothing at all. **Tell the agent that if the call
-is refused, it works through absolute paths and `git -C <worktree> …` instead,
-and says so in its report.** That is a documented fallback rather than the `cd`
-chain the instruction exists to avoid: `git -C` is one plain command and costs no
-approval click.
+- **Dispatched normally**, so the working directory is the repository root, with
+  the worktree correctly registered in `git worktree list`. Verbatim: *"Cannot
+  enter worktree: the current working directory /…/radicle-logos-module is the
+  repository root, not an isolated worktree — switching is only available to
+  sessions whose working directory is inside a worktree of this repository."*
+  Since the repository root is where every dispatched agent starts, this refusal
+  is certain.
+- **Dispatched with `isolation: "worktree"`**, which pins the working directory
+  inside a throwaway worktree and so satisfies that precondition. The
+  `EnterWorktree(path:)` call **succeeded** and an environment update reported
+  the directory change — and then the agent was split in half: the Read tool
+  followed the switch and read the piece branch by relative path, while **every
+  Bash call was refused** with *"This agent is isolated in the worktree
+  …/agent-<id>, but this command's working directory resolved to the shared
+  checkout (…). Refusing to run it there — a worktree-isolated agent's commands
+  must run inside its worktree."*
+
+So there is no supported way to put a dispatched subagent inside a pre-existing
+worktree with full tool access. **Route 2 is the more dangerous**, because it
+looks like it worked: the failure does not surface until the first Bash call,
+by which point the agent believes it is in the right place. Do not reach for
+`isolation: "worktree"` as a rescue — it buys a successful tool call and a
+broken shell.
+
+The cost of getting this wrong is measured too: four agents in one session hit
+the refusal, and two burned significant time inventing workarounds (`env -C`,
+`cd &&`) that each cost the user an approval click, because the brief told them
+the shape was supposed to work. **`git -C <worktree> …` is one plain command and
+costs no approval click** — that is the whole fallback, and it is now the only
+instruction.
+
+`EnterWorktree` is still the right tool for a **session moving itself**, which
+is what it is built for and what `CLAUDE.md` describes. It is dispatched agents
+that cannot use it.
 
 **Do not phrase an instruction in a way that invites a chain.** "`cargo test`
 from `radicle/rust-ffi/`" reads as `cd radicle/rust-ffi && cargo test`, which
@@ -182,6 +207,42 @@ flow's own adopting change nearly shipped with `code-reviewer` skipped.
 
 **Two concurrent authors across pieces is the ceiling.** Fanning agents across
 sequential work moves dependency discovery to collision time.
+
+## Create worktrees with `--no-track`
+
+```
+git worktree add --no-track -b piece/<name> .claude/worktrees/piece-<name> origin/main
+```
+
+**The flag is what stops the piece branch being configured to push to `main`.**
+Without it, `git worktree add <path> -b piece/<name> origin/main` branches from a
+remote-tracking ref, and git's `branch.autoSetupMerge` default then writes
+`remote = origin` and `merge = refs/heads/main` into the new branch's config. The
+branch is set up to push to `main` from the moment it exists.
+
+This is the cause of the bare-`git push`-lands-on-`main` warning that this file
+and `CLAUDE.md` both carry. Measured: `git config --get-regexp "^branch\.piece"`
+returned `merge refs/heads/main` for both piece branches created without the
+flag, and piece A's `git push origin piece/embedded-node-wizard` was **rejected
+by branch protection for `refs/heads/main`** — it only went through with a
+fully-qualified refspec. The agent reported the plain push form as "not safe in
+these worktrees", which is the wrong lesson to draw: the push was fine and the
+branch creation was at fault.
+
+**Check it with `git config`, not `git branch -vv`.** `branch -vv` prints
+`[origin/main]` and there is nothing in that output to tell an intended upstream
+from a wrong one, so the check both documents used to prescribe cannot catch
+this. The positive signal is:
+
+```
+git config --get-regexp "^branch\.<name>"
+```
+
+**returning nothing.** Verified: with `--no-track` the creation output omits the
+"set up to track" line and that command returns nothing at all.
+
+A branch created this way has no upstream, so a push names the refspec in full:
+`git push origin refs/heads/piece/<name>:refs/heads/piece/<name>`.
 
 ## Prune worktrees at merge time
 
