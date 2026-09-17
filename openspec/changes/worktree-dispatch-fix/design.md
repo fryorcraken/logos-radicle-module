@@ -366,8 +366,20 @@ The `closer.md` line the survey found makes the same point about the corrections
 themselves: a `grep -rn "EnterWorktree"` sweep is the closest thing this change
 has to an automated check, and it is blind to any paraphrase of the instruction
 it looks for. **Scoping a documentation fix by keyword finds the copies and
-misses the residue**; both passes of this piece hit that, and the second only
-found it because a survey read the files rather than matching them.
+misses the residue**; all three passes of this piece hit it, each finding what
+the last one's grep could not see. The second found `closer.md`'s "already in the
+right place" only because a survey read the files rather than matching them. The
+third was told to grep for the *shapes* instead of the tool name — "existing
+worktree", "opens the PR", "the piece's worktree" — and that is what turned up
+`RUNNER.md:373` plus three more stale lines in `closer.md`, including a push that
+would have succeeded while sending a branch without the archive commit on it.
+
+**So the durable lesson is about what you grep for, not whether you grep.** A
+keyword sweep is scoped to the phrasing the *previous* author chose; a shape
+sweep is scoped to the phrasing the *current* model makes wrong, which is the set
+you actually want. Neither replaces reading the file, and the count above is the
+evidence: three passes, three residues, each invisible to its predecessor's
+search.
 
 ## A constraint this change turned out to fix
 
