@@ -8,11 +8,18 @@ a passphrase means an unlock on every start, that the embedded identity is a new
 DID rather than the user's own, and that the node accepts no inbound
 connections.
 
+**This flow sets up Embedded mode and nothing else.** A user who opened it has
+already chosen Embedded, so the flow states what Embedded means and lets them
+proceed or leave. It MUST NOT offer Explore or Local as alternatives within
+itself: those two need no setup, choosing either abandons every step that
+follows, and a flow that offers a mode it then refuses to continue from is
+presenting a choice with one permitted answer.
+
 ## ADDED Requirements
 
 ### Requirement: Six steps in a fixed order
 
-The setup MUST present exactly six steps, in this order: preflight, mode,
+The setup MUST present exactly six steps, in this order: preflight, embedded,
 identity, network, start, confirm. The step in force MUST be observable, and
 MUST be preflight when the flow is first shown.
 
@@ -36,7 +43,7 @@ offering to do it again.
 
 - **GIVEN** a flow whose every step is permitted to advance
 - **WHEN** advance is invoked five times from the preflight step
-- **THEN** the step in force after each invocation MUST be, in order, mode,
+- **THEN** the step in force after each invocation MUST be, in order, embedded,
   identity, network, start and confirm
 - **AND** a sixth invocation MUST leave the step in force at confirm
 
@@ -45,7 +52,7 @@ offering to do it again.
 - **GIVEN** the step in force is the network step
 - **WHEN** back is invoked
 - **THEN** the step in force MUST be the identity step
-- **AND** invoking back again MUST make the step in force the mode step
+- **AND** invoking back again MUST make the step in force the embedded step
 
 #### Scenario: Returning to a step that already acted does not offer to act again
 
@@ -190,48 +197,131 @@ as passing removes the block with nothing else changed.
   nothing else changed
 - **THEN** the control that starts the node MUST be enabled
 
-### Requirement: The mode step states the identity consequence per mode
+### Requirement: The embedded step confirms Embedded and states the identity consequence
 
-The mode step MUST offer each mode `getCapabilities().startableModes` reports,
-and MUST state for each, in the step itself, what choosing it means for
-identity: `explore` reads a public seed and has no identity at all, `local`
-operates as the identity in the user's existing Radicle home, and `embedded`
-operates as a new identity this module creates and the user does not yet hold
-anywhere.
+The embedded step MUST state what Embedded mode is — this module keeps its own
+Radicle home and runs the node itself — and MUST state, in the step itself,
+that the node operates as a **new identity this module creates**, separate from
+any Radicle node the user already runs and from any identity they already hold.
 
-The Embedded statement MUST say that the identity is separate from any Radicle
-node the user already runs. It MUST NOT be deferred to the confirm step: the
-confirm step restates it, and a statement made only after the identity has been
-created is made after the decision it informs.
+That statement MUST NOT be deferred to the confirm step: the confirm step
+restates it with the DID that by then exists, and a statement made only after
+the identity has been created is made after the decision it informs.
 
-Choosing a mode MUST persist it through `setSetting("mode", …)` and MUST NOT
-record the flow's own copy of the mode in force, which `source-modes` already
-requires of any control offering the modes.
+The step MUST NOT offer `explore` or `local`. It MUST NOT present the modes as a
+set to pick from, and it MUST NOT annotate a mode as unavailable, whatever
+`getCapabilities().startableModes` reports: the flow sets up one mode, so it has
+no unstartable alternative to caption. A user who does not want Embedded leaves
+the flow through the control that closes it, which every step already offers.
 
-Advancing past the mode step MUST require that the mode in force, as
-`getCapabilities().mode` reports it, is `embedded`: the four steps after it are
-about a node no other mode runs.
+This step is therefore not a mode picker, so `source-modes`' requirement that a
+view annotating which modes are available consume `startableModes` does not
+reach it — that requirement binds the header toggle and the settings panel,
+which are where a user compares the three.
 
-#### Scenario: Each offered mode carries its own identity statement
+Forward out of this step MUST be an act the user performs rather than a
+consequence of arriving: the step MUST offer a control that puts Embedded in
+force, and the mode MUST NOT be written by the step being shown. A mode written
+on arrival would put a module into Embedded because the user opened a screen,
+and leaves the stated consequence something they were shown rather than
+something they answered.
 
-- **GIVEN** a mode step told a startable set containing all three modes
-- **THEN** each mode MUST be offered
-- **AND** the text shown for `embedded` MUST state that it is a separate
-  identity from any Radicle node the user already runs
-- **AND** the text shown for `local` MUST NOT make that statement
+That control MUST persist Embedded through `setSetting("mode", "embedded")`, and
+MUST NOT record the flow's own copy of the mode in force — `source-modes`
+already requires that of any control that changes the mode. What the step
+reports as the mode in force MUST come from `getCapabilities().mode`.
+
+Going back and closing the flow remain available here as on any other step.
+Leaving this step by either route MUST leave the mode in force exactly where it
+was, so a user who opened the flow and thought better of it is in the mode they
+started in.
+
+Advancing past the embedded step MUST require that `getCapabilities().mode`
+reports `embedded`: the four steps after it are about a node no other mode runs,
+and a backend that has not reported `embedded` has not confirmed the write
+landed. A refused `setSetting` MUST therefore leave advancing refused, and the
+refusal MUST be displayed.
+
+Returning to this step once Embedded is in force MUST report that it is, and
+MUST NOT offer to put it in force again. Unlike identity creation and node
+start, the mode write is idempotent, so this is about not asking a question the
+backend has already answered rather than about preventing a second act — which
+is why the statement of what Embedded means stays displayed either way.
+
+#### Scenario: The step states Embedded's separate identity
+
+- **WHEN** the embedded step is shown
+- **THEN** the displayed text MUST state that this module runs a node of its own
+- **AND** it MUST state that the node operates as a new identity, separate from
+  any Radicle node the user already runs
 
 #### Scenario: The separateness statement precedes any identity write
 
-- **WHEN** the mode step is shown with `embedded` offered
+- **WHEN** the embedded step is shown
 - **THEN** the separate-identity statement MUST be visible
 - **AND** no `createEmbeddedIdentity` call MUST have been issued
 
-#### Scenario: Only Embedded continues the flow
+#### Scenario: No other mode is offered, whatever the startable set reports
 
-- **GIVEN** a flow at the mode step where `getCapabilities().mode` is `local`
-- **THEN** advancing MUST NOT be permitted
-- **AND WHEN** the same flow is told a `getCapabilities().mode` of `embedded`
-- **THEN** advancing MUST be permitted
+- **GIVEN** an embedded step told a `getCapabilities().startableModes`
+  containing `explore`, `local` and `embedded`
+- **THEN** no control selecting `explore` MUST be present
+- **AND** no control selecting `local` MUST be present
+- **AND** no text MUST be displayed stating that a mode cannot be started
+- **AND WHEN** the same step is told a `startableModes` containing `embedded`
+  alone
+- **THEN** what is displayed MUST be unchanged
+
+#### Scenario: Arriving at the step writes no mode
+
+- **GIVEN** a flow whose `getCapabilities().mode` is `local`
+- **WHEN** the step in force becomes the embedded step
+- **THEN** no `setSetting` call MUST have been issued
+- **AND** the mode in force MUST still be `local`
+
+#### Scenario: Going back from the step writes no mode
+
+- **GIVEN** an embedded step where `getCapabilities().mode` is `local` and the
+  control putting Embedded in force has not been invoked
+- **WHEN** back is invoked
+- **THEN** no `setSetting` call MUST have been issued
+- **AND** the mode in force MUST still be `local`
+
+#### Scenario: The step's control puts Embedded in force
+
+- **GIVEN** an embedded step where `getCapabilities().mode` is `local`
+- **WHEN** the control that puts Embedded in force is invoked, against a backend
+  that accepts the write and then reports `embedded`
+- **THEN** exactly one `setSetting` call MUST have been issued, with key `mode`
+  and value `embedded`
+- **AND** the mode in force MUST be `embedded`
+- **AND** advancing MUST be permitted
+
+#### Scenario: The mode in force is the reply, not the value written
+
+- **GIVEN** an embedded step where `getCapabilities().mode` is `local`
+- **WHEN** the control that puts Embedded in force is invoked against a backend
+  that accepts the write but goes on reporting `local`
+- **THEN** the mode in force MUST be `local`
+- **AND** advancing MUST NOT be permitted
+
+#### Scenario: A refused mode write neither advances nor moves the mode in force
+
+- **GIVEN** an embedded step where `getCapabilities().mode` is `local`
+- **WHEN** the control that puts Embedded in force is invoked against a backend
+  that refuses the write with a distinctive message
+- **THEN** that message MUST be displayed
+- **AND** the mode in force MUST still be `local`
+- **AND** advancing MUST NOT be permitted
+- **AND** the step in force MUST still be the embedded step
+
+#### Scenario: Returning with Embedded already in force does not re-offer it
+
+- **GIVEN** an embedded step where `getCapabilities().mode` reports `embedded`
+- **THEN** the control that puts Embedded in force MUST NOT be enabled
+- **AND** the text stating that this is a new, separate identity MUST still be
+  displayed
+- **AND** advancing MUST be permitted
 
 ### Requirement: The identity step states the passphrase trade where it is chosen
 
@@ -418,7 +508,7 @@ than a placeholder, so copying the line as shown is the correct command.
 Copying MUST put that line on the clipboard.
 
 The restatement MUST NOT be the flow's only statement of the consequence; the
-mode step states it before the identity is created, and this step restates it
+embedded step states it before the identity is created, and this step restates it
 with the DID that now exists.
 
 #### Scenario: The allow line carries the reported DID

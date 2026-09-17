@@ -35,16 +35,22 @@ be offered, and all of them are answerable before anything is written.
 
 ## What Changes
 
-- Adds a six-step guided setup for Embedded mode — preflight, mode, identity,
-  network, start, confirm — as a QML flow over the module methods that already
-  exist.
+- Adds a six-step guided setup for Embedded mode — preflight, embedded,
+  identity, network, start, confirm — as a QML flow over the module methods that
+  already exist.
+- **The flow sets up Embedded and offers no other mode.** A user who opened
+  "Set up an embedded node" has already chosen it; Explore and Local need no
+  setup at all, and offering them inside a flow whose next four steps are about
+  a node neither mode runs is a choice with one permitted answer. Step two
+  therefore states what Embedded means and puts it in force, rather than
+  presenting the three modes as a pick.
 - Each step reports what it found rather than proceeding on an assumption: a
   failed preflight check names the thing that failed and blocks the step it
   gates, rather than being discovered at the identity write or the node start.
 - Pins the three consequences above as requirements about **what the wizard must
   state and when**, not as prose in a design document: the passphrase trade at
-  the identity step, the new-identity consequence at both the mode step and the
-  confirm step, and the inbound default at the network step.
+  the identity step, the new-identity consequence at both the embedded step and
+  the confirm step, and the inbound default at the network step.
 - **No module methods are added.** `getCapabilities`, `getSettings`,
   `setSetting`, `getEmbeddedIdentity`, `createEmbeddedIdentity`, `startNode`,
   `stopNode`, `getNodeStatus` and `listKnownSeeds` are all already exposed
@@ -61,6 +67,11 @@ Not covered, deliberately:
   seeds, and records no inbound setting — see Impact.
 - **Changing an existing identity's passphrase**, which is panel work and needs
   a method that does not exist.
+- **Switching between the three modes.** That control already exists in the
+  header toggle and the settings panel, specified by `source-modes`, and it is
+  where a user compares the modes. This flow is entered having chosen one of
+  them, so duplicating the comparison here would be a second place stating what
+  each mode means, free to drift from the first.
 
 ## Capabilities
 
@@ -85,7 +96,7 @@ mode restriction and the passphrase rule are consumed as specified.
 - **View only.** New QML under `radicle-ui/src/qml/`, plus component tests under
   `radicle-ui/tests/`. No change to `radicle/`, to `radicle_ui.rep`, or to the
   Rust staticlib.
-- Consumes, and does not redefine: `getCapabilities` (`mode`, `startableModes`,
+- Consumes, and does not redefine: `getCapabilities` (`mode`,
   `gitFound`/`gitPath`/`gitProblem`, `radHome`, `radSocket`, `pathsProblem`,
   `localNodeRunning`, `nodeId`, `canWriteLocal`), `getEmbeddedIdentity`,
   `createEmbeddedIdentity`, `startNode`, `getNodeStatus`, `listKnownSeeds` and
