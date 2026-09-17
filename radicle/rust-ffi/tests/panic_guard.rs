@@ -666,9 +666,7 @@ fn the_node_config_and_seeding_entry_points_are_guarded_too() {
     for (label, out) in [
         (
             "get_config(missing home)",
-            call(|| unsafe {
-                radicle_local_ffi::radicle_node_get_config(missing_home.as_ptr())
-            }),
+            call(|| unsafe { radicle_local_ffi::radicle_node_get_config(missing_home.as_ptr()) }),
         ),
         (
             "get_config(traversal-shaped home)",
@@ -681,10 +679,7 @@ fn the_node_config_and_seeding_entry_points_are_guarded_too() {
         (
             "set_config(not JSON)",
             call(|| unsafe {
-                radicle_local_ffi::radicle_node_set_config(
-                    missing_home.as_ptr(),
-                    not_json.as_ptr(),
-                )
+                radicle_local_ffi::radicle_node_set_config(missing_home.as_ptr(), not_json.as_ptr())
             }),
         ),
         (

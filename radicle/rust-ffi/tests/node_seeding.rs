@@ -140,6 +140,24 @@ fn re_seeding_with_a_different_scope_replaces_it_rather_than_adding_a_row() {
     assert_eq!(scope_of(&home, ABSENT_RID).as_deref(), Some("all"));
 }
 
+// NO SPEC: the spec states `listSeeded`'s shape (`{"items":[…]}`) and
+// `unseedRepo`'s (`{"unseeded":bool}`), but never says what a successful
+// `seedRepo` returns. `{"rid":…,"scope":…}` was chosen: it is the policy that
+// now holds, which is what a view re-renders from, and it deliberately does NOT
+// report the store's `change_count() > 0` boolean — see the test below for why
+// that would be misleading. A spec-writer should decide whether this is the
+// shape it wants before it becomes permanent by accident.
+#[test]
+fn a_successful_seed_reports_the_policy_that_now_holds() {
+    let f = init_profile("seeding-success-shape");
+    let home = f.home();
+
+    let reply = parse(&seeding::seed(&home, ABSENT_RID, "followed"));
+    assert!(reply.get("error").is_none(), "{reply}");
+    assert_eq!(reply["rid"], serde_json::json!(ABSENT_RID));
+    assert_eq!(reply["scope"], serde_json::json!("followed"));
+}
+
 #[test]
 fn re_seeding_at_the_same_scope_is_not_reported_as_a_failure() {
     // The store's `seed()` returns `change_count() > 0`, which is FALSE when

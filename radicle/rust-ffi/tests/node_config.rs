@@ -323,6 +323,54 @@ fn a_value_that_would_leave_the_file_unreadable_is_refused_before_it_is_written(
     assert_eq!(std::fs::read(config_path(&home)).unwrap(), before);
 }
 
+// NO SPEC: the spec covers a `config.json` that does not parse as JSON, and one
+// that is absent, but not one that parses and has no `node` section. That is a
+// real state — a hand-edited file, or a truncation that happened to leave valid
+// JSON — and this accepts it as an error naming the file rather than rendering
+// an empty configuration. A spec-writer should say whether that is right.
+#[test]
+fn a_configuration_with_no_node_section_is_an_error_rather_than_an_empty_one() {
+    let f = init_profile("nodeconfig-no-node-section");
+    let home = f.home();
+
+    std::fs::write(config_path(&home), r#"{"publicExplorer":"https://x/$rid"}"#).expect("clobber");
+
+    let reply = get(&home);
+    let msg = reply["error"].as_str().expect("an error");
+    assert!(msg.contains("config.json"), "{msg}");
+    // Not a set of defaults: the same reasoning as the unparseable case, since
+    // an empty configuration on screen is indistinguishable from a real one.
+    assert!(reply.get("alias").is_none(), "{reply}");
+}
+
+// NO SPEC: the spec does not say what a READ does when an exposed field holds
+// the wrong JSON type — say `listen` as a string, in a file this module did not
+// write. This renders it as empty rather than refusing the whole read, on the
+// grounds that a `getNodeConfig` which declined to show four good fields
+// because a fifth was odd would be less useful than one that shows what it can.
+// A WRITE of the same value is still refused, which is the case that matters.
+#[test]
+fn a_field_of_the_wrong_type_reads_as_empty_rather_than_failing_the_whole_read() {
+    let f = init_profile("nodeconfig-wrong-type-read");
+    let home = f.home();
+
+    let mut doc = read_raw(&home);
+    doc["node"]["listen"] = serde_json::json!("0.0.0.0:8776");
+    doc["node"]["alias"] = serde_json::json!("still-here");
+    std::fs::write(
+        config_path(&home),
+        serde_json::to_string_pretty(&doc).unwrap(),
+    )
+    .expect("clobber");
+
+    let reply = get(&home);
+    assert!(reply.get("error").is_none(), "{reply}");
+    assert_eq!(reply["listen"], serde_json::json!([]));
+    // The control: the rest of the configuration still rendered, which is the
+    // whole argument for tolerating the odd field.
+    assert_eq!(reply["alias"], serde_json::json!("still-here"));
+}
+
 #[test]
 fn two_homes_report_two_different_configurations() {
     // A fixture that answers the same for every input cannot tell "read the
