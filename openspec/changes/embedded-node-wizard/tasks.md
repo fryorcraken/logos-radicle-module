@@ -28,6 +28,18 @@ one row per stage so concurrent cherry-picks do not conflict. What that tick now
 covers is both passes: the wizard, and `embedded-state` plus the re-keyed
 `source-modes` requirement. The reviewer rows still refer only to the first pass.
 
+**The spec was reopened a second time, for the wizard's host.** `embedded-setup`
+gained four requirements — the setup as a surface raised over the view, mutual
+exclusion with the settings surface, which acts may open it, and where a reopened
+flow lands — and one stating that starting or restarting an existing node is out
+of scope until the configuration panel exists. `embedded-state` was reconciled
+with that last one: it now names an action without enabling it where nothing can
+carry the action out, which turned three scenarios that asserted an enabled start
+or restart into scenarios asserting the named action instead. `design + code`,
+tests and every reviewer row need re-running against this; **the runner owns
+re-dispatching them**, and the rows are left as they are for the same reason as
+above.
+
 ## Implementation
 
 <!-- The dev-writer owns this section. -->

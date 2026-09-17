@@ -84,10 +84,16 @@ admits, before there is anywhere for a setup entry point to live.
 
 Not covered, deliberately:
 
-- **How the setup is hosted.** The state surface offers an action that requests
-  the setup be opened, and emitting that request is where its responsibility
-  ends. The overlay that hosts the wizard, and the mutual exclusion with the
-  settings pane, are the next piece's.
+- **Starting or restarting an already-created node.** Both need a passphrase, and
+  nothing in this change can ask for one: the setup's start step is gated on no
+  node answering the socket — which a restart's node is — it offers no stop to
+  sequence a restart from, and it starts with the passphrase its own identity step
+  took, which a later showing does not have. `getEmbeddedIdentity()` carries no
+  field saying whether an existing key is encrypted, so the module cannot even
+  tell whether a passphrase is needed. Those requests therefore belong to the
+  configuration panel, and until it exists the state surface names their actions
+  while leaving them not enabled and saying so — rather than offering a control
+  that reaches nobody, which is the dead end this change exists to remove.
 - **The header caption and the mode-detail slot.** `SourceToggle.note`'s
   Embedded branch still says "not available in this version yet", which is now
   false and on screen — but it is a second surface with its own height
@@ -117,9 +123,15 @@ Not covered, deliberately:
 - `embedded-setup`: The guided setup flow for Embedded mode — its six steps and
   their order, what each may do only after the step before it answered, what the
   preflight refuses to offer, and the three consequences the flow must state at
-  the moment the user decides rather than afterwards. Owns the wizard's
-  behaviour only; the module methods it drives are specified by
-  `embedded-identity`, `source-modes`, `module-settings` and `node-paths`.
+  the moment the user decides rather than afterwards. It also owns **where the
+  flow is entered from, what raising and lowering it does to the surfaces around
+  it, and where a reopened flow lands**: the setup is a surface raised over the
+  view rather than a navigation destination, mutually exclusive with the settings
+  surface, opened only by a user act that names opening it — never by selecting
+  Embedded — and, on reopening, re-derived from the backend rather than resumed at
+  a remembered step. Owns the wizard's behaviour only; the module methods it
+  drives are specified by `embedded-identity`, `source-modes`, `module-settings`
+  and `node-paths`.
 - `embedded-state`: What the repository list shows in Embedded when there are no
   repositories to show — seven states derived from `getCapabilities()`,
   `getEmbeddedIdentity()` and `getNodeStatus()`, each with its own sentence and
