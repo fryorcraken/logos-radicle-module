@@ -94,7 +94,19 @@ Item {
     readonly property Timer sourceReload: Timer {
         interval: 0
         repeat: false
-        onTriggered: repoList.reload()
+        onTriggered: {
+            // Ask what Embedded's home and node are doing BEFORE reloading, so
+            // the replies are on their way while the reload runs. The reload
+            // itself declines to fetch until one of them says there is a node —
+            // see `embeddedSettled` for the ordering that closes.
+            //
+            // Both run from the deferred timer rather than from `onSettled`
+            // itself, because `root.mode` is a binding to `sourceState.mode` and
+            // inside that handler it has not been re-evaluated: the same trap
+            // that made branch switching a dead feature for a whole milestone.
+            root.refreshEmbedded();
+            repoList.reload();
+        }
     }
 
     /// Convenience aliases. Views read these rather than reaching through
@@ -125,6 +137,81 @@ Item {
     /// button explains neither.
     readonly property bool canWrite: caps.canWriteLocal === true
     readonly property string writeUnavailableReason: caps.writeUnavailableReason || ""
+
+    // ---- what Embedded's state panel reads --------------------------------
+    //
+    // Seven states, derived in `EmbeddedState.qml` from three backend replies.
+    // `getCapabilities()` pushes itself, so `pathsProblem` needs no call;
+    // `getEmbeddedIdentity()` and `getNodeStatus()` are slots, so they are asked.
+    //
+    // **These are reply FIELDS, not a state.** Nothing here decides which state
+    // is in force — that derivation lives in one place, and holding a decided
+    // state here would be a second opinion that is wrong the moment a node dies
+    // or a passphrase is refused.
+
+    /// `getCapabilities().pathsProblem` — the socket path problem, verbatim.
+    readonly property string embeddedPathsProblem: caps.pathsProblem || ""
+
+    /// The last `getEmbeddedIdentity()` reply's fields.
+    property string embeddedHome: ""
+    property bool embeddedIdentityExists: false
+
+    /// The last `getNodeStatus()` reply's fields.
+    property bool embeddedRunning: false
+    property bool embeddedServing: false
+
+    /// Whether a `startNode` this view issued is outstanding, and the last
+    /// refusal. Neither is in any reply — the node cannot tell you whether you
+    /// are waiting for it — so they are the view's, and `startPending` is
+    /// cleared by the REPLY rather than by the call having been made.
+    ///
+    /// Nothing sets either today: no surface here starts a node. The panel's
+    /// action emits a signal with no listener yet, and both fields exist so the
+    /// state derivation is complete rather than partial — see
+    /// `RepoList.embeddedActionTaken`.
+    property bool embeddedStartPending: false
+    property string embeddedStartError: ""
+
+    /// Re-read what Embedded's home and node are doing.
+    ///
+    /// Only in Embedded: in the other two modes the answers describe a node
+    /// nothing is showing, and `getNodeStatus` probes a control socket. Called
+    /// on mode settle and on backend ready rather than polled — the panel is a
+    /// state a user acts on, not a live monitor, and polling belongs with node
+    /// control in Settings › Node.
+    function refreshEmbedded() {
+        if (!backend || mode !== "embedded") return;
+        callPlain("getEmbeddedIdentity", [], function (reply) {
+            root.embeddedHome = reply.home || "";
+            root.embeddedIdentityExists = reply.exists === true;
+        });
+        callPlain("getNodeStatus", [], function (reply) {
+            root.embeddedRunning = reply.running === true;
+            root.embeddedServing = reply.serving === true;
+        });
+    }
+
+    /// Reload once Embedded gains a node worth asking.
+    ///
+    /// **The ordering this closes.** `sourceReload` fires one event-loop turn
+    /// after the mode settles, while the identity and status replies are a
+    /// backend round trip away — so a reload issued there runs against defaults.
+    /// The defaults derive to `blocked`, which declines to fetch, and that is the
+    /// safe direction: no request goes out against a home nothing has described.
+    /// But it means a serving node would never be listed at all, because nothing
+    /// else asks again.
+    ///
+    /// So the trigger is the derived answer moving, not a reply landing: whatever
+    /// combination of the two replies first makes a node askable is what reloads.
+    /// This is the same rule as `SourceState.settled()` — fetch on the value that
+    /// decides WHETHER to fetch, not on an input to it.
+    readonly property Connections embeddedSettled: Connections {
+        target: repoList
+        function onHasNodeToAskChanged() {
+            if (root.mode === "embedded" && repoList.hasNodeToAsk)
+                repoList.reload();
+        }
+    }
 
     /// Switch mode, and PERSIST it.
     ///
@@ -189,6 +276,7 @@ Item {
         seedPicker.loaded = false;
         seedPicker.reload();
         nav.reset();
+        refreshEmbedded();
         repoList.reload();
     }
 
@@ -347,13 +435,31 @@ Item {
     // shipped was invisible to every other assertion. They are read by
     // tests/ui/local.yaml; see that spec for what each one catches.
 
-    /// Whether the repository screen is showing the not-implemented state.
+    /// Whether the Embedded state panel is ACTUALLY on screen, and which state
+    /// it is rendering.
     ///
-    /// The pair with `repoCount` is the assertion that matters: Embedded must
-    /// show this AND no rows. Either alone is satisfied by a bug — a stale
-    /// `localListRepos` reply repopulates the list while this stays true, and
-    /// an empty list is equally true of a node with nothing in it.
-    readonly property bool reposNotImplemented: repoList.notImplemented
+    /// These replace `reposNotImplemented`, which named the panel this one
+    /// supersedes. That flag could not be kept: with all three modes startable it
+    /// was false everywhere, so `local.yaml`'s assertion on it was one nothing
+    /// could fail — and CLAUDE.md's rule is that a check which cannot fail is
+    /// worth no more than one that cannot pass. Deleting it without a
+    /// replacement would have been worse still, leaving the one state a user
+    /// actually lands in with nothing asserting anything about it.
+    ///
+    /// `reposEmbeddedPanel` is read off the rendered item's own `visible`, not
+    /// recomputed from the conditions it is keyed on, for the same reason
+    /// `reposSayingNothing` is: a recomputed copy agrees with the item whether or
+    /// not the item draws.
+    readonly property bool reposEmbeddedPanel: repoList.embeddedPanelShown
+
+    /// Which of the seven states is in force: "blocked" | "noIdentity" |
+    /// "stopped" | "starting" | "startFailed" | "notServing" | "runningEmpty".
+    ///
+    /// Asserted alongside the flag above rather than instead of it: the panel
+    /// rendering and the panel rendering the RIGHT state are different facts,
+    /// and a spec running against a real embedded home with no identity can
+    /// check both.
+    readonly property string reposEmbeddedState: repoList.embedded.current
 
     /// Whether the repository screen is blank with no explanation at all.
     ///

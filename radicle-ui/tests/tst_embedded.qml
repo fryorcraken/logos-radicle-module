@@ -3,18 +3,28 @@ import QtTest
 import "../src/qml" as Ui
 
 /*
- * A mode the build cannot start must show "not implemented", never a
- * repository list.
+ * A mode the build cannot start must show an explanation, never a repository
+ * list.
  *
  * ## Read this before assuming the file is about Embedded
  *
- * It uses Embedded as its worked example, because that is the mode the
- * behaviour was written for and the one that shipped the bug. **Embedded is now
- * startable** — it has a Basecamp-owned home and creates its own identity — so
- * every test below drives the fixture's `startableModes` to say otherwise, and
- * that is not a stale fixture: the property under test is "what does this screen
- * do about a mode the BACKEND reports as unstartable", and that question needs
- * an unstartable mode to ask it of.
+ * It began as a file about Embedded, because that was the mode the behaviour was
+ * written for and the one that shipped the bug, and it kept the name. **Embedded
+ * is startable now** and its empty surface is a different capability with seven
+ * states of its own — see `tst_embedded_panel.qml` and `tst_embedded_state.qml`.
+ * The requirement THIS file covers survived the re-keying: a view must not issue
+ * a request against a mode the reported startable set omits, whichever mode that
+ * turns out to be.
+ *
+ * **So the unstartable mode is now `local`, not `embedded`.** That is the change
+ * that matters here rather than a fixture tidy-up: while this file drove
+ * `embedded` out of the startable set, it was asserting about a mode whose
+ * unstartable path is now unreachable in this build, AND its "becoming
+ * startable" leg then collided with the Embedded panel's own fetch guard — a
+ * startable Embedded with no node still issues nothing, so "it must actually
+ * list" failed for a reason that had nothing to do with startability. Driving
+ * `local` instead asks the question cleanly: `local` has no embedded state, so
+ * the only thing deciding whether it fetches is the startable set.
  *
  * The behaviour is not dead code waiting for a mode to break. It is the state
  * the screen holds during the window before the first `getCapabilities` reply
@@ -167,15 +177,25 @@ Item {
         /// mode, the same component, no edit to RepoList — and it is made in
         /// BOTH directions, because a derivation that merely ignored the mode
         /// would pass the "now startable" half on its own.
+        ///
+        /// **It is driven on `local`, not on `embedded`**, and that matters for
+        /// the "and it must actually list" half. Embedded gaining startability
+        /// does NOT make it list: its own state panel decides that, and a
+        /// startable Embedded with no identity still issues nothing — correctly.
+        /// So asserting "startable therefore lists" on Embedded would assert
+        /// something false about this build, and it would fail for a reason that
+        /// has nothing to do with the startable set. `local` has no such second
+        /// gate, so the set is the only thing deciding.
         function test_a_mode_becoming_startable_clears_the_not_implemented_state() {
-            app.mode = "embedded";
+            app.mode = "local";
+            app.startableModes = ["explore"];
             list.reload();
             verify(list.notImplemented,
-                   "precondition: Embedded is not startable in this build");
+                   "precondition: the reported set omits the mode in force");
             compare(app.callLog.length, 0, "precondition: and issues no request");
 
-            // Phase 2, simulated at the only place it should have to happen.
-            app.startableModes = ["explore", "local", "embedded"];
+            // The set gains the mode, at the only place it should have to.
+            app.startableModes = ["explore", "local"];
             app.reset();
             list.reload();
 
@@ -248,9 +268,17 @@ Item {
             var note = root.findByName(list, "notImplementedNote");
             verify(note !== null && note.visible,
                    "the not-implemented state must actually be on screen");
-            verify(note.text.indexOf("not available in this version") !== -1,
-                   "it must use the same words as the toggle's caption, got: "
+            verify(note.text.indexOf("cannot start the selected mode") !== -1,
+                   "it must say the build cannot start the mode, got: "
                    + note.text);
+
+            // **And it must NOT name Embedded.** The copy used to, back when
+            // Embedded was the one unstartable mode; with the state derived from
+            // the reported SET, naming a mode in the prose re-encodes the mode
+            // name one layer up — and would be a false sentence rendered for
+            // whichever mode the backend actually declines.
+            verify(note.text.indexOf("Embedded") === -1,
+                   "the explanation must not name a mode: " + note.text);
         }
 
         /// "No repositories" is a DIFFERENT and equally wrong claim: it implies

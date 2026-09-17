@@ -37,6 +37,19 @@ import "../src/qml" as Ui
  * CLAUDE.md's input-dependent-fake rule applied to the one input that matters
  * here, and it is what makes `test_embedded_lists_its_own_node_not_the_users`
  * an assertion rather than decoration.
+ *
+ * ## Why the fixture now describes a RUNNING node
+ *
+ * Startability stopped being sufficient. `embedded-state` re-keyed the fetch
+ * guard onto whether the mode has a node to ask, so an Embedded that is startable
+ * but has no identity — or has one and is stopped — correctly issues nothing.
+ * This file is about the mode that WORKS, so its fixture reports the state a
+ * working mode is in: identity present, node running and serving. Leaving the
+ * fields at their defaults would have made every "it lists" assertion here fail
+ * for a reason this file is not about, and — worse in the other direction —
+ * would have described a mode nobody can be in.
+ *
+ * `tst_embedded_panel.qml` covers the states this fixture is deliberately not in.
  */
 Item {
     id: root
@@ -62,6 +75,17 @@ Item {
                 if (startableModes[i] === mode) return true;
             return false;
         }
+
+        // The state a working Embedded mode is in: a resolved home holding an
+        // identity, with the node running and answering its control socket. See
+        // the header for why these are not left at their defaults.
+        property string embeddedPathsProblem: ""
+        property string embeddedHome: "/basecamp/embedded-home"
+        property bool embeddedIdentityExists: true
+        property bool embeddedRunning: true
+        property bool embeddedServing: true
+        property bool embeddedStartPending: false
+        property string embeddedStartError: ""
 
         property var callLog: []
         property var pending: null
@@ -126,6 +150,13 @@ Item {
         function init() {
             app.mode = "embedded";
             app.startableModes = ["explore", "local", "embedded"];
+            app.embeddedPathsProblem = "";
+            app.embeddedHome = "/basecamp/embedded-home";
+            app.embeddedIdentityExists = true;
+            app.embeddedRunning = true;
+            app.embeddedServing = true;
+            app.embeddedStartPending = false;
+            app.embeddedStartError = "";
             list.reload();
             app.reset();
         }
@@ -236,23 +267,46 @@ Item {
             compare(list.count, 2, "with Embedded's rows, not Local's");
         }
 
-        /// An embedded home with no identity in it yet is a REFUSAL, not an
-        /// empty node — and the screen must render the refusal's own state
-        /// rather than "No repositories matched", which claims a node exists
-        /// and holds nothing.
+        /// An embedded home with no identity in it yet is not an empty node, and
+        /// the screen must not say it is.
         ///
-        /// This is the state a user is in between choosing Embedded and running
-        /// the wizard, so it is the state they will most often see.
+        /// **This used to prove it by letting the request go out and be refused**
+        /// — `refuseAsUnprovisioned()` staged the backend's "no embedded identity
+        /// yet", and the assertion was that the pane said something afterwards.
+        /// That was the best available shape while the request was issued at all.
+        /// It no longer is: the whole defect was that the request went out, so
+        /// the assertion now is that NOTHING is asked and the panel stands in
+        /// its place. The refusal path is kept below, on the state it still
+        /// describes.
         function test_an_unprovisioned_embedded_home_does_not_claim_to_be_empty() {
+            app.embeddedIdentityExists = false;
             list.reload();
-            verify(app.refuseAsUnprovisioned(), "the request must be refusable");
 
+            compare(app.callLog.length, 0,
+                    "nothing may be asked of a home with no identity, calls: "
+                    + JSON.stringify(app.callLog));
             compare(list.count, 0, "there is nothing to list");
             // The screen must say SOMETHING. A blank pane with no rows, no
             // message and no error is never correct — see RepoList.sayingNothing.
             verify(!list.sayingNothing,
                    "an embedded home with no identity rendered a blank pane: no "
                    + "rows, no message, nothing for the user to act on");
+            var empty = root.findByName(list, "listEmptyState");
+            verify(empty === null || !empty.visible,
+                   "and it must not claim the node answered with nothing");
+        }
+
+        /// A refusal that DOES arrive — from a node that exists and was asked —
+        /// must still not leave the pane blank. Kept from the version above,
+        /// re-pointed at a state that genuinely issues a request.
+        function test_a_refusal_from_a_node_that_was_asked_still_says_something() {
+            list.reload();
+            verify(app.refuseAsUnprovisioned(), "the request must be refusable");
+
+            compare(list.count, 0, "there is nothing to list");
+            verify(!list.sayingNothing,
+                   "a refused list left a blank pane: no rows, no message, "
+                   + "nothing for the user to act on");
         }
 
         /// Paging is offered again, because there is a node to page against.

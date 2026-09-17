@@ -22,6 +22,12 @@ every reviewer row above was ticked against a spec that did not contain them.
 **The runner owns re-dispatching those stages**; `spec-writer` flips only its own
 row, which is why they are left ticked rather than silently reset here.
 
+**`design + code` has now been re-run against the reopened spec.** Its row was
+already ticked and stays ticked rather than gaining a second — the stage block is
+one row per stage so concurrent cherry-picks do not conflict. What that tick now
+covers is both passes: the wizard, and `embedded-state` plus the re-keyed
+`source-modes` requirement. The reviewer rows still refer only to the first pass.
+
 ## Implementation
 
 <!-- The dev-writer owns this section. -->
@@ -165,3 +171,94 @@ it.
       behaviour, not where it is reached from, and the surrounding surface is
       the panel change's. Marked `NO SPEC:` in `SetupWizard.qml` rather than
       decided here — see `design.md`'s Open questions.
+
+## Implementation — `embedded-state` (fourth pass)
+
+The capability the spec gained after a design pass found that picking Embedded
+leads to an empty list, a red banner and "No repositories matched". One new QML
+file, two new test files, and re-pointing three existing ones. No change to
+`radicle/`, `radicle_ui.rep` or the Rust staticlib — every slot is already
+exposed.
+
+### The state
+
+- [x] `EmbeddedState.qml` — a non-visual `QtObject` holding seven reply fields
+      and deriving `current`, `sentence`, `actionLabel`, `actionKind`,
+      `actionEnabled`, `hasNodeToAsk`. Separate from the view for the reason
+      `NavState` and `SourceState` are.
+- [x] **Nothing stores a state.** Every input is a field a reply carried;
+      `startPending` and `startError` are the two facts only the view holds, and
+      `startPending` is cleared by the reply rather than by the call.
+- [x] The ordering is one `if` chain read top to bottom, not seven predicates —
+      so "which condition wins when two hold" is answered once. `stopped` above
+      `starting`, and `actionEnabled` reading `startPending` directly, are the
+      two places a reorder would break something; both are written down in
+      `design.md` with the test that reddens.
+
+### The view
+
+- [x] `RepoList.qml` — `embeddedState`, a centred panel replacing
+      `notImplementedState` as the Embedded surface, with the state's sentence
+      and the state's own action. `blocked` renders no control at all.
+- [x] `fetch()`'s bail-out re-keyed from `notImplemented` (startability) to
+      `hasNodeToAsk`. **This is the fix**; the old guard is what stopped firing
+      when Embedded became startable.
+- [x] `sayingNothing` carried from `notImplementedState.visible` to
+      `embeddedState.visible`, reading the item rather than its condition. The
+      `loadedOnce` gate split via `expectingAPanel`, because four of the seven
+      states never set it.
+- [x] `notImplementedState` KEPT — `source-modes`' generic unstartable path is
+      still a requirement — with its copy made mode-neutral, because naming
+      Embedded in it is now false.
+- [x] `Main.qml` — the three reply fields, `refreshEmbedded()`, the reload on
+      `hasNodeToAsk` moving, and `reposEmbeddedPanel` / `reposEmbeddedState`
+      replacing `reposNotImplemented`.
+- [x] The panel's action emits `embeddedActionTaken(kind)` and performs nothing.
+      **Nothing listens to it yet** — marked `NO SPEC:` on the signal.
+
+### Tests
+
+- [x] `tst_embedded_state.qml` — 15 tests against the derivation: the ordering
+      in both directions, each state's own sentence and action, starting versus
+      not serving, two refusals, the success that clears one, and which states
+      have a node to ask. Count with `grep -c "function test_"`; the runner's
+      total is two higher, counting `initTestCase`/`cleanupTestCase`.
+- [x] `tst_embedded_panel.qml` — 17 tests against the rendered screen and the
+      fetch guard, including the blank-pane observable in all six panel states
+      and the "panel prevented from rendering" case.
+- [x] Fakes answer from the MODE the request was issued for, so "listed the
+      embedded node" is distinguishable from "listed the user's node under an
+      Embedded badge" — the two share a method prefix. Replies are held, so "did
+      not request" is distinguishable from "requested and discarded".
+- [x] `tst_embedded.qml` re-pointed from `embedded` to `local` as its
+      unstartable mode; its "becoming startable therefore lists" leg would
+      otherwise have failed for a reason the file is not about.
+- [x] `tst_embedded_real.qml`'s fixture now reports a running, serving node —
+      the state a working mode is actually in — and its unprovisioned-home test
+      asserts nothing is asked rather than staging a refusal.
+- [x] `tst_embedded_wiring.qml`'s fixture now reports all three modes startable,
+      which is what this build reports; its precondition moved from
+      `notImplemented` to the Embedded panel.
+- [x] `local.yaml` — `reposNotImplemented === false` replaced by
+      `reposEmbeddedPanel === true` plus `reposEmbeddedState === 'noIdentity'`,
+      with `navError === ''` added, and `reposEmbeddedPanel === false` asserted
+      on the way back to the seed.
+- [x] Five mutations run and reverted: the guard re-keyed to startability (7 red
+      in the panel file, 2 in the wiring file), `sayingNothing` dropping the
+      panel (4 red), `sayingNothing` reading the condition instead of the item
+      (1 red, the one test that exists for it, 18 green), the ordering hoisted
+      (1 red), `!startPending` dropped from `actionEnabled` (1 red).
+- [x] Full suite green: `sh radicle-ui/tests/run-qml-tests.sh`, 30 files, 509
+      passing, 0 failed.
+- [x] `lgs basecamp build --variant lgx --module radicle_ui` green from this
+      worktree's root.
+
+### Not covered, and stated rather than implied
+
+- [ ] **`Main.qml`'s own wiring has no component test.** Nothing instantiates
+      `Main.qml` — `tst_embedded_wiring.qml` reproduces its shape — so
+      `refreshEmbedded()`, the `embeddedSettled` `Connections` and the new
+      properties are covered only by `local.yaml`. A green component suite says
+      nothing about them.
+- [ ] **The panel's action reaches nobody.** The wizard's host is the next
+      piece.
