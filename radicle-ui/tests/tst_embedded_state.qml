@@ -35,6 +35,13 @@ Item {
 
         /// A workable home with an identity and a stopped node — the baseline
         /// every test departs from by moving one field.
+        ///
+        /// **Hosted-ness is part of the baseline, and it is what this module
+        /// actually hosts**: the request that opens the setup reaches `Main.qml`;
+        /// the requests that start or restart a node reach nobody, because both
+        /// need a passphrase only the durable settings surface can ask for and
+        /// `getEmbeddedIdentity()` reports no field saying whether one is needed
+        /// at all. Tests that are about the hosted-ness rule itself move these.
         function init() {
             st.pathsProblem = "";
             st.home = "/home/u/.local/share/basecamp/embedded-home";
@@ -43,6 +50,8 @@ Item {
             st.serving = false;
             st.startPending = false;
             st.startError = "";
+            st.setupHosted = true;
+            st.startHosted = false;
         }
 
         // ---- the ordering -------------------------------------------------
@@ -65,8 +74,11 @@ Item {
                     + "start that cannot succeed is what the ordering prevents");
             verify(st.sentence.indexOf("108-byte cap") !== -1,
                    "and the pathsProblem sentence verbatim, got: " + st.sentence);
+            compare(st.actionKind, "",
+                    "with no action NAMED at all — a blocked home offers "
+                    + "nothing that would write, because nothing could succeed");
             verify(!st.actionEnabled,
-                   "with no action that would write");
+                   "and so nothing enabled either");
 
             // And back: the refusal is what is rendered once the home resolves.
             st.pathsProblem = "";
@@ -74,7 +86,14 @@ Item {
                     "with the home resolving again the refusal is the obstacle");
             verify(st.sentence.indexOf("already in use") !== -1,
                    "rendered verbatim, got: " + st.sentence);
-            verify(st.actionEnabled, "and the start is offered again");
+            // NAMED, not enabled. The start action reaches no host in this
+            // version — see `init()` — so the requirement here is that the
+            // ordering put a startable obstacle back in force, which is what
+            // `actionKind` reports. Asserting `actionEnabled` would be asserting
+            // the hosting rule in a test about the ordering, and would now be
+            // false for a reason this test is not about.
+            compare(st.actionKind, "start",
+                    "and the start is the act named again");
         }
 
         /// `blocked` has two causes that fail differently, and both must reach
@@ -175,6 +194,15 @@ Item {
 
         /// A blocked home offers NOTHING that would write, because nothing
         /// could succeed. Both the setup and the start must be unreachable.
+        ///
+        /// **The control leg moves to the no-identity state, and that is the
+        /// restrengthening.** It used to clear `pathsProblem` and leave the
+        /// stopped node in place, asserting `actionEnabled` — which was a real
+        /// check while every named action was enabled, and became one nothing
+        /// could fail the moment start stopped being hosted: a derivation
+        /// returning `false` for every input would have passed both halves. The
+        /// setup action IS hosted, so `exists:false` restores a leg that
+        /// genuinely discriminates.
         function test_a_blocked_home_offers_no_action_that_would_write() {
             st.pathsProblem = "the embedded home cannot be created";
             compare(st.actionKind, "",
@@ -182,11 +210,13 @@ Item {
             verify(!st.actionEnabled,
                    "and nothing is enabled to take");
 
-            // Proven to discriminate: with the problem cleared the same fixture
-            // offers a real act, so this is not true of every input.
             st.pathsProblem = "";
+            st.identityExists = false;
+            compare(st.actionKind, "setup",
+                    "control: a resolving home names an act");
             verify(st.actionEnabled,
-                   "control: a resolving home DOES offer an action");
+                   "control: and a HOSTED act is enabled, so this assertion is "
+                   + "not one that holds for every input");
         }
 
         // ---- starting versus not serving ----------------------------------
@@ -249,16 +279,51 @@ Item {
                     "a genuinely stopped node offers a plain start");
         }
 
-        /// An outstanding start withholds the start control, so a second node
-        /// is not started over the first — and it does so whatever the node is
-        /// currently reporting, including the window where it still says
-        /// `running:false` and the state is therefore `stopped`.
-        function test_the_start_action_is_withheld_while_a_start_is_outstanding() {
+        /// An outstanding start withholds the start action, so a second node is
+        /// not started over the first.
+        ///
+        /// Asserted on the act NAMED, because that is the spec's scenario and
+        /// because it holds "independently of whether that action can be carried
+        /// out at all" — it is a property of the state, and it must already be
+        /// true on the day a surface able to start a node exists.
+        function test_no_action_is_named_while_a_start_is_outstanding() {
             st.startPending = true;
             compare(st.current, "stopped",
                     "the backend's report wins over what this view awaits");
+
+            st.running = true;
+            compare(st.current, "starting");
+            compare(st.actionKind, "",
+                    "the starting state names no act, so a second node cannot "
+                    + "be started over the first");
+
+            st.startError = "the passphrase did not unlock the key";
+            st.startPending = false;
+            compare(st.actionKind, "start",
+                    "control: answered, the act is named again");
+        }
+
+        /// **The `!startPending` term in `actionEnabled`, proven.**
+        ///
+        /// A separate test because it needs `startHosted` armed: with start
+        /// unhosted every start action is disabled anyway, so deleting the term
+        /// would redden nothing and the guard would be unprotected. Arming the
+        /// flag makes the term the only thing withholding the control — which is
+        /// the state this module will be in the day the settings surface hosts
+        /// a start, and is exactly when the guard has to still be there.
+        ///
+        /// The `stopped` leg is the one a state-folded version would fail:
+        /// `startPending` is read directly rather than through `current`, so the
+        /// control is withheld in the window where the node still reports
+        /// `running:false` as well as once it reports `running:true`.
+        function test_an_outstanding_start_withholds_a_hosted_start_control() {
+            st.startHosted = true;
+
+            st.startPending = true;
+            compare(st.current, "stopped",
+                    "precondition: the backend has not caught up yet");
             verify(!st.actionEnabled,
-                   "and the start must still be withheld");
+                   "a hosted start must still be withheld in the stopped window");
 
             st.running = true;
             compare(st.current, "starting");
@@ -267,7 +332,7 @@ Item {
 
             st.startPending = false;
             verify(st.actionEnabled,
-                   "control: with no start outstanding the action returns");
+                   "control: with no start outstanding a HOSTED action returns");
         }
 
         // ---- refusals ------------------------------------------------------
@@ -282,7 +347,11 @@ Item {
             compare(st.current, "startFailed");
             compare(st.sentence, st.startError,
                     "displayed verbatim, not summarised");
-            verify(st.actionEnabled, "and the retry is offered");
+            // The act is NAMED, so the state does not read as terminal. It is
+            // not enabled — no surface can carry out a start yet — and the
+            // requirement is about the naming, which is what stops a refusal
+            // rendering as a dead end.
+            compare(st.actionKind, "start", "and the retry is named");
 
             st.startError = "another node is bound to /run/u/radicle/control";
             compare(st.sentence, st.startError,
@@ -381,6 +450,83 @@ Item {
             compare(st.current, "stopped",
                     "and move it back — a stored state would not, which is why "
                     + "nothing here stores one");
+        }
+
+        // ---- only an action something can carry out is enabled ------------
+
+        /// **An unhosted action is named but not enabled, and says why.**
+        ///
+        /// The two halves are a single requirement: naming without enabling is
+        /// what keeps the state from reading as one with nothing to say, and the
+        /// sentence is what keeps the disabled control from reading as a module
+        /// that is merely broken.
+        ///
+        /// The second leg is the discriminator. Both states are asked the same
+        /// three questions and answer differently in each, so a derivation
+        /// stuck on either answer fails.
+        function test_an_unhosted_action_is_named_but_not_enabled_and_says_so() {
+            // stopped: the act is a start, which reaches nobody.
+            compare(st.current, "stopped", "precondition");
+            compare(st.actionKind, "start", "the act must still be NAMED");
+            verify(!st.actionEnabled, "but it must not be enabled");
+            verify(st.actionUnavailableNote.indexOf("not yet available from here")
+                   !== -1,
+                   "and must say starting is not yet available from here, got: "
+                   + st.actionUnavailableNote);
+            // Neither of the two other things it could have said. A user told a
+            // start FAILED goes looking for a cause that does not exist; one
+            // told the node CANNOT be started stops looking for the command
+            // line and for the settings surface that will host this.
+            verify(st.actionUnavailableNote.indexOf("failed") === -1,
+                   "never that a start failed — none was attempted: "
+                   + st.actionUnavailableNote);
+            verify(st.actionUnavailableNote.indexOf("cannot be started") === -1,
+                   "nor that the node cannot be started at all: "
+                   + st.actionUnavailableNote);
+
+            // noIdentity: the act is the setup, which does reach a host.
+            st.identityExists = false;
+            compare(st.actionKind, "setup");
+            verify(st.actionEnabled, "a hosted act must be enabled");
+            compare(st.actionUnavailableNote, "",
+                    "and must say nothing about being unavailable");
+        }
+
+        /// **Hosting is what enables it**, with nothing else changed.
+        ///
+        /// One field moves and the answer moves with it, which is what makes
+        /// "keyed on whether the request is hosted" a property of the derivation
+        /// rather than a claim. A component hard-coding which states are enabled
+        /// would answer identically for both halves.
+        function test_hosting_an_action_is_what_enables_it() {
+            compare(st.current, "stopped", "precondition");
+            compare(st.startHosted, false,
+                    "precondition: the start request reaches nobody");
+            verify(!st.actionEnabled, "so the named action is not enabled");
+
+            st.startHosted = true;
+            verify(st.actionEnabled,
+                   "and hosting it enables it, with nothing else changed");
+            compare(st.actionUnavailableNote, "",
+                    "and the unavailability sentence goes with it");
+        }
+
+        /// The note is silent while a start is outstanding: the action is then
+        /// withheld because this view is waiting for a reply, which the
+        /// `starting` sentence already says. "Not yet available" over it would
+        /// be false — and would be the one wording a user could not act on.
+        function test_no_unavailability_is_claimed_while_a_start_is_outstanding() {
+            st.running = true;
+            st.startPending = true;
+            compare(st.current, "starting", "precondition");
+            compare(st.actionUnavailableNote, "",
+                    "a state that is waiting is not a state that is unhosted");
+
+            st.startPending = false;
+            compare(st.current, "notServing");
+            verify(st.actionUnavailableNote !== "",
+                   "control: with nothing outstanding the unhosted restart does "
+                   + "explain itself");
         }
     }
 }

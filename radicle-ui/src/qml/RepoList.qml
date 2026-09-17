@@ -37,13 +37,15 @@ Item {
     /// host decide, which is what keeps "rendering the state writes nothing" a
     /// structural property rather than a promise.
     ///
-    /// NO SPEC: the spec requires the setup action to "request that the setup be
-    /// opened" and leaves the hosting to `embedded-setup`. **Nothing listens to
-    /// this yet** — the wizard's host is the next piece, and start/restart need a
-    /// passphrase prompt this screen has no place for. So the control is real,
-    /// the signal is real, and today it reaches nobody. That is deliberate and
-    /// visible rather than hidden: a control wired to a host that does not exist
-    /// would be the same dead end this capability was written to remove.
+    /// **Only "setup" reaches a host today**, and that is expressed as data
+    /// rather than as a rule this file knows: `app.embeddedSetupHosted` and
+    /// `app.embeddedStartHosted` say which requests are routed, and an action
+    /// whose request is not routed is rendered not-enabled with a sentence
+    /// saying so. Hosting start therefore means flipping one property on the
+    /// host — no edit here, and nothing for a future reader to notice.
+    ///
+    /// The signal is emitted only from an ENABLED control, so an unhosted act
+    /// cannot be requested even by a caller reaching past the button.
     signal embeddedActionTaken(string kind)
 
     /// Rows currently listed — read by the UI tests.
@@ -100,6 +102,11 @@ Item {
         serving:        !!app && app.embeddedServing === true
         startPending:   !!app && app.embeddedStartPending === true
         startError:     app ? (app.embeddedStartError || "") : ""
+        // Which requests the host actually routes. Absent means false, which is
+        // the inert direction: a named but disabled action, never an enabled
+        // one reaching nobody.
+        setupHosted:    !!app && app.embeddedSetupHosted === true
+        startHosted:    !!app && app.embeddedStartHosted === true
     }
 
     /// Whether the Embedded state panel is the thing standing where a repository
@@ -557,7 +564,17 @@ Item {
             // because it was displayed would act without being asked, so nothing
             // here creates an identity, starts a node or writes the mode — the
             // signal leaves and the host decides.
-            onClicked: page.embeddedActionTaken(page.embedded.actionKind)
+            //
+            // Guarded on `actionEnabled` as well as by `enabled`, so an act
+            // whose request reaches nobody cannot be requested by a test or a
+            // caller invoking `clicked()` directly. `enabled:false` stops a
+            // pointer, not a programmatic emit, and "an action that is not
+            // enabled emits no request" is the requirement rather than a
+            // property of the mouse.
+            onClicked: {
+                if (!page.embedded.actionEnabled) return;
+                page.embeddedActionTaken(page.embedded.actionKind);
+            }
 
             background: Rectangle {
                 implicitWidth: 180; implicitHeight: 30
@@ -577,6 +594,21 @@ Item {
                 verticalAlignment: Text.AlignVCenter
                 opacity: parent.enabled ? 1.0 : 0.5
             }
+        }
+
+        // Why the action above cannot be taken. A disabled control with nothing
+        // beside it reads as a module that is broken and gives the user no other
+        // thing to try; this says which surface the act is waiting on.
+        Text {
+            objectName: "embeddedStateUnavailable"
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            visible: page.embedded.actionUnavailableNote !== ""
+            text: page.embedded.actionUnavailableNote
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSm
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
         }
     }
 }

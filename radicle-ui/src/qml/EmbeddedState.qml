@@ -92,6 +92,35 @@ QtObject {
     /// wrong passphrase is only actionable when it is named.
     property string startError: ""
 
+    // ---- which requests reach somebody ------------------------------------
+    //
+    // An action whose request reaches nobody must not be enabled: a control that
+    // is enabled, looks ordinary and does nothing when taken reads as a module
+    // that is broken rather than as one that has not built this yet, which is
+    // the dead end this whole surface exists to remove.
+    //
+    // **Held as inputs rather than hard-coded per state**, because the
+    // requirement is that hosting an action enables it with nothing else
+    // changed. A component that knew "setup is hosted, start is not" would have
+    // to be edited again — by someone who has to notice it — on the day the
+    // durable settings surface appears. Here the host says what it hosts.
+    //
+    // Both default to FALSE, so a caller that forgets to wire one gets a named
+    // but disabled action, which is visible, rather than an enabled one that
+    // silently reaches nobody, which is the defect.
+
+    /// Whether the request to open the guided setup reaches a host.
+    property bool setupHosted: false
+
+    /// Whether the requests to start or restart the node reach a host.
+    ///
+    /// One flag for both: they route to the same surface for the same reason —
+    /// both need a passphrase, and `getEmbeddedIdentity()` reports no field
+    /// saying whether an existing identity's key is encrypted, so nothing can
+    /// even determine whether one is needed. A host able to carry out one is
+    /// able to carry out the other.
+    property bool startHosted: false
+
     // ---- the derivation ---------------------------------------------------
 
     /// Whether a home resolved at all. Two sources because they fail
@@ -212,6 +241,17 @@ QtObject {
         }
     }
 
+    /// Whether the act this action names reaches a host that can carry it out.
+    /// "" is `false` rather than a third answer: there is nothing to route.
+    readonly property bool actionHosted: {
+        switch (actionKind) {
+        case "setup":              return setupHosted;
+        case "start":
+        case "restart":            return startHosted;
+        default:                   return false;
+        }
+    }
+
     /// Whether the offered action may be taken.
     ///
     /// `startPending` is read here rather than folded into `current`, and that
@@ -223,8 +263,35 @@ QtObject {
     /// land in.
     ///
     /// **Deleting the `!startPending` term turns
-    /// `test_the_start_action_is_withheld_while_a_start_is_outstanding` red**;
-    /// deleting the `actionKind !== ""` term turns
+    /// `test_an_outstanding_start_withholds_a_hosted_start_control` red** — the
+    /// test that arms `startHosted` deliberately, because with start unhosted
+    /// every start action is disabled anyway and the term is unobservable.
+    /// Deleting `actionHosted` turns `test_hosting_an_action_is_what_enables_it`
+    /// red; deleting the `actionKind !== ""` term turns
     /// `test_a_blocked_home_offers_no_action_that_would_write` red.
-    readonly property bool actionEnabled: actionKind !== "" && !startPending
+    readonly property bool actionEnabled:
+        actionKind !== "" && actionHosted && !startPending
+
+    /// Why the named action cannot be taken, or "" when it can.
+    ///
+    /// Stated rather than left as a disabled control with no explanation: a
+    /// control that is greyed with nothing beside it gives the user no other
+    /// thing to try, and reads as broken.
+    ///
+    /// The wording is careful about which of three claims it makes. It says
+    /// starting is **not yet available from here** — not that a start *failed*
+    /// (nothing was attempted) and not that the node **cannot be started** (it
+    /// can, from a command line, and will be from the settings surface once that
+    /// exists). Naming the surface it will live on is what turns a dead end into
+    /// a wait.
+    ///
+    /// Silent while a start is outstanding: the action is then withheld because
+    /// this view is waiting for a reply, which the `starting` sentence already
+    /// says, and reporting "not available" over it would be false.
+    readonly property string actionUnavailableNote:
+        (actionKind !== "" && !actionHosted && !startPending)
+            ? "Starting the node is not yet available from here. It needs the "
+            + "passphrase that unlocks the key, which this surface has no way "
+            + "to ask for."
+            : ""
 }

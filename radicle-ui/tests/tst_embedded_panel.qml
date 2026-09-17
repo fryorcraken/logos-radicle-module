@@ -54,6 +54,14 @@ Item {
         property bool embeddedStartPending: false
         property string embeddedStartError: ""
 
+        /// Which requests this host routes, exactly as `Main.qml` reports them:
+        /// the setup is hosted, a start is not. Held as properties rather than
+        /// baked into the panel, because the requirement is that hosting an
+        /// action enables it with nothing else changed — so a test moves one of
+        /// these and reads the answer back.
+        property bool embeddedSetupHosted: true
+        property bool embeddedStartHosted: false
+
         property var callLog: []
         property var pending: null
 
@@ -121,6 +129,8 @@ Item {
             app.embeddedServing = false;
             app.embeddedStartPending = false;
             app.embeddedStartError = "";
+            app.embeddedSetupHosted = true;
+            app.embeddedStartHosted = false;
             root.writesObserved = [];
             list.reload();
             app.reset();
@@ -184,6 +194,10 @@ Item {
             verify(a === null || !a.visible || !a.enabled,
                    "nothing that would write may be offered");
 
+            // The control leg is the no-identity state rather than the stopped
+            // one, because the setup action is the one this version hosts — a
+            // stopped node's start is rendered disabled, so it could no longer
+            // tell "blocked offers nothing" from "nothing is ever enabled".
             app.embeddedPathsProblem = "";
             app.embeddedIdentityExists = false;
             list.reload();
@@ -449,24 +463,107 @@ Item {
 
         /// The act named follows the state, so a host routing on it cannot
         /// start a node where a setup was asked for.
+        ///
+        /// Read off `actionKind` rather than off what each click emitted,
+        /// because two of the three acts reach no host in this version and are
+        /// therefore rendered disabled — which is a different requirement,
+        /// covered by the two tests below. What this one pins is that the three
+        /// states name three different acts, which is what a host routes on and
+        /// what must already be right on the day the other two are hosted.
         function test_the_act_named_follows_the_state() {
+            var named = [];
+
+            app.embeddedIdentityExists = false;
+            list.reload();
+            named.push(list.embedded.actionKind);
+
+            app.embeddedIdentityExists = true;
+            list.reload();
+            named.push(list.embedded.actionKind);
+
+            app.embeddedRunning = true;
+            list.reload();
+            named.push(list.embedded.actionKind);
+
+            compare(named.join(" "), "setup start restart");
+        }
+
+        /// **An action that is not enabled emits no request**, and takes no
+        /// other route to one either.
+        ///
+        /// `clicked()` is invoked directly rather than through a pointer, which
+        /// is the stronger test: `enabled: false` stops a mouse, not a
+        /// programmatic emit, so a panel relying on `enabled` alone would pass a
+        /// click-driven check and fail this. The requirement is about the
+        /// request, not about the mouse.
+        function test_an_action_that_is_not_enabled_emits_no_request() {
             var seen = [];
             function record(kind) { seen.push(kind); }
             list.embeddedActionTaken.connect(record);
 
+            // A stopped node: the act is a start, which reaches nobody.
+            list.reload();
+            compare(list.embedded.actionKind, "start", "precondition");
+            var a = action();
+            verify(a !== null && a.visible, "the control is rendered");
+            verify(!a.enabled, "and is not enabled");
+
+            a.clicked();
+
+            compare(seen.length, 0,
+                    "no request may be emitted: " + JSON.stringify(seen));
+            compare(app.callLog.length, 0,
+                    "and no startNode may have been issued: "
+                    + JSON.stringify(app.callLog));
+
+            list.embeddedActionTaken.disconnect(record);
+        }
+
+        /// **Hosting an action is what enables it**, through the rendered
+        /// control — one property moves on the host and the button follows, with
+        /// nothing else changed. A panel hard-coding which states are enabled
+        /// would answer identically for both halves.
+        function test_hosting_an_action_enables_the_rendered_control() {
+            list.reload();
+            compare(list.embedded.actionKind, "start", "precondition");
+            verify(!action().enabled, "unhosted, the control is not enabled");
+
+            var note = root.findByName(list, "embeddedStateUnavailable");
+            verify(note !== null && note.visible,
+                   "and the panel says why rather than leaving it unexplained");
+            verify(note.text.indexOf("not yet available from here") !== -1,
+                   "naming that it is not yet available here, got: " + note.text);
+
+            app.embeddedStartHosted = true;
+            verify(action().enabled,
+                   "hosting the request enables the control, with nothing else "
+                   + "changed");
+            verify(!note.visible,
+                   "and the unavailability sentence goes with it");
+        }
+
+        /// The hosted setup action IS enabled and DOES emit, so the two tests
+        /// above are not satisfied by a panel that enables nothing and emits
+        /// nothing whatever it is told.
+        function test_a_hosted_action_is_enabled_and_emits() {
             app.embeddedIdentityExists = false;
             list.reload();
-            action().clicked();
 
-            app.embeddedIdentityExists = true;
-            list.reload();
-            action().clicked();
+            var seen = [];
+            function record(kind) { seen.push(kind); }
+            list.embeddedActionTaken.connect(record);
 
-            app.embeddedRunning = true;
-            list.reload();
+            verify(action().enabled, "the setup action is hosted, so enabled");
             action().clicked();
+            compare(seen.join(" "), "setup", "and emits its request");
 
-            compare(seen.join(" "), "setup start restart");
+            // And withdrawing the host withdraws both.
+            app.embeddedSetupHosted = false;
+            verify(!action().enabled, "unhosting it disables the control");
+            action().clicked();
+            compare(seen.join(" "), "setup",
+                    "and no second request is emitted: " + JSON.stringify(seen));
+
             list.embeddedActionTaken.disconnect(record);
         }
 

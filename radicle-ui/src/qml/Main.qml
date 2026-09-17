@@ -165,12 +165,39 @@ Item {
     /// are waiting for it — so they are the view's, and `startPending` is
     /// cleared by the REPLY rather than by the call having been made.
     ///
-    /// Nothing sets either today: no surface here starts a node. The panel's
-    /// action emits a signal with no listener yet, and both fields exist so the
-    /// state derivation is complete rather than partial — see
-    /// `RepoList.embeddedActionTaken`.
+    /// Nothing sets either today: no surface here starts a node — see
+    /// `embeddedStartHosted` for why, and both fields exist so the state
+    /// derivation is complete rather than partial.
     property bool embeddedStartPending: false
     property string embeddedStartError: ""
+
+    // ---- which Embedded requests this host routes -------------------------
+    //
+    // The state panel names an action per state; these say which of those
+    // requests actually reach something able to carry them out. A panel keyed on
+    // these renders an unhosted act as named-but-disabled with a sentence, which
+    // is the whole point: an enabled control that does nothing reads as a broken
+    // module rather than an unbuilt feature.
+
+    /// "setup" is routed: `onEmbeddedActionTaken` raises the setup overlay.
+    readonly property bool embeddedSetupHosted: true
+
+    /// "start" and "restart" are NOT routed, and this is structural rather than
+    /// unfinished wiring.
+    ///
+    /// The setup's start step is gated on no node answering the resolved socket
+    /// — which a restart's node is — it offers no stop, so a restart's two calls
+    /// cannot be sequenced from it, and it starts the node with the passphrase
+    /// its own identity step took in the same showing, which a later showing
+    /// does not have. Decisively: `getEmbeddedIdentity()` carries no `encrypted`
+    /// field (only `createEmbeddedIdentity`'s reply does — `radicle_impl.h:275`),
+    /// so a later session cannot even determine whether a passphrase is needed.
+    ///
+    /// So these belong to the durable settings surface, which is where a
+    /// passphrase can be asked for. **Flipping this to `true` once that surface
+    /// routes them is the whole change** — nothing in `RepoList` or
+    /// `EmbeddedState` hard-codes which acts are available.
+    readonly property bool embeddedStartHosted: false
 
     /// Re-read what Embedded's home and node are doing.
     ///
@@ -244,6 +271,71 @@ Item {
     /// it shipped: the panel was a one-way door and the user had to restart the
     /// app. `SettingsPanel.closed()` is that way out; see its Back control.
     property bool settingsOpen: false
+
+    /// Whether the guided setup is RAISED over the view.
+    ///
+    /// The same shape as `settingsOpen`, and for the same reason stated one
+    /// level harder by `embedded-setup`: hosted as a navigation destination,
+    /// going back from the setup would have to choose between the step the user
+    /// was on and the screen they came from, and `NavState` knows nothing about
+    /// steps — while the setup's own Back already moves between them, so there
+    /// would be two controls for one word. Raised over the view, lowering it
+    /// restores exactly the screen underneath with no decision to make.
+    property bool setupOpen: false
+
+    /// Raise the setup, lowering the settings surface if it is up.
+    ///
+    /// **The exclusion is enforced at the raise, not by a binding**, so lowering
+    /// one raises nothing: a user who closes the setup is returned to the screen
+    /// underneath, not handed a surface they did not ask for. Two opaque
+    /// surfaces raised at once leaves one unreachable behind the other with no
+    /// control to lower it, which is the one-way door this module has already
+    /// shipped once.
+    ///
+    /// `show()` restarts the flow: the landing step is derived from the
+    /// preflight this raise is about to run, never from what a previous showing
+    /// left behind. The wizard is not destroyed when it is lowered, so its
+    /// `Component.onCompleted` fires for the first showing only — which is why
+    /// the host says "begin" explicitly rather than relying on construction.
+    function openSetup() {
+        settingsOpen = false;
+        setupOpen = true;
+        setupWizard.show();
+    }
+
+    /// Act on the Embedded state panel's request.
+    ///
+    /// **Routes on the KIND, not on the state**, which is what makes "a start
+    /// request does not raise the setup" a property of this function rather than
+    /// of which states happen to be reachable today. A host that raised the
+    /// setup for every request alike would satisfy every scenario a module in
+    /// the no-identity state can produce, and be wrong on the day a start
+    /// request becomes routable.
+    ///
+    /// `start` and `restart` reach nothing, deliberately — see
+    /// `embeddedStartHosted` for the four structural reasons, the last of which
+    /// is that `getEmbeddedIdentity()` carries no field saying whether the key
+    /// is encrypted. The panel renders them not-enabled and says so, so this is
+    /// belt and braces rather than the only guard.
+    function takeEmbeddedAction(kind) {
+        if (kind === "setup") openSetup();
+    }
+
+    /// The Settings chip's act: raise the settings surface, lowering the setup
+    /// if it is up; or lower settings, raising nothing.
+    ///
+    /// A function rather than `settingsOpen = !settingsOpen` at the chip,
+    /// because the exclusion has to hold for BOTH raises and a second inline
+    /// copy of it is the shape this repo keeps paying for — four hand-written
+    /// staleness guards, each dropping a different term.
+    function toggleSettings() {
+        if (settingsOpen) {
+            settingsOpen = false;
+            return;
+        }
+        setupOpen = false;
+        settingsOpen = true;
+    }
 
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
@@ -427,7 +519,20 @@ Item {
     readonly property string nodeIdentity:  caps.nodeId || ""
     readonly property string nodeHome:      caps.radHome || ""
     readonly property bool   gitFound:      caps.gitFound === true
-    readonly property bool   settingsShown: settingsOpen
+    /// Whether each opaque surface is RAISED, read off the pane's own `visible`
+    /// rather than off the flag it is keyed on.
+    ///
+    /// `settingsShown` was the flag, and is moved onto the item for the reason
+    /// `reposEmbeddedPanel` documents: a copy of a condition agrees with the
+    /// item whether or not the item draws, so an assertion on it cannot see a
+    /// surface that was raised and never rendered — which is the defect worth
+    /// catching, and the one a screenshot cannot distinguish either.
+    ///
+    /// Both are asserted together in `tests/ui/local.yaml`, because the
+    /// requirement they carry is a RELATION: raising one lowers the other, and
+    /// lowering one raises nothing. Neither observable alone can see that.
+    readonly property bool   settingsShown: settingsPane.visible
+    readonly property bool   setupShown:    setupPane.visible
 
     // ---- state only the end-to-end layer can assert on --------------------
     //
@@ -906,7 +1011,7 @@ Item {
                             objectName: "settingsToggle"
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.settingsOpen = !root.settingsOpen
+                            onClicked: root.toggleSettings()
                         }
                     }
                 }
@@ -936,6 +1041,12 @@ Item {
                     app: root
                     query: searchField.text
                     onRepoActivated: function (r) { nav.openRepo(r); }
+                    // The Embedded panel's action. It requests; this decides.
+                    // `takeEmbeddedAction` routes on the kind, so a start
+                    // request cannot raise a setup that could not perform it.
+                    onEmbeddedActionTaken: function (kind) {
+                        root.takeEmbeddedAction(kind);
+                    }
                 }
 
                 RepoView {
@@ -954,6 +1065,7 @@ Item {
         // and putting them in the stack would mean "back" from settings had to
         // decide which screen to restore.
         Rectangle {
+            id: settingsPane
             objectName: "settingsPane"
             visible: root.settingsOpen
             anchors.fill: parent
@@ -980,6 +1092,87 @@ Item {
                 // is why closing needs no decision about which screen to
                 // restore.
                 onClosed: root.settingsOpen = false
+            }
+        }
+
+        // The guided setup, raised over the view exactly as settings are, and a
+        // SIBLING of that pane rather than a section inside it.
+        //
+        // Three things follow from being an overlay rather than a navigation
+        // destination, and all three are requirements rather than styling:
+        //
+        //  - lowering it restores whatever screen was underneath, with no
+        //    decision to make. A `nav.view` destination would have to choose
+        //    between the step the user was on and the screen they came from, and
+        //    NavState knows nothing about steps.
+        //  - it adds no navigation history, so `nav.back()` keeps one meaning.
+        //  - it is mutually exclusive with `settingsPane`: both are opaque and
+        //    cover the same screen, so two raised at once leaves one unreachable
+        //    behind the other. `openSetup()` and `toggleSettings()` enforce that
+        //    at the raise — never by a binding, because lowering one must raise
+        //    nothing.
+        Rectangle {
+            id: setupPane
+            objectName: "setupPane"
+            visible: root.setupOpen
+            anchors.fill: parent
+            color: Theme.bg
+
+            SetupWizard {
+                id: setupWizard
+                objectName: "setupWizard"
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width - Theme.gapLg * 2, 640)
+                height: Math.min(parent.height, implicitHeight)
+
+                // The same injection SettingsPanel uses. Every call the flow
+                // makes goes through this file's own helpers, so the wizard
+                // reaches the backend without knowing there is one.
+                //
+                // `callPlain` for the reads (a failed probe must not paint the
+                // status strip red) and `callSettings` for the writes, whose
+                // refusal IS the useful result — it names the home in the way,
+                // the `keys` path to remove, or the alias rule that was broken.
+                flow.fetchCapabilities: function (cb) {
+                    root.callPlain("getCapabilities", [], cb);
+                }
+                flow.fetchIdentity: function (cb) {
+                    root.callPlain("getEmbeddedIdentity", [], cb);
+                }
+                flow.fetchNodeStatus: function (cb) {
+                    root.callPlain("getNodeStatus", [], cb);
+                }
+                flow.fetchSeeds: function (cb) {
+                    root.callPlain("listKnownSeeds", [], cb);
+                }
+                flow.createIdentity: function (alias, passphrase, cb) {
+                    root.callSettings("createEmbeddedIdentity",
+                                      [alias, passphrase], cb);
+                }
+                flow.startNode: function (passphrase, cb) {
+                    root.callSettings("startNode", [passphrase], cb);
+                }
+                flow.saveSetting: function (key, value, cb) {
+                    root.callSettings("setSetting", [key, value], cb);
+                }
+
+                // The surface REPORTS; this module lowers it. A surface that
+                // closed itself would leave whatever raised it still believing
+                // it is up.
+                //
+                // Lowering changes nothing underneath — not the view in force,
+                // not the repository, not the tab — for the same reason closing
+                // settings does not: neither was ever pushed onto the stack.
+                //
+                // It re-reads what Embedded's home and node are doing, because
+                // the flow may have created an identity or started a node and
+                // the panel behind this is derived from those replies. That is a
+                // refresh of the screen underneath, not a change to it.
+                onClosed: {
+                    root.setupOpen = false;
+                    root.refreshEmbedded();
+                }
             }
         }
 
