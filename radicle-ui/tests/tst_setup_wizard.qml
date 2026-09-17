@@ -118,8 +118,23 @@ Item {
             });
         }
 
+        /// Whether `identity()` holds its reply instead of delivering it, so a
+        /// test can observe the flow while a PREFLIGHT probe is outstanding.
+        /// A synchronous fake settles before the next line of test code runs,
+        /// which makes "the choice is withheld while the probe is in flight"
+        /// indistinguishable from "the choice is never withheld".
+        property bool holdIdentity: false
+
         function identity(cb) {
             callLog.push("getEmbeddedIdentity");
+            if (holdIdentity) {
+                held = function () { fake.deliverIdentity(cb); };
+                return;
+            }
+            deliverIdentity(cb);
+        }
+
+        function deliverIdentity(cb) {
             // Note: `problem`, never `error` — the question was answered. The
             // core module documents this shape as designed for this wizard.
             cb({
@@ -251,6 +266,7 @@ Item {
             fake.startStarted = true;
             fake.startListening = [];
             fake.settingRefusal = "";
+            fake.holdIdentity = false;
             flow.reset();
             heldFlow.reset();
             fake.reset();
@@ -337,6 +353,37 @@ Item {
         }
 
         // ---- the preflight --------------------------------------------------
+
+        /// **A choice that depends on the preflight is withheld while the
+        /// preflight is still outstanding**, not merely before it is issued.
+        ///
+        /// The spec says the findings are reported "before the flow offers any
+        /// choice that depends on it". A synchronous fake cannot express that
+        /// window at all — the callback fires before the next line of test code
+        /// — so this uses a fake that HOLDS the identity reply, the same shape
+        /// the late-reply tests use for `startNode`. Without it the requirement
+        /// has no test that can fail: `reset()` undoes a completed preflight,
+        /// which is a different state from one still in flight.
+        function test_a_choice_is_withheld_while_its_probe_is_outstanding() {
+            fake.holdIdentity = true;
+            flow.runPreflight();
+
+            compare(flow.preflightDone, false,
+                    "precondition: the preflight has not finished asking");
+            verify(fake.held !== null,
+                   "precondition: the identity reply is being held");
+            compare(flow.canCreateIdentity, false,
+                    "creation must not be offered while the finding it depends "
+                    + "on is still outstanding");
+
+            // And it IS offered once the held reply lands — without which a
+            // flow that never offered creation at all would pass the above.
+            verify(fake.deliverHeld(), "the held reply now arrives");
+            compare(flow.preflightDone, true,
+                    "the preflight must finish once every probe has answered");
+            compare(flow.canCreateIdentity, true,
+                    "and the choice must be offered once its finding answered");
+        }
 
         function test_the_four_findings_are_reported_separately() {
             flow.runPreflight();
