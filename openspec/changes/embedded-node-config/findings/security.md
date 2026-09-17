@@ -82,7 +82,7 @@ are covered by other instances.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `radicle/rust-ffi/src/nodeconfig.rs:429-440` (the
+- [x] **`dev-writer`** — `radicle/rust-ffi/src/nodeconfig.rs:429-440` (the
       `strings()` helper used by `parse_listen`/`parse_external_addresses`/
       `parse_connect`) — no upper bound on array length or per-entry string
       length before each entry is handed to the crate's parser.
@@ -107,6 +107,31 @@ are covered by other instances.
       **Measured:** read `strings()` (`nodeconfig.rs:429-440`) and its three
       callers; no `.len()` check against the input `Vec` or its elements
       exists anywhere in `nodeconfig.rs` before or during validation.
+
+      **Fixed.** Accepted on the argument you make rather than on severity: the
+      caller is trusted today and nothing in the code says it must stay that way,
+      and the module's own posture — `set_inner` validates every field before the
+      document is touched at all — should extend to "is this request a sane
+      size". That it costs one length comparison settled it.
+
+      `strings()` now bounds both dimensions before any entry is read, so an
+      absurd array costs one comparison rather than a parse per entry:
+      `MAX_ADDRESSES = 1024` and `MAX_ADDRESS_LEN = 512`, each with a doc comment
+      arguing the number from what a person actually writes — these are lists a
+      user maintains by hand, and a `<nid>@<host>:<port>` is under 120 bytes. The
+      check is in the one helper rather than at the three call sites, so
+      `listen`, `externalAddresses` and `connect` are covered at once and a
+      fourth caller inherits it.
+
+      Two tests, both in `nodeconfig.rs`'s `mod tests`:
+      `an_absurdly_long_address_list_is_refused_before_a_single_entry_is_parsed`
+      uses individually **valid** entries, so it cannot pass because the crate's
+      parser happened to refuse them — the length check is the only thing that
+      can produce that error — and it asserts the boundary (`MAX_ADDRESSES`
+      exactly) is still accepted, so the bound refuses only what it claims to.
+      `a_single_absurdly_large_entry_is_refused_by_size_rather_than_by_the_parser`
+      covers the per-entry half with a host-shaped value `Address::from_str`
+      would otherwise take its time over.
 
 ## Areas explicitly clean, not just untested
 

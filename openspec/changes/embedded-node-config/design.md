@@ -42,7 +42,8 @@ know survives a write". `tests/node_config.rs` has
 
 Verified by mutation rather than claimed: replacing `write_document` with
 `Config::write` leaves that test as the **only** failing one in the file
-(13 pass, 1 fails, `left: Null, right: String("keep me")`). Its sibling
+(it fails with `left: Null, right: String("keep me")`, and every other test in
+the file stays green). Its sibling
 `an_unrelated_known_field_survives_a_write` stays green under that mutation,
 because `workers` is a real field of the crate's type and a round-trip carries
 it through — recorded in the test itself so nobody reads it as discriminating.
@@ -181,6 +182,33 @@ rather than incidental: the spec requires two configurations to produce two
 different bound states, which a reply echoing its own input satisfies whether
 the configuration was honoured or ignored.
 
+**"Both sites had to change together" was a comment and not an assertion, and
+review caught that.** Every check available read one side or neither:
+`listening` is the *bind* side (`runtime.local_addrs`), and `getNodeConfig`
+reads the *file*. So a mutation zeroing `config.listen` while leaving
+`Runtime::init`'s `listen` argument intact — a node that binds the right port,
+reports the right port, and privately holds `listen: []` — left every test in
+the crate green. A node in that state announces an address it never bound, or
+stays silent about one it did.
+
+The missing observation was the node's **own** `Config`, and the crate already
+serves it: `Handle::config()` round-trips `Command::Config` over the control
+socket (`radicle-node-0.21.1/src/control.rs:131`), returning the object
+`Runtime::init` was handed. `node.rs` already keeps `runtime.handle` for
+shutdown, so `node::advertised_listen(home)` needed no new state.
+`what_the_node_advertises_and_what_it_bound_are_the_same_configured_address`
+compares it against `listening` from the same start, and is the **only** test
+that reddens under that mutation. Its control,
+`a_node_that_was_never_started_advertises_nothing_rather_than_an_empty_list`,
+distinguishes `None` (nothing to ask) from `Some(vec![])` (the node listens on
+nothing) — without it the main assertion would pass against a function that
+always returned `Some(vec![])`.
+
+**Do not delete `advertised_listen` as unused-by-production.** It has no caller
+outside the test suite by design: it exists so the two-site invariant is
+observable at all, and removing it returns the divergence above to being
+invisible.
+
 **This reasoning moved out of `docs/PLAN.md`**, whose `listen: []` paragraph
 is now struck through and points here.
 
@@ -205,6 +233,45 @@ The gate is in C++ rather than in Rust because that is where the mode lives —
 the Rust side takes a home path and has no opinion about how it was chosen,
 which is the same split `startNode` uses and the reason
 `Profile::load()` is not called anywhere in `rust-ffi`.
+
+**The mode check and the paths check are one gate, not two.** The first draft
+shared the mode half (`nodeReadRefusalForMode` / `nodeWriteRefusalForMode`) and
+hand-wrote the paths half directly beneath it at all five call sites — five
+byte-identical copies of a two-line `if`, which review flagged as the
+guard-copying shape CLAUDE.md names. They collapsed into
+`nodeReadRefused(mode, local)` / `nodeWriteRefused(mode, local)`, which the five
+methods now call once each.
+
+**`startNode` keeps its own copy on purpose.** Its gate is a different gate: it
+refuses `local` with "your node is already yours to run" where the config gate
+says "yours to configure", and it needs the `available()` check the config
+methods deliberately skip. Sharing only the paths half would mean a function
+taking a pre-computed refusal — the parameter-threading shape rejected for
+`restartRequired` below, for the same reason.
+
+### Address lists are bounded before they are parsed
+
+`strings()` refuses an array over `MAX_ADDRESSES` (1024) entries, or an entry
+over `MAX_ADDRESS_LEN` (512) bytes, before reading a single one.
+
+Not a protocol limit — the crate imposes none — and the crate's parsers would
+almost certainly refuse an absurd entry anyway. The bound is about the work done
+before saying no: without it, a several-hundred-thousand-entry array is parsed
+entry by entry and a full reply assembled before the first refusal returns. The
+rest of this module refuses cheaply and early, and "is this request a sane size"
+belongs in the same place.
+
+The numbers are argued from what a person writes: these are lists a user
+maintains by hand, and a `<nid>@<host>:<port>` is under 120 bytes. Both refuse
+nothing anyone would type.
+
+Checked in the one helper rather than at the three call sites, so `listen`,
+`externalAddresses` and `connect` are covered at once and a fourth caller
+inherits it. The caller today is the local QML view over QtRO, which is trusted
+— the bound is here because nothing in the code says it must stay that way.
+`an_absurdly_long_address_list_is_refused_before_a_single_entry_is_parsed` uses
+individually **valid** entries, so it cannot pass because a parser refused them,
+and asserts the boundary is still accepted.
 
 ### `restartRequired` compares against what the running node started with
 
@@ -248,6 +315,36 @@ candidate was rejected for a different reason:
   is true and give up the one thing an instance buys — being bound to the home
   `LocalStore` resolved, so no call site can pass a different one.
 
+### Inbound lives in `node-config`, not in the wizard or in `module-settings`
+
+`docs/PLAN.md`'s wizard section describes a "network" step deciding inbound
+("inbound off by default, preferred seeds prefilled"), which reads as though the
+wizard should own that setting. It cannot, and the reason is worth recording
+before the wizard piece is written and re-derives it.
+
+**`module-settings` has nowhere to put it.** That spec locks the module's own
+settings to five keys — `mode`, `gitPath`, `radSocket`, `remoteSeed`,
+`radHome` — and an inbound toggle is not a sixth. The distinction is not
+arbitrary: a module setting says how *this module* behaves, where inbound says
+what *the node* does, and the node reads its own answer from `config.json` at
+construction. A sixth key would mean two places recording one fact, with the
+module's copy authoritative for the UI and the node's copy authoritative for the
+network — the divergence `restartRequired` exists to make visible, reintroduced
+one layer up. `a_node_configuration_key_is_not_a_module_setting` in
+`test_radicle_impl.cpp` pins the split.
+
+So inbound is `listen` in `node-config`, and the wizard's network step **writes
+through `setNodeConfig`** rather than persisting anything of its own. The wizard
+still owns the *decision* PLAN.md describes — asking the user, defaulting to
+off — it just does not own the storage. Off-by-default costs nothing to honour,
+because it is already the default in the file: a home whose `config.json` has
+never set `listen` deserializes it as `vec![]`.
+
+**Rejected:** deferring `listen` to the wizard piece entirely. `node.rs` had to
+stop discarding the configured value in this change regardless — that is the
+`vec![]` override above — and shipping a `listen` the node honours with no way
+to set it would leave the field readable, load-bearing and unwritable.
+
 ### `rebuildFromSettings()` exists because the fourth guard was about to be written
 
 Two sites repointed `RadicleImpl` at a different profile by spelling the rebuild
@@ -280,6 +377,16 @@ by accident:
   rather than failing the whole read, so a `getNodeConfig` does not decline to
   show four good fields because a fifth is odd. A *write* of the same value is
   still refused, which is the case that matters.
+
+A fourth, **still open for a `spec-writer`** and recorded here so it is not lost
+with the findings tracker: the `local`-mode read-half scenario says
+`getNodeConfig` must "report that home's configuration rather than an error",
+but does not say what configuration the fixture should hold. So
+`the_node_configuration_is_readable_in_local_mode_but_not_writable` and its
+seeding twin run against a home with no `config.json`, and assert the backend
+was reached (the error names the home path, which only backend code produces)
+rather than that a real configuration came back. Deciding the fixture is a spec
+change; the test change after it is small.
 
 ## Risks / Trade-offs
 

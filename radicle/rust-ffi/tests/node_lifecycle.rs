@@ -789,6 +789,91 @@ fn a_configured_listen_address_is_what_the_node_binds() {
 }
 
 #[test]
+fn what_the_node_advertises_and_what_it_bound_are_the_same_configured_address() {
+    // **This is the assertion that was missing, and its absence let a real
+    // divergence ship green.**
+    //
+    // `start_inner` hands `Runtime::init` two separate things that must agree:
+    // the `Config` — what the node holds and reports about itself — and a
+    // `listen` argument, which is what the reactor binds. Its comment says
+    // "both sites had to change together, and changing one alone is the trap".
+    // Nothing asserted it. `a_configured_listen_address_is_what_the_node_binds`
+    // reads `listening`, which comes from `runtime.local_addrs` and is the bind
+    // side ONLY; `getNodeConfig` reads `config.json`, which is the file and is
+    // neither side.
+    //
+    // Measured before writing this: zeroing `config.listen` while passing the
+    // real value as `Runtime::init`'s `listen` argument left every test in this
+    // crate green — the node bound the port, reported the port, and privately
+    // held a configuration saying it listened on nothing. A node in that state
+    // announces an address it never bound, or stays silent about one it did.
+    //
+    // `node::advertised_listen` asks the running node over its control socket
+    // (`Command::Config`), so the answer is the object `Runtime::init` was
+    // actually given rather than a re-read of the file the mutation does not
+    // touch. Comparing it against `listening` from the same start is what ties
+    // the two sites to one value.
+    with_socket("listen-agrees", |socket| {
+        let fx = init_profile("node-listen-agrees");
+        let home = fx.home();
+
+        let (probe, port) = ephemeral_port();
+        drop(probe);
+        let configured = format!("127.0.0.1:{port}");
+        let reply = parse(&radicle_local_ffi::nodeconfig::set(
+            &home,
+            &serde_json::json!({ "listen": [configured.clone()] }).to_string(),
+        ));
+        assert!(reply.get("error").is_none(), "{reply}");
+
+        let started = parse(&node::start(&home, socket, ""));
+        assert_eq!(started["started"], serde_json::json!(true), "{started}");
+
+        // The bind side, as the existing test reads it.
+        let bound: Vec<String> = started["listening"]
+            .as_array()
+            .expect("listening")
+            .iter()
+            .map(|a| a.as_str().expect("an address string").to_string())
+            .collect();
+
+        // The node's own side, asked of the node.
+        let advertised = node::advertised_listen(&home)
+            .expect("a running node must answer what its own configuration listens on");
+
+        assert_eq!(
+            advertised,
+            vec![configured.clone()],
+            "the running node's own configuration must carry the configured \
+             listen address, not an empty list: bound {bound:?}"
+        );
+        assert_eq!(
+            advertised, bound,
+            "what the node advertises and what it bound must be the same value — \
+             a divergence here is the trap `start_inner`'s comment names"
+        );
+
+        stop_and_forget();
+    });
+}
+
+#[test]
+fn a_node_that_was_never_started_advertises_nothing_rather_than_an_empty_list() {
+    // The discriminating control for the test above. `advertised_listen` must
+    // distinguish "the node says it listens on nothing" (`Some(vec![])`) from
+    // "there is no node to ask" (`None`) — otherwise the assertion above would
+    // pass against a function that always returned `Some(vec![])`, which is
+    // exactly the constant-answer fake shape CLAUDE.md warns about.
+    let fx = init_profile("node-listen-unasked");
+    assert_eq!(
+        node::advertised_listen(&fx.home()),
+        None,
+        "with no node running there is nothing to ask, and that is not the same \
+         answer as a node that listens on nothing"
+    );
+}
+
+#[test]
 fn a_listen_port_that_cannot_be_bound_fails_the_start_rather_than_falling_back() {
     // Falling back to binding nothing would report success for a configuration
     // the node did not honour — a node the user believes is reachable and is

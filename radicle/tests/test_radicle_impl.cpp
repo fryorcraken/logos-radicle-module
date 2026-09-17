@@ -1242,6 +1242,56 @@ LOGOS_TEST(capabilities_report_the_git_preflight)
     // With no configured path, any git found was auto-detected — so the flag
     // that distinguishes the two must say so.
     LOGOS_ASSERT_FALSE(caps["gitConfigured"].get<bool>());
+
+    // `gitProblem` MUST be empty exactly when `gitFound` is true. Asserting the
+    // positive direction here is what stops the four keys' presence standing in
+    // for their values: a build reporting a problem alongside a working git
+    // would otherwise pass.
+    if (caps["gitFound"].get<bool>())
+        LOGOS_ASSERT_TRUE(caps["gitProblem"].get<std::string>().empty());
+}
+
+LOGOS_TEST(a_refused_configured_git_path_is_still_reported_as_configured)
+{
+    // **The negative half of "configured" vs "detected", which nothing asserted.**
+    //
+    // The spec requires a refused configured path to report `gitConfigured`
+    // true, `gitFound` false and a non-empty `gitProblem` — the three together
+    // are what let a view say "the git you chose is not working" rather than the
+    // much less useful "no git found", which would send a user looking for a
+    // problem in their PATH when the problem is their own setting.
+    //
+    // Written straight into the settings file rather than through `setSetting`,
+    // which validates by running the path and would refuse it. That refusal is
+    // the right behaviour and is covered by
+    // `set_setting_refuses_a_git_path_that_does_not_exist_and_names_it`; what is
+    // under test here is the state that refusal cannot prevent — a path that
+    // validated when it was set and has since been removed, renamed or upgraded
+    // away. `SettingsStore::load()` does not re-validate `gitPath`, so this is
+    // reachable in the ordinary course of things rather than only by hand.
+    ScopedRadHome home("caps-git-bad");
+    const auto path = scratchSettingsPath("caps-git-bad");
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << nlohmann::json{
+            {"mode", "explore"},
+            {"radHome", ""},
+            {"radSocket", ""},
+            {"gitPath", "/definitely/not/here/git"},
+            {"remoteSeed", ""},
+        }.dump();
+    }
+
+    auto impl = makeRadicleImpl(SeedClient{}, LocalStore{}, SettingsStore{path});
+    const auto caps = parse(impl.getCapabilities());
+
+    LOGOS_ASSERT_TRUE(caps["gitConfigured"].get<bool>());
+    LOGOS_ASSERT_FALSE(caps["gitFound"].get<bool>());
+    // Non-empty, and naming the path — a reason that does not say which path
+    // failed leaves the user no action to take.
+    LOGOS_ASSERT_FALSE(caps["gitProblem"].get<std::string>().empty());
+    LOGOS_ASSERT_CONTAINS(caps["gitProblem"].get<std::string>(),
+                          std::string("/definitely/not/here/git"));
 }
 
 LOGOS_TEST(a_persisted_seed_is_adopted_when_the_module_starts)
@@ -1554,11 +1604,24 @@ LOGOS_TEST(the_node_configuration_is_readable_in_local_mode_but_not_writable)
     // The READ is not refused by the mode. The scratch home has no `config.json`
     // — `makeStorage()` creates `storage/` only — so the backend answers with its
     // own error about that, which is a different sentence from the mode refusal.
-    // Asserting the mode's words are ABSENT is what shows the gate let it past.
+    //
+    // **An absence assertion alone does not discriminate**, which a reviewer
+    // caught: `find("you run yourself") == npos` is true of any other refusal
+    // too, including a broken gate returning something generic. So the positive
+    // half is asserted as well — the backend's message names the HOME PATH, and
+    // only code that actually reached the backend can produce that. A mode
+    // refusal names modes, never a path.
+    //
+    // Still short of the real thing. A read against a home that HOLDS a
+    // `config.json`, asserting the configuration comes back, is the scenario
+    // that matters, and it is open as a finding for `spec-writer`: the spec does
+    // not say what fixture that scenario should stand up, and inventing one here
+    // would pin behaviour nobody specified.
     const auto read = parse(impl.getNodeConfig());
     if (read.contains("error")) {
         const std::string error = read["error"].get<std::string>();
         LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+        LOGOS_ASSERT_CONTAINS(error, home.dir);
     }
 
     // The WRITE is refused, by the mode, naming it and the alternative.
@@ -1585,10 +1648,15 @@ LOGOS_TEST(seeding_is_listable_in_local_mode_but_not_changeable)
 
     LOGOS_ASSERT_TRUE(parse(impl.getCapabilities())["localAvailable"].get<bool>());
 
+    // As in the `getNodeConfig` twin above: the absence of the mode's words is
+    // not on its own evidence the gate passed the call through, so the positive
+    // signal is asserted too. `seeding.rs` names the home in every failure it
+    // can produce here; the mode refusal names modes and no path.
     const auto listed = parse(impl.listSeeded());
     if (listed.contains("error")) {
         const std::string error = listed["error"].get<std::string>();
         LOGOS_ASSERT_TRUE(error.find("you run yourself") == std::string::npos);
+        LOGOS_ASSERT_CONTAINS(error, home.dir);
     }
 
     for (const auto& reply : {parse(impl.seedRepo("rad:z2G42jiTsL6fXYCn9y4bbJBG7QqKn", "all")),

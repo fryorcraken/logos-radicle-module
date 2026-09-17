@@ -625,6 +625,15 @@ std::string RadicleImpl::startNode(const std::string& passphrase)
     // actually happens — a socket over the 108-byte cap — surfaces from the
     // crate as "path must be shorter than SUN_LEN", naming neither the path nor
     // the limit. `pathsProblem` names all three.
+    //
+    // **Spelled out here rather than reusing `nodeWriteRefused`**, which pairs
+    // this same check with the config/seeding mode gate. This method's gate is a
+    // different one: it refuses `local` with "your node is already yours to
+    // run", where the config gate refuses it with "yours to configure", and it
+    // needs the `available()` check below that the config methods deliberately
+    // skip. Sharing the paths half alone would mean a function taking a
+    // pre-computed refusal, which is the parameter-threading shape `design.md`
+    // rejected for `restartRequired`.
     if (!m_local.pathsProblem().empty())
         return dump(radicle::makeError(m_local.pathsProblem()));
 
@@ -687,19 +696,25 @@ std::string RadicleImpl::getNodeStatus()
 // works, and both are edited on disk with the node running or stopped.
 //
 // The gating below is a READ/WRITE split rather than the embedded-only rule the
-// node trio uses, and the asymmetry is deliberate — see `nodeMayRead` and
-// `nodeMayWrite`.
+// node trio uses, and the asymmetry is deliberate — see `nodeReadRefusalForMode`
+// and `nodeWriteRefusalForMode`. Each of the five methods calls exactly one
+// gate, `nodeReadRefused` or `nodeWriteRefused`, which carries the mode check
+// and the home's paths check together.
 // ===========================================================================
 
 namespace {
 
-/// Refuse a node-configuration or seeding READ, or return an empty string.
+/// Refuse a node-configuration or seeding READ on the mode alone, or return an
+/// empty string.
 ///
 /// Only `explore` is refused, because it resolves no home at all — there is no
 /// file to read and no policy store to open. `local` is allowed: the home is the
 /// user's own, and showing a user what their own node is set to is the reason a
 /// panel exists.
-std::string nodeReadRefusal(const std::string& mode)
+///
+/// Callers go through `nodeReadRefused`/`nodeWriteRefused` rather than calling
+/// this directly, so the paths check travels with the mode check.
+std::string nodeReadRefusalForMode(const std::string& mode)
 {
     if (mode == radicle::SettingsStore::kModeExplore) {
         return dump(radicle::makeError(
@@ -711,7 +726,8 @@ std::string nodeReadRefusal(const std::string& mode)
     return {};
 }
 
-/// Refuse a node-configuration or seeding WRITE, or return an empty string.
+/// Refuse a node-configuration or seeding WRITE on the mode alone, or return an
+/// empty string.
 ///
 /// **`local` is readable and not writable, and that asymmetry is the point.**
 /// In that mode the node is the user's own: this module did not create it, does
@@ -723,7 +739,7 @@ std::string nodeReadRefusal(const std::string& mode)
 /// `startNode`'s two refusals are: one says "that node is yours to configure",
 /// the other says "pick a mode that has a node", and they prompt different
 /// actions.
-std::string nodeWriteRefusal(const std::string& mode)
+std::string nodeWriteRefusalForMode(const std::string& mode)
 {
     if (mode == radicle::SettingsStore::kModeLocal) {
         return dump(radicle::makeError(
@@ -742,19 +758,48 @@ std::string nodeWriteRefusal(const std::string& mode)
     return {};
 }
 
+/// Everything that must hold before a node-configuration or seeding call
+/// reaches the backend: the mode allows it, AND the home it would act on is
+/// usable.
+///
+/// **One function because these are one gate, not two.** Each of the five
+/// methods below needs both checks, in this order, with the same messages — and
+/// the earlier shape spelled the paths half out at every site, five identical
+/// copies of a two-line `if` sitting directly beneath a mode check that was
+/// already shared. That is the guard-copying shape CLAUDE.md names: byte-
+/// identical today, and one edit away from five call sites where four agree.
+/// A sixth caller (`startNode`) keeps its own copy deliberately — see there.
+///
+/// A path problem is surfaced BEFORE the backend, for the reason `startNode`
+/// gives: this module's message names the path, its length and the limit, where
+/// the failure it would otherwise be replaced by names none of the three.
+std::string nodeReadRefused(const std::string& mode, const radicle::LocalStore& local)
+{
+    if (auto refused = nodeReadRefusalForMode(mode); !refused.empty())
+        return refused;
+    if (!local.pathsProblem().empty())
+        return dump(radicle::makeError(local.pathsProblem()));
+    return {};
+}
+
+/// The write half of [`nodeReadRefused`], same shape and same reasoning.
+std::string nodeWriteRefused(const std::string& mode, const radicle::LocalStore& local)
+{
+    if (auto refused = nodeWriteRefusalForMode(mode); !refused.empty())
+        return refused;
+    if (!local.pathsProblem().empty())
+        return dump(radicle::makeError(local.pathsProblem()));
+    return {};
+}
+
 } // namespace
 
 std::string RadicleImpl::getNodeConfig()
 {
-    if (const auto refused = nodeReadRefusal(m_settings.get(radicle::SettingsStore::kKeyMode));
+    if (const auto refused
+        = nodeReadRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
         !refused.empty())
         return refused;
-
-    // A path problem is surfaced before the backend, for the reason `startNode`
-    // gives: this module's message names the path, its length and the limit,
-    // where the one it would otherwise be replaced by names none of the three.
-    if (!m_local.pathsProblem().empty())
-        return dump(radicle::makeError(m_local.pathsProblem()));
 
     // Deliberately NOT gated on `m_local.available()`, which looks for
     // `storage/`. The question here is whether there is a `config.json`, and the
@@ -767,12 +812,10 @@ std::string RadicleImpl::getNodeConfig()
 
 std::string RadicleImpl::setNodeConfig(const std::string& changes)
 {
-    if (const auto refused = nodeWriteRefusal(m_settings.get(radicle::SettingsStore::kKeyMode));
+    if (const auto refused
+        = nodeWriteRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
         !refused.empty())
         return refused;
-
-    if (!m_local.pathsProblem().empty())
-        return dump(radicle::makeError(m_local.pathsProblem()));
 
     // No `localAvailabilityChanged` here, and that is not an omission. A
     // configuration change does not alter what this module CAN do — the node is
@@ -784,36 +827,30 @@ std::string RadicleImpl::setNodeConfig(const std::string& changes)
 
 std::string RadicleImpl::listSeeded()
 {
-    if (const auto refused = nodeReadRefusal(m_settings.get(radicle::SettingsStore::kKeyMode));
+    if (const auto refused
+        = nodeReadRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
         !refused.empty())
         return refused;
-
-    if (!m_local.pathsProblem().empty())
-        return dump(radicle::makeError(m_local.pathsProblem()));
 
     return m_nodeConfig.listSeeded();
 }
 
 std::string RadicleImpl::seedRepo(const std::string& rid, const std::string& scope)
 {
-    if (const auto refused = nodeWriteRefusal(m_settings.get(radicle::SettingsStore::kKeyMode));
+    if (const auto refused
+        = nodeWriteRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
         !refused.empty())
         return refused;
-
-    if (!m_local.pathsProblem().empty())
-        return dump(radicle::makeError(m_local.pathsProblem()));
 
     return m_nodeConfig.seed(rid, scope);
 }
 
 std::string RadicleImpl::unseedRepo(const std::string& rid)
 {
-    if (const auto refused = nodeWriteRefusal(m_settings.get(radicle::SettingsStore::kKeyMode));
+    if (const auto refused
+        = nodeWriteRefused(m_settings.get(radicle::SettingsStore::kKeyMode), m_local);
         !refused.empty())
         return refused;
-
-    if (!m_local.pathsProblem().empty())
-        return dump(radicle::makeError(m_local.pathsProblem()));
 
     return m_nodeConfig.unseed(rid);
 }

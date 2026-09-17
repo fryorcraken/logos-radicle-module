@@ -349,9 +349,12 @@ fn parse_listen(v: &Value) -> Result<Vec<String>, String> {
 /// would be stored, and the node would then advertise a public address nobody
 /// can reach.
 ///
-/// Removing the `@` rejection below leaves
-/// `an_external_address_carrying_a_node_id_is_refused` as the only failing
-/// test.
+/// Removing the `@` rejection below reddens
+/// `an_external_address_with_a_node_id_is_refused_although_the_crate_accepts_it`
+/// in this file's own `mod tests`, and
+/// `each_address_spelling_is_accepted_in_its_own_field_and_refused_in_the_other`
+/// in `tests/node_config.rs`. Both names are as they appear in the source;
+/// grep finds them.
 fn parse_external_addresses(v: &Value) -> Result<Vec<String>, String> {
     strings(v, "externalAddresses")?
         .into_iter()
@@ -425,16 +428,69 @@ fn parse_peers(v: &Value) -> Result<&'static str, String> {
     }
 }
 
+/// The most entries any address list this module writes may carry.
+///
+/// Not a protocol limit — the crate imposes none — but a sanity bound on a
+/// *hand-written* configuration. `listen`, `externalAddresses` and `connect` are
+/// lists a person maintains: a handful of addresses each, a few dozen at the
+/// outside. A thousand is already far past anything a user types and well short
+/// of a size that costs anything to refuse.
+const MAX_ADDRESSES: usize = 1024;
+
+/// The longest a single entry in one of those lists may be.
+///
+/// A `<nid>@<host>:<port>` is under 120 bytes; a generous DNS name plus a port
+/// is under 300. 512 refuses nothing anyone would write and bounds the work each
+/// entry can demand of the crate's parser.
+const MAX_ADDRESS_LEN: usize = 512;
+
 /// Read an array-of-strings argument, refusing anything else by name.
+///
+/// ## Why the size checks come before the parsing
+///
+/// The three callers hand every entry to a crate parser that would almost
+/// certainly refuse an absurd one anyway — so this is not about what gets
+/// *stored*, it is about the work done before saying no. Without a bound, a
+/// several-hundred-thousand-entry array is fully parsed, entry by entry, and a
+/// reply assembled, before the first refusal is returned. The rest of this
+/// module refuses cheaply and early — `set_inner` validates every field before
+/// the document is touched at all — and "is this request a sane size" belongs in
+/// the same place, checked in one function rather than at each of the three call
+/// sites.
+///
+/// The caller today is the local QML view over QtRO, which is trusted; the
+/// bound is here because nothing in the code says it must stay that way, and a
+/// future feature seeding `connect` from a fetched peer list would inherit this
+/// check rather than needing to remember it.
 fn strings(v: &Value, field: &str) -> Result<Vec<String>, String> {
     let arr = v
         .as_array()
         .ok_or_else(|| format!("`{field}` must be an array of strings"))?;
+
+    // Checked before any entry is read, so an absurd array costs one length
+    // comparison rather than a parse per entry.
+    if arr.len() > MAX_ADDRESSES {
+        return Err(format!(
+            "`{field}` has {} entries, and at most {MAX_ADDRESSES} are accepted. \
+             This is a list of addresses a person maintains, not a feed.",
+            arr.len()
+        ));
+    }
+
     arr.iter()
         .map(|e| {
-            e.as_str()
-                .map(str::to_string)
-                .ok_or_else(|| format!("every entry in `{field}` must be a string"))
+            let s = e
+                .as_str()
+                .ok_or_else(|| format!("every entry in `{field}` must be a string"))?;
+            if s.len() > MAX_ADDRESS_LEN {
+                return Err(format!(
+                    "an entry in `{field}` is {} bytes, and at most \
+                     {MAX_ADDRESS_LEN} are accepted. An address is a host and a \
+                     port, not a document.",
+                    s.len()
+                ));
+            }
+            Ok(s.to_string())
         })
         .collect()
 }
@@ -525,6 +581,20 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_alias_is_refused() {
+        // The spec requires a non-empty alias, and this module delegates that to
+        // `Alias::from_str` rather than checking it here — so the requirement
+        // rests entirely on the crate continuing to refuse `""`. Nothing pinned
+        // that. A crate change making an empty alias acceptable would silently
+        // satisfy nothing the spec asks for, with every other alias test green.
+        let e = parse_alias(&json!("")).unwrap_err();
+        assert!(
+            e.contains("not a usable node alias"),
+            "the refusal must come through this module's message: {e}"
+        );
+    }
+
+    #[test]
     fn a_listen_address_must_be_an_ip_and_a_port() {
         // The crate's field is `Vec<SocketAddr>`, so a host name that would be
         // fine in `externalAddresses` is not fine here. A module that validated
@@ -543,6 +613,39 @@ mod tests {
         let e = parse_external_addresses(&json!([with_id])).unwrap_err();
         assert!(e.contains(with_id), "the refusal must name the value: {e}");
         assert!(e.contains("connect"), "{e}");
+    }
+
+    #[test]
+    fn an_absurdly_long_address_list_is_refused_before_a_single_entry_is_parsed() {
+        // The entries are individually VALID, so this cannot pass because the
+        // crate's parser happened to refuse them — the length check is the only
+        // thing that can produce this error, and the message proves which.
+        let many: Vec<String> = (0..MAX_ADDRESSES + 1)
+            .map(|i| format!("127.0.0.1:{}", 1024 + (i % 60000)))
+            .collect();
+        let e = parse_listen(&json!(many)).unwrap_err();
+        assert!(
+            e.contains("entries") && e.contains(&MAX_ADDRESSES.to_string()),
+            "the refusal must name the limit: {e}"
+        );
+
+        // The boundary is accepted, so the bound refuses only what it claims to.
+        let at_limit: Vec<String> = (0..MAX_ADDRESSES)
+            .map(|i| format!("127.0.0.1:{}", 1024 + (i % 60000)))
+            .collect();
+        assert!(parse_listen(&json!(at_limit)).is_ok());
+    }
+
+    #[test]
+    fn a_single_absurdly_large_entry_is_refused_by_size_rather_than_by_the_parser() {
+        // A valid address with an enormous host name: host-shaped, so
+        // `Address::from_str` would take its time over it. Refused on length.
+        let huge = format!("{}.example.test:8776", "a".repeat(MAX_ADDRESS_LEN));
+        let e = parse_external_addresses(&json!([huge])).unwrap_err();
+        assert!(
+            e.contains("bytes") && e.contains(&MAX_ADDRESS_LEN.to_string()),
+            "the refusal must name the limit: {e}"
+        );
     }
 
     #[test]

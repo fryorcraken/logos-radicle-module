@@ -63,9 +63,12 @@ public:
      * a started node, and reporting one would hand the UI a success it has to
      * discover was false.
      *
-     * The node binds no TCP port: it can fetch and announce, but peers cannot
-     * fetch from it. `listening` reports that (empty today) so a view states the
-     * limitation rather than implying a full node.
+     * **The node binds what `home`'s `config.json` names in `listen`**, which is
+     * empty until something sets it — so a home nobody has configured is
+     * outbound-only: it can fetch and announce, but peers cannot fetch from it.
+     * `listening` reports what was actually bound, not what was asked for, so a
+     * view states the limitation from the node's own answer rather than
+     * inferring it. `setNodeConfig` is what changes `listen`.
      */
     static std::string start(const std::string& home, const std::string& socket,
                              const std::string& passphrase);

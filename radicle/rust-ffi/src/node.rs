@@ -520,6 +520,15 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
     // binds, while `config.listen` is what the node advertises about itself. A
     // configuration honoured in only one of them produces a node that binds a
     // port and tells nobody, or tells everybody about a port it never bound.
+    //
+    // **That claim is asserted, not just stated here.**
+    // `node_lifecycle.rs::what_the_node_advertises_and_what_it_bound_are_the_same_configured_address`
+    // asks the running node for its own `Config` over the control socket and
+    // compares it against the bound addresses from the same start. Adding
+    // `config.listen = vec![]` on the next line reddens that test and **only**
+    // that test — measured, and the reason it exists: every other check here
+    // reads the bind side (`runtime.local_addrs`) or the file, and neither can
+    // see the two values come apart.
     let listen = config.listen.clone();
 
     // The caller owns the signal channel; `radicle_signals::install()` is never
@@ -794,8 +803,9 @@ fn start_inner(home: &str, socket: &str, passphrase: &str) -> Result<String, Str
         "home": home,
         "socket": socket,
         "nodeId": node_id,
-        // Reported so a caller can state that peers cannot fetch from this node
-        // rather than implying a full one. Empty is the expected value today.
+        // What the reactor actually bound, from `runtime.local_addrs` — not an
+        // echo of `config.listen`. Empty means outbound-only, which is what a
+        // home whose `listen` nobody has set produces.
         "listening": listening,
     })
     .to_string())
@@ -1043,6 +1053,53 @@ pub fn restart_required(home: &str) -> bool {
     // Read outside the lock: this is file I/O on a call a UI polls, and holding
     // the process's one node lock across it would block `start` and `stop`.
     started_with != crate::nodeconfig::fingerprint(home)
+}
+
+/// The `listen` addresses the **running node's own `Config`** carries, asked of
+/// the node rather than read from a file.
+///
+/// ## This exists to tie the two `listen` sites together
+///
+/// [`start_inner`] hands `Runtime::init` two things that must agree: the
+/// `Config` (what the node holds and reports about itself) and a separate
+/// `listen` argument (what the reactor binds). Its comment says "both sites had
+/// to change together, and changing one alone is the trap" — and until this
+/// function existed, nothing checked it. `listening` in the start reply comes
+/// from `runtime.local_addrs`, which is the **bind** side only, so a mutation
+/// that zeroes `config.listen` while leaving the bind argument intact produced a
+/// node that bound the right port, reported the right port, and held a `Config`
+/// saying it listened on nothing. Measured: every test in the crate stayed
+/// green.
+///
+/// `Handle::config()` round-trips `Command::Config` over the control socket
+/// (`radicle-node-0.21.1/src/control.rs:131`), so the answer is the object the
+/// node is actually running with — not a re-read of `config.json`, which the
+/// mutation leaves untouched and which therefore cannot discriminate.
+///
+/// `None` when no node is running in this process, when the running node is
+/// against a different home, or when the round trip fails. A caller that cannot
+/// tell "the node says nothing" from "the node was not asked" would be worse
+/// than one that declines to answer.
+///
+/// Scoped to *this process's* node, like [`status`] and [`restart_required`].
+pub fn advertised_listen(home: &str) -> Option<Vec<String>> {
+    // The handle is cloned out under the lock and the round trip made after it
+    // is released, for the reason `status` gives: this is I/O, and holding the
+    // process's one node lock across it blocks `start` and `stop`.
+    let handle = {
+        let guard = locked();
+        match guard.as_ref() {
+            Some(n) if n.home == home && n.thread.as_ref().is_some_and(|t| !t.is_finished()) => {
+                n.handle.clone()
+            }
+            _ => return None,
+        }
+    };
+
+    handle
+        .config()
+        .ok()
+        .map(|c| c.listen.iter().map(|a| a.to_string()).collect())
 }
 
 /// What this process's node is doing.

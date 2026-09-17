@@ -66,7 +66,7 @@ decision was found only partially applied at a second call site.
 
 ## Gap: the wizard/panel scope decision is not recorded anywhere
 
-- [ ] **`dev-writer`** — `design.md` has no entry for why inbound-toggle
+- [x] **`dev-writer`** — `design.md` has no entry for why inbound-toggle
       configuration lives in this change's `node-config` surface (the `listen`
       field) rather than in the wizard, even though the wizard is exactly
       where PLAN.md's "network" step describes deciding it
@@ -88,6 +88,35 @@ decision was found only partially applied at a second call site.
       (checked for "five"/"locked"/"keys"). The reasoning exists only in this
       review's own derivation from the spec file, which is exactly the kind of
       choice this role exists to catch before it is lost.
+
+      **Fixed.** The reasoning did exist and was never written down, which is
+      exactly the failure you describe — and your derivation of it from the spec
+      file is the argument the new entry makes.
+
+      `design.md` gains "Inbound lives in `node-config`, not in the wizard or in
+      `module-settings`", placed before the `rebuildFromSettings()` entry. It
+      records:
+
+      - **Why the wizard cannot own the storage.** `module-settings` is locked to
+        five keys, and an inbound toggle is not a sixth — not arbitrarily, but
+        because a module setting says how *this module* behaves where inbound
+        says what *the node* does, and the node reads its own answer from
+        `config.json` at construction. A sixth key would mean two records of one
+        fact, the module's authoritative for the UI and the node's for the
+        network: the divergence `restartRequired` exists to make visible,
+        reintroduced a layer up. `a_node_configuration_key_is_not_a_module_setting`
+        already pins the split.
+      - **What the wizard does own.** The decision PLAN.md describes — asking,
+        defaulting to off — writing through `setNodeConfig` rather than
+        persisting anything of its own. Off-by-default costs nothing to honour
+        because it is already the default in the file.
+      - **The alternative rejected:** deferring `listen` to the wizard piece
+        entirely. `node.rs` had to stop discarding the configured value in this
+        change regardless, so that would have shipped a `listen` the node
+        honours with no way to set it — readable, load-bearing and unwritable.
+
+      The five keys and the test name were both re-checked against
+      `specs/module-settings/spec.md` and the suite rather than recalled.
 
 ## Everything else
 

@@ -47,7 +47,7 @@ other instances' rows.
 
 ## New finding
 
-- [ ] **`dev-writer`** — `radicle/rust-ffi/src/node.rs:504-523` (`start_inner`) — a
+- [x] **`dev-writer`** — `radicle/rust-ffi/src/node.rs:504-523` (`start_inner`) — a
       mutation that decouples `config.listen` (the object handed to
       `radicle_node::runtime::Runtime::init` as the node's own configuration,
       i.e. what it reports/advertises about itself) from `listen` (the separate
@@ -86,6 +86,49 @@ other instances' rows.
       not by any test, and a future refactor that reintroduces a discrepancy
       between them (e.g. reading `listen` from the file a second time, or a
       default in the wrong place) would ship silently.
+
+      **Fixed** in this pass. The gap was real and the reading is exactly right:
+      every existing check reads the bind side (`runtime.local_addrs`) or the
+      file, and neither can see the two values come apart. The comment asserted
+      nothing.
+
+      What was missing was a way to observe the node's *own* `Config` — and the
+      crate already provides one. `Handle::config()` round-trips
+      `Command::Config` over the control socket
+      (`radicle-node-0.21.1/src/control.rs:131` serves it,
+      `radicle-0.25.1/src/node.rs:1284` is the caller side), returning the
+      `Config` object `Runtime::init` was actually handed. `node.rs` already
+      keeps `runtime.handle` on `Node` for shutdown, so nothing new is stored.
+
+      Added `node::advertised_listen(home) -> Option<Vec<String>>` and
+      `node_lifecycle.rs::what_the_node_advertises_and_what_it_bound_are_the_same_configured_address`,
+      which configures a port, starts, and asserts the node's own config against
+      `listening` from the same start.
+
+      **Your mutation was reproduced before and after.** With
+      `config.listen = vec![]` inserted after the `listen` clone (bind argument
+      left intact), the new test is the **only** one that reddens, at
+      `node_lifecycle.rs:844`:
+
+      ```
+      the running node's own configuration must carry the configured listen
+      address, not an empty list: bound ["127.0.0.1:43055"]
+        left: []
+       right: ["127.0.0.1:43055"]
+      ```
+
+      — the node bound the port, reported the port, and privately held
+      `listen: []`, precisely the state described. Reverted, all 18 pass.
+
+      A control test ships with it:
+      `a_node_that_was_never_started_advertises_nothing_rather_than_an_empty_list`
+      pins `None` (nothing to ask) as distinct from `Some(vec![])` (the node says
+      it listens on nothing). Without it the main assertion would pass against a
+      function that always returned `Some(vec![])` — the constant-answer fake
+      shape CLAUDE.md warns about.
+
+      `start_inner`'s comment now names that test and states that the mutation
+      reddens it and only it, so the claim is checkable rather than asserted.
 
 ## Other things checked, clean
 

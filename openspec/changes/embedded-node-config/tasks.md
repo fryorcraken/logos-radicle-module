@@ -73,13 +73,22 @@
 
 ### Tests written alongside the code
 
-- [x] `radicle/rust-ffi/tests/node_config.rs` — 14 tests, including the
-      unknown-key preservation test that discriminates against the round-trip
-- [x] `radicle/rust-ffi/tests/node_seeding.rs` — 12 tests against a real
-      `policies.db`, including both directions of the policy/storage disagreement
-- [x] `radicle/rust-ffi/tests/node_lifecycle.rs` — three added: a configured
-      port actually bound, a collision failing the start, and the three-state
+- [x] `radicle/rust-ffi/tests/node_config.rs` — including the unknown-key
+      preservation test that discriminates against the round-trip
+      (`grep -c "#\[test\]"` for the count; do not write one down)
+- [x] `radicle/rust-ffi/tests/node_seeding.rs` — against a real `policies.db`,
+      including both directions of the policy/storage disagreement
+- [x] `radicle/rust-ffi/tests/node_lifecycle.rs` — a configured port actually
+      bound, a collision failing the start, and the three-state
       `restartRequired` sequence
+- [x] `node_lifecycle.rs` — the node's own `Config` agrees with what it bound,
+      with a control separating "no node to ask" from "listens on nothing".
+      Added answering a review finding: the two-site `listen` invariant was
+      asserted in a comment and by no test
+- [x] `nodeconfig.rs` unit tests — an empty alias, and the address-list size
+      bounds, both answering review findings
+- [x] `radicle/tests/test_radicle_impl.cpp` — a refused configured `gitPath` is
+      still reported as configured, with `gitProblem` naming it
 - [x] `radicle/rust-ffi/tests/panic_guard.rs` — the five new entry points added
       to the inventory
 - [x] `radicle/tests/test_radicle_impl.cpp` — five gating tests, each asserting a
