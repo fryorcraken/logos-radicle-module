@@ -83,9 +83,11 @@ node's threads are outside `guarded()`'s reach — are in
 [`M3-embedded-node-plan.md`](M3-embedded-node-plan.md).
 
 ~~**The wizard (Phase 2 step 4).**~~ — **specified** in `embedded-setup`: six
-steps in a fixed order, what each preflight finding blocks, and the three
-consequences the flow must state at the moment the user decides. It is QML
-only — every slot it drives was already exposed through `radicle_ui.rep`.
+steps in a fixed order, what each preflight finding blocks, the three consequences
+the flow must state at the moment the user decides, and — since the flow first
+shipped with no host at all — where it is reached from, what raising it does to
+the surfaces around it, and where a reopened flow lands. It is QML only — every
+slot it drives was already exposed through `radicle_ui.rep`.
 
 ~~**What a user sees on picking Embedded.**~~ — **specified** in
 `embedded-state`: seven states derived from the backend's replies, each with its
@@ -99,6 +101,13 @@ status line. The reasoning is in the `embedded-node-wizard` change's `design.md`
 Embedded branch still reads "not available in this version yet", which is false)
 and the mode-detail slot that would show the embedded DID. Both are a second
 surface with their own height reservation, deliberately not folded in.
+
+**Starting and restarting an existing node are still ahead too**, and belong to
+the configuration panel rather than to the wizard. Both need a passphrase, and
+`getEmbeddedIdentity()` carries no field saying whether an existing key is
+encrypted — so nothing can even tell whether one is needed. The state surface
+therefore names those actions without enabling them, and says so; the rule is
+`embedded-state`'s, and what rules it out is `embedded-setup`'s.
 
 **The configuration panel (Phase 2 step 4).** QML only, and what makes that
 true is now the `node-config` and `node-seeding` capabilities rather than the

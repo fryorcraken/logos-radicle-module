@@ -51,6 +51,11 @@ wording: a home with no identity offers to open the setup, a stopped node offers
 a start, a node that has stopped serving offers a restart, and a blocked home
 offers no action that would write, because none can succeed.
 
+Naming an action is distinct from that action being available. Which actions this
+version of the module can carry out is stated separately below, and a state whose
+action nothing can carry out MUST still name it rather than render as a state
+with nothing to say.
+
 The **blocked** state's sentence MUST be the `pathsProblem` sentence verbatim,
 because that sentence names the path that was tried and the limit that was
 exceeded, which the view cannot reconstruct.
@@ -79,19 +84,22 @@ exceeded, which the view cannot reconstruct.
 #### Scenario: A blocked home offers no action that would write
 
 - **GIVEN** a repository list in `embedded` with a non-empty `pathsProblem`
-- **THEN** the action that opens the guided setup MUST NOT be enabled
-- **AND** the action that starts the node MUST NOT be enabled
+- **THEN** no action MUST be named
+- **AND** no enabled action MUST be rendered
+- **AND WHEN** the same list is told an empty `pathsProblem` with a resolving
+  home and `exists:false`
+- **THEN** an enabled action MUST be rendered
 
 #### Scenario: The most fundamental obstacle is the one rendered
 
 - **GIVEN** a repository list in `embedded` whose `startNode` was answered with
   a distinctive refusal, and which is then told a non-empty `pathsProblem`
 - **THEN** the rendered sentence MUST contain the `pathsProblem` text
-- **AND** the action that starts the node MUST NOT be enabled
+- **AND** no action MUST be named
 - **AND WHEN** the same list is told an empty `pathsProblem`, with the refusal
   unchanged
 - **THEN** the rendered sentence MUST contain the refusal's text
-- **AND** the action that starts the node MUST be enabled
+- **AND** the named action MUST be the one that starts the node
 
 #### Scenario: The state follows a later reply rather than the first
 
@@ -255,8 +263,10 @@ An outstanding start MUST be cleared by the reply to it — success or
 issued, or a node that never answers would settle into **not serving** while its
 start is still genuinely in flight.
 
-While the state is **starting**, the surface MUST NOT offer the action that
-starts the node, so a second node is not started over the first.
+While the state is **starting**, the surface MUST NOT name the action that starts
+the node, so a second node is not started over the first. This holds independently
+of whether that action can be carried out at all: it is a property of the state,
+and it must already be true on the day a surface able to start a node exists.
 
 #### Scenario: The same reported fields render two different states
 
@@ -281,13 +291,15 @@ starts the node, so a second node is not started over the first.
 
 - **GIVEN** a repository list in `embedded` that has issued a `startNode` call
   which has not been answered
-- **THEN** the action that starts the node MUST NOT be enabled
+- **THEN** no action MUST be named
+- **AND WHEN** the call is answered with `{"error":"..."}`
+- **THEN** the named action MUST be the one that starts the node
 
 ### Requirement: A refused start is displayed as the backend worded it
 
 When a `startNode` call is answered with `{"error":"..."}`, the surface MUST
-display that message as the backend worded it, and MUST offer the action again
-so the user can retry.
+display that message as the backend worded it, and MUST go on naming the action
+that starts the node, so the state does not read as terminal.
 
 The module's refusals name the socket that was in use, the passphrase that did
 not unlock the key, and the home that was in the way. A summary in the view's
@@ -305,7 +317,7 @@ A subsequent successful start MUST clear the displayed message.
 - **GIVEN** a repository list in `embedded` whose `startNode` is answered with
   one distinctive message
 - **THEN** that message MUST be displayed
-- **AND** the action that starts the node MUST be enabled
+- **AND** the named action MUST be the one that starts the node
 - **AND WHEN** a further start is answered with a different distinctive message
 - **THEN** the second message MUST be displayed and the first MUST NOT
 
@@ -351,6 +363,65 @@ they are `embedded-setup`'s.
 - **GIVEN** a repository list in `embedded` told `exists:false`
 - **THEN** the rendered sentence MUST state that the node runs as a new
   identity, separate from any Radicle node the user already runs
+
+### Requirement: Only an action something can carry out is offered as enabled
+
+The surface MUST render an action as enabled only when a request it emits reaches
+something able to carry it out. An action whose request reaches nobody MUST NOT be
+enabled, and the surface MUST say why rather than render a disabled control with
+no explanation.
+
+A control that is enabled, looks ordinary and does nothing when taken is worse
+than no control at all: it reads as a module that is broken rather than as one
+that has not built this yet, and it gives a user no other thing to try. That is
+the dead end this capability was written to remove, and re-creating it one state
+along would be the same defect.
+
+The request that opens the guided setup reaches a host. The requests that start or
+restart a node do not, and `embedded-setup` says why: both need a passphrase that
+only the durable settings surface can ask for, and `getEmbeddedIdentity()` reports
+no field saying whether an existing identity's key is encrypted. So while that
+surface does not exist the **stopped**, **start failed** and **not serving** states
+MUST name their action while leaving it not enabled, and MUST state that starting
+the node is not yet available from here — not that it failed, and not that the node
+cannot be started at all.
+
+This MUST be keyed on whether the action's request is hosted, so that hosting one
+makes it enabled with nothing else changed. A surface hard-coding which states are
+enabled would have to be edited again, by someone who has to notice it, at the
+moment the host appears.
+
+#### Scenario: An unhosted action is named but not enabled, and says so
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with a node
+  reporting `running:false` and `serving:false`
+- **THEN** the named action MUST be the one that starts the node
+- **AND** it MUST NOT be enabled
+- **AND** the rendered text MUST state that starting the node is not yet
+  available from here
+- **AND WHEN** the same list is told `exists:false`
+- **THEN** the named action MUST be the one that opens the guided setup
+- **AND** it MUST be enabled
+- **AND** the rendered text MUST NOT state that it is unavailable
+
+#### Scenario: Hosting an action is what enables it
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with a node
+  reporting `running:false` and `serving:false`, and told that the request to
+  start a node reaches nobody
+- **THEN** the named action MUST NOT be enabled
+- **AND WHEN** the same list is told that the request to start a node reaches a
+  host, with nothing else changed
+- **THEN** the named action MUST be enabled
+- **AND** the rendered text MUST NOT state that it is unavailable
+
+#### Scenario: An action that is not enabled emits no request
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with a node
+  reporting `running:false` and `serving:false`
+- **WHEN** the rendered action is taken
+- **THEN** no request MUST have been emitted
+- **AND** no `startNode` call MUST have been issued
 
 ### Requirement: The blank-pane assertion keeps a live referent
 

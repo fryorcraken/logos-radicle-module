@@ -15,18 +15,32 @@ itself: those two need no setup, choosing either abandons every step that
 follows, and a flow that offers a mode it then refuses to continue from is
 presenting a choice with one permitted answer.
 
+This capability also owns **where the flow is reached from, what raising and
+lowering it does to the surfaces around it, and where a reopened flow lands.**
+Those were left unsaid when the six steps were first specified, and the result
+was a flow with no host: a close control that emitted to nobody, and a state
+panel whose action reached nobody. Entry and re-entry are not a separate subject
+from the six steps — re-entry decides which of the six is in force — so they are
+stated here rather than in a capability of their own.
+
 ## ADDED Requirements
 
 ### Requirement: Six steps in a fixed order
 
 The setup MUST present exactly six steps, in this order: preflight, embedded,
 identity, network, start, confirm. The step in force MUST be observable, and
-MUST be preflight when the flow is first shown.
+MUST be preflight on every showing until the preflight has answered.
 
 When advancing is permitted, it MUST move to the next step in the sequence and
 MUST NOT skip one. When it is not permitted — the requirements below name every
 case — it MUST leave the step in force unchanged rather than move. Going back
 MUST move to the previous step and MUST NOT be offered on the first step.
+
+Exactly one other thing moves the step in force: the resume that follows the
+preflight answering, specified below, which may land on any step and is not an
+advance. A user's advance and back MUST NOT be able to skip, and that rule is
+about those two controls rather than about the step ever changing by more than
+one.
 
 Going back MUST NOT undo anything an earlier step already performed. Identity
 creation and node start are not reversible through this flow, so a step that has
@@ -35,14 +49,15 @@ offering to do it again.
 
 #### Scenario: The flow opens on preflight
 
-- **WHEN** the setup flow is shown for the first time
+- **WHEN** the setup flow is shown, before the preflight has answered
 - **THEN** the step in force MUST be the preflight step
 - **AND** the control for going back MUST NOT be enabled
 
 #### Scenario: Advancing walks the sequence without skipping
 
-- **GIVEN** a flow whose every step is permitted to advance
-- **WHEN** advance is invoked five times from the preflight step
+- **GIVEN** a flow whose every step is permitted to advance, whose step in force
+  has been put back to preflight
+- **WHEN** advance is invoked five times
 - **THEN** the step in force after each invocation MUST be, in order, embedded,
   identity, network, start and confirm
 - **AND** a sixth invocation MUST leave the step in force at confirm
@@ -584,3 +599,247 @@ MUST NOT repopulate the step now in force.
   another
 - **WHEN** the reply to that call arrives
 - **THEN** the step now in force MUST NOT display it
+
+### Requirement: The setup is raised over the view, and lowered by its own close
+
+The module MUST host the setup as a surface raised over whatever screen the user
+is on, leaving that screen in place underneath, and MUST NOT host it as a
+navigation destination that replaces the screen or adds an entry to the
+navigation history.
+
+The distinction is observable rather than presentational. Hosted as a navigation
+destination, going back from the setup has to choose between the step the user
+was on and the screen they came from, and the navigation state that would make
+that choice knows nothing about steps; the setup's own back control already moves
+between steps, so a second back control with different meaning would be two
+controls for one word. Raised over the view, lowering it restores exactly the
+screen that was underneath, whatever that screen was, with no decision to make.
+
+The module MUST expose whether the setup is raised, so that raising and lowering
+it can be observed from outside the surface itself.
+
+The setup MUST be lowered when the flow reports that the user has finished or
+given up, and MUST NOT lower itself: the surface reports, and the module that
+raised it decides. A surface that closed itself would leave whatever raised it
+still believing the surface is up.
+
+Lowering the setup MUST NOT change the screen underneath — not the view in
+force, not the repository it was showing, and not the tab within it.
+
+#### Scenario: Raising the setup leaves the screen underneath in force
+
+- **GIVEN** a module showing a repository, with the setup not raised
+- **WHEN** the setup is raised
+- **THEN** the module MUST report the setup as raised
+- **AND** the view in force MUST still be the repository view
+- **AND WHEN** the flow reports the user has finished
+- **THEN** the module MUST report the setup as not raised
+- **AND** the view in force MUST still be the repository view, showing the same
+  repository
+
+#### Scenario: The setup is lowered by its report, not by the control that raised it
+
+- **GIVEN** a module with the setup raised
+- **WHEN** the flow reports the user has finished
+- **THEN** the module MUST report the setup as not raised
+- **AND WHEN** the setup is raised again and the flow makes no such report
+- **THEN** the module MUST still report the setup as raised
+
+### Requirement: The setup and the settings surface are never raised together
+
+The module MUST NOT have the setup and the durable settings surface raised at the
+same time. Raising either one MUST lower the other.
+
+Both are opaque surfaces covering the same screen, so two raised at once leaves
+one of them unreachable behind the other with no control to lower it — which is
+the one-way door this module has already shipped once and which the settings
+surface's own close control exists to prevent. Lowering the one being covered is
+what keeps every raised surface reachable.
+
+Lowering one MUST NOT raise the other. A user who closes the setup is returned to
+the screen underneath, not handed a different surface they did not ask for.
+
+#### Scenario: Raising each surface lowers the other
+
+- **GIVEN** a module with the settings surface raised and the setup not raised
+- **WHEN** the setup is raised
+- **THEN** the module MUST report the setup as raised
+- **AND** the module MUST report the settings surface as not raised
+- **AND WHEN** the settings surface is then raised
+- **THEN** the module MUST report the settings surface as raised
+- **AND** the module MUST report the setup as not raised
+
+#### Scenario: Lowering one raises nothing
+
+- **GIVEN** a module with the setup raised and the settings surface not raised
+- **WHEN** the flow reports the user has finished
+- **THEN** the module MUST report the setup as not raised
+- **AND** the module MUST report the settings surface as not raised
+
+### Requirement: The setup opens only when a user asks for it
+
+The setup MUST be raised only in response to an act the user performs that names
+opening it. Two such acts exist: the request the Embedded state surface emits
+when its setup action is taken, and an equivalent request from the durable
+settings surface once that surface offers one.
+
+Selecting Embedded MUST NOT raise the setup, whether the mode is selected from
+the header, from the settings surface, or restored as the mode already in force
+when the module starts. Choosing a mode and configuring a node are different acts:
+a user selecting Embedded to see what is there is answering a different question
+from one who asked to set a node up, and a modal appearing because a segment was
+clicked is the same defect class as writing the mode because a screen was opened.
+
+Nothing else MUST raise it. In particular the setup MUST NOT be raised as a
+consequence of the backend reporting that no identity exists, of a start failing,
+or of the module becoming ready — those are states, and a state is not a request.
+
+#### Scenario: Selecting Embedded does not raise the setup
+
+- **GIVEN** a module in a mode other than `embedded`, with the setup not raised
+- **WHEN** Embedded is selected and the backend reports it in force, with
+  `getEmbeddedIdentity()` reporting `exists:false`
+- **THEN** the module MUST report the setup as not raised
+
+#### Scenario: Starting in Embedded with no identity does not raise the setup
+
+- **GIVEN** a module whose backend reports `embedded` already in force and
+  `getEmbeddedIdentity().exists` false
+- **WHEN** the module becomes ready
+- **THEN** the module MUST report the setup as not raised
+
+#### Scenario: The state surface's setup request raises it
+
+- **GIVEN** a module in `embedded` with the setup not raised, whose state surface
+  is rendering the no-identity state
+- **WHEN** the state surface's setup action is taken
+- **THEN** the module MUST report the setup as raised
+
+### Requirement: A reopened setup lands at the first step with work left
+
+When the setup is raised, the flow MUST re-run the preflight and MUST put in
+force the first step whose work the backend reports as not yet done. It MUST NOT
+resume at the step that was in force when it was last lowered, and MUST NOT
+depend on any record of a previous showing.
+
+Closing the setup part way through is safe precisely because every write it makes
+is separately durable — the mode, the identity and the started node each land on
+their own — so there is no half-committed state to resume into. What the backend
+reports is therefore the authority on what remains, and a remembered step index is
+a second opinion that is wrong whenever anything changed between the two showings:
+a module restarted, an identity created from elsewhere, a node that has since
+stopped.
+
+The step put in force MUST be derived from what the preflight replies report, so
+that a flow given different replies lands on different steps:
+
+- with the mode not yet reported as `embedded`, the embedded step;
+- with the mode `embedded` and `getEmbeddedIdentity().exists` false, the identity
+  step;
+- with an identity existing and the node not serving, the start step;
+- with an identity existing and the node serving, the confirm step.
+
+The resume MUST put the step in force once, as a single move, rather than by
+repeatedly advancing. Advancing moves the staleness epoch the preflight replies
+were issued under, so a resume that advanced step by step would invalidate the
+replies that determined where it was going — leaving the flow's findings
+unpopulated at the step it just chose, or the move abandoned part way.
+
+Until the preflight has answered, the step in force MUST remain the preflight
+step, and the flow MUST NOT move to a step chosen from replies that have not
+arrived. Every finding has a legitimate falsy value, so choosing from the defaults
+would land every reopening on the same early step whatever the backend holds.
+
+A resumed step MUST behave exactly as it does when reached by advancing: the
+requirements above on what each step may do, what it must state and what blocks it
+apply unchanged, and in particular a step that has already acted MUST report what
+it did rather than offer to act again.
+
+#### Scenario: Different backend states resume to different steps
+
+- **GIVEN** a setup raised against a backend reporting `embedded` in force,
+  `getEmbeddedIdentity().exists` false, and the node not serving
+- **WHEN** the preflight has answered
+- **THEN** the step in force MUST be the identity step
+- **AND WHEN** a setup is raised against a backend reporting `embedded` in force,
+  an existing identity with a node id, and the node not serving
+- **THEN** the step in force MUST be the start step
+- **AND WHEN** a setup is raised against a backend reporting `embedded` in force,
+  an existing identity and the node serving
+- **THEN** the step in force MUST be the confirm step
+
+#### Scenario: A mode not yet in force resumes to the embedded step
+
+- **GIVEN** a setup raised against a backend reporting a mode other than
+  `embedded`, and `getEmbeddedIdentity().exists` false
+- **WHEN** the preflight has answered
+- **THEN** the step in force MUST be the embedded step
+
+#### Scenario: The step reached last time does not decide where it reopens
+
+- **GIVEN** a setup that was raised, advanced to the network step, and lowered,
+  against a backend reporting `embedded` in force and `exists:false`
+- **WHEN** the setup is raised again and the preflight has answered
+- **THEN** the step in force MUST be the identity step
+- **AND WHEN** the same setup is lowered and raised again against a backend now
+  reporting an existing identity with the node serving
+- **THEN** the step in force MUST be the confirm step
+
+#### Scenario: The flow waits at preflight rather than resuming from defaults
+
+- **GIVEN** a setup raised against a backend whose identity reply is withheld,
+  reporting `embedded` in force and the node serving
+- **THEN** the step in force MUST be the preflight step
+- **AND WHEN** the withheld reply is delivered, reporting an existing identity
+- **THEN** the step in force MUST be the confirm step
+
+#### Scenario: The resumed step's findings are populated
+
+- **GIVEN** a setup raised against a backend reporting `embedded` in force, an
+  existing identity with a distinctive node id, and the node not serving
+- **WHEN** the preflight has answered and the step in force is the start step
+- **THEN** the identity finding MUST report that an identity exists, carrying that
+  node id
+- **AND** the control that creates an identity MUST NOT be enabled
+
+### Requirement: The setup is offered only for work it can do
+
+The module MUST raise the setup only for a request to set the embedded node up.
+A request to start or restart an already-created node MUST NOT raise it.
+
+The setup's start step is gated on no node answering the resolved socket, which a
+restart's node is; it offers no stop, so a restart's two calls cannot be sequenced
+from it; and it starts the node with the passphrase the identity step took in the
+same showing, which a later showing does not have. `getEmbeddedIdentity()` reports
+no field saying whether an existing identity's key is encrypted, so the module
+cannot even determine whether a passphrase is needed. Raising the setup for those
+requests would present a flow that cannot perform them.
+
+Starting and restarting an existing node are therefore **out of scope for this
+capability**, and belong to the durable settings surface, which is where a
+passphrase can be asked for. Until that surface exists, the state surface MUST NOT
+present an enabled action for the states whose action would be a start or a
+restart — see `embedded-state`. An action that reaches nobody is the dead end this
+work exists to remove, and leaving one enabled is worse than offering none,
+because it reads as a control that is merely broken.
+
+The requirement is about which request was made, not about which state the module
+is in, so a host that raised the setup for every request alike MUST fail it. That
+is what stops the rule being satisfied by a host that happens never to receive a
+start request today, and is why it must hold on the day such a request is
+routable.
+
+#### Scenario: A start request does not raise the setup
+
+- **GIVEN** a module in `embedded` with the setup not raised
+- **WHEN** a request to start the node is made
+- **THEN** the module MUST report the setup as not raised
+- **AND WHEN** a request to set the node up is instead made
+- **THEN** the module MUST report the setup as raised
+
+#### Scenario: A restart request does not raise the setup
+
+- **GIVEN** a module in `embedded` with the setup not raised, whose node reports
+  `running:true` with `serving:false` and no start outstanding
+- **WHEN** a request to restart the node is made
+- **THEN** the module MUST report the setup as not raised
