@@ -105,7 +105,10 @@
 #     matters MORE since Embedded became startable: the not-implemented
 #     placeholder used to keep that pane populated no matter what, and an
 #     embedded home with no identity is now the first state in this app that
-#     legitimately has nothing to list.
+#     legitimately has nothing to list. It is paired with
+#     `reposEmbeddedPanel`/`reposEmbeddedState`, which name WHAT is standing
+#     there — a panel that drew nothing and a panel that drew the wrong state
+#     fail differently, and only the second pair can see the second.
 #
 # WHAT THIS LAYER STRUCTURALLY CANNOT COVER, so nobody re-derives it.
 #
@@ -514,26 +517,48 @@ steps:
   # placeholder items' own `visible`, so it can only be false when something is
   # genuinely rendered. See RepoList.sayingNothing.
   #
-  # It matters MORE now, not less. While Embedded was unstartable the
-  # not-implemented state kept this pane populated whatever happened; that
-  # placeholder is gone, so an embedded home with no identity is the first state
-  # in this app that legitimately has nothing to list. If anything here is going
-  # to render nothing at all, it is this.
+  # **It is only genuinely meaningful now.** While Embedded was unstartable the
+  # not-implemented state kept this pane populated whatever happened, so this
+  # step could not fail here; the flip removed that placeholder and, for one
+  # change, nothing replaced it — an empty list under a red banner, which is the
+  # regression the Embedded state panel exists to repair. The panel is what
+  # `sayingNothing` reads here now, so this step and the one after it are the
+  # pair that says the panel both drew and drew the right thing.
   - name: and it is not merely blank
     wait_for:
       state: "root.reposSayingNothing === false"
     timeout: 45s
 
-  # The not-implemented state must be GONE — it is now a false claim about a
-  # mode the module fully supports short of a node daemon.
+  # What IS on screen, named. This is the assertion that replaced
+  # `root.reposNotImplemented === false`.
   #
-  # Asserted separately from the blank-pane check above because the two fail
-  # differently: this one catches a screen still saying "Embedded is not
-  # available in this version", which is a specific lie, while the one above
-  # catches a screen saying nothing at all.
-  - name: and no longer claims the mode is unimplemented
+  # That check was real while Embedded was the mode that set the flag — the
+  # placeholder had to come down, or the mode would render as one the build
+  # cannot start. With all three modes startable the flag is false everywhere, so
+  # it became a check nothing could fail; and deleting it outright would have
+  # left the one state a user actually lands in with nothing asserting anything
+  # about it. This spec runs against a real embedded home with no identity in it,
+  # which is state E1, so the replacement names E1.
+  #
+  # Both halves are asserted because they fail differently. `reposEmbeddedPanel`
+  # is read off the rendered item's own `visible`, so it catches a panel that
+  # derived correctly and never drew — which is a blank pane, and which the check
+  # above would catch too. `reposEmbeddedState` catches the panel drawing the
+  # WRONG state: a running-and-empty sentence over a home with no identity would
+  # satisfy every other assertion in this file.
+  - name: and renders the no-identity state instead
     expect:
-      state: "root.reposNotImplemented === false"
+      state:
+        - "root.reposEmbeddedPanel === true"
+        - "root.reposEmbeddedState === 'noIdentity'"
+
+  # And it asked nothing to get there. `navError` is what the old defect
+  # produced: `localListRepos` went out against a home with no identity, the
+  # backend returned `absentProfileReason`, and it latched into the red strip
+  # under a panel explaining that no node exists.
+  - name: and nothing errored, because nothing was asked
+    expect:
+      state: "root.navError === ''"
 
   # ---- back to the seed ---------------------------------------------------
   #
@@ -575,9 +600,17 @@ steps:
   # RE-FETCHED, against the seed. `repoCount > 0` cannot be satisfied by the
   # embedded home, which is empty, so this can only pass if leaving Embedded
   # issued a fresh `remoteListRepos` and it landed.
+  #
+  # `reposEmbeddedPanel === false` is added because it CAN fail, where the old
+  # flag could not: the Embedded state panel is real in the mode just left, and a
+  # panel that failed to stand down would leave the seed's repositories rendering
+  # behind a sentence about a node with no identity. That is the same defect the
+  # deleted assertion was originally guarding against, restored to a referent
+  # that exists.
   - name: and the seed's repositories arrive
     wait_for:
       state:
         - "root.repoCount > 0"
         - "root.navError === ''"
+        - "root.reposEmbeddedPanel === false"
     timeout: 60s

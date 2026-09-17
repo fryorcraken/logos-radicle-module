@@ -29,10 +29,34 @@ Item {
 
     signal repoActivated(var repo)
 
+    /// The Embedded state panel's action was taken. `kind` is "setup", "start"
+    /// or "restart".
+    ///
+    /// **A request, not the act.** This screen creates no identity, starts no
+    /// node and writes no mode — it names what the user asked for and lets the
+    /// host decide, which is what keeps "rendering the state writes nothing" a
+    /// structural property rather than a promise.
+    ///
+    /// NO SPEC: the spec requires the setup action to "request that the setup be
+    /// opened" and leaves the hosting to `embedded-setup`. **Nothing listens to
+    /// this yet** — the wizard's host is the next piece, and start/restart need a
+    /// passphrase prompt this screen has no place for. So the control is real,
+    /// the signal is real, and today it reaches nobody. That is deliberate and
+    /// visible rather than hidden: a control wired to a host that does not exist
+    /// would be the same dead end this capability was written to remove.
+    signal embeddedActionTaken(string kind)
+
     /// Rows currently listed — read by the UI tests.
     readonly property int count: repos.count
 
-    /// Whether this mode has no node to list at all.
+    /// Whether the reported startable set OMITS the mode in force.
+    ///
+    /// **This is no longer the fetch guard** — see `hasNodeToAsk`, which is.
+    /// Startability and "has a node to ask" are different questions, and reading
+    /// the first as the second is what lost the Embedded surface: a mode is
+    /// startable when it resolves a workable home, not when a node is running in
+    /// it. This property now decides one thing only, the unstartable
+    /// explanation, and is one of the two terms `hasNodeToAsk` conjoins.
     ///
     /// Keyed on the MODE rather than on `app.source`, and that distinction is
     /// the whole fix. `source` is the derived method prefix, and `local` and
@@ -56,10 +80,58 @@ Item {
     /// backend already reports means Phase 2 changes one list and this follows.
     readonly property bool notImplemented: !!app && app.modeStartable === false
 
+    /// The Embedded state in force, derived from what the backend reports.
+    ///
+    /// Inputs come from `app` — capabilities, identity and node status — and are
+    /// bound rather than copied, so a later reply moves the state without
+    /// anything here being told. A `null` app leaves every default in place,
+    /// which derives to `blocked`; that is only reachable before wiring exists,
+    /// and it is the inert direction (no fetch, no action).
+    ///
+    /// Held unconditionally rather than only in Embedded: it is a pure function
+    /// of its inputs, `embeddedShown` is what gates the rendering, and a
+    /// conditional instantiation would make the state unreadable from a test in
+    /// any other mode — which is exactly how a blank pane hides.
+    readonly property EmbeddedState embedded: EmbeddedState {
+        pathsProblem:   app ? (app.embeddedPathsProblem || "") : ""
+        home:           app ? (app.embeddedHome || "") : ""
+        identityExists: !!app && app.embeddedIdentityExists === true
+        running:        !!app && app.embeddedRunning === true
+        serving:        !!app && app.embeddedServing === true
+        startPending:   !!app && app.embeddedStartPending === true
+        startError:     app ? (app.embeddedStartError || "") : ""
+    }
+
+    /// Whether the Embedded state panel is the thing standing where a repository
+    /// list would be.
+    ///
+    /// In Embedded with nothing listed. NOT "in Embedded" alone: a serving node
+    /// with repositories renders the rows, and the panel would cover them.
+    readonly property bool embeddedShown:
+        !!app && app.mode === "embedded" && !notImplemented && count === 0
+
+    /// Whether this mode has a node that could answer a list request.
+    ///
+    /// **Keyed on whether there is a node to ask, never on whether the mode is
+    /// startable** — that is the requirement `source-modes` was re-keyed to and
+    /// the defect `embedded-state` exists to repair. `embedded` resolves a
+    /// workable home, so it is startable; a guard keyed on startability
+    /// therefore stopped firing for it at the same moment the panel behind it
+    /// stopped rendering, and the request went out against a home with no
+    /// identity.
+    ///
+    /// Both terms are live. `notImplemented` covers a mode the reported startable
+    /// set omits — no mode in this build, and the property is about the view for
+    /// any set it is given. `embedded.hasNodeToAsk` covers a startable mode whose
+    /// node does not exist or is not loaded.
+    readonly property bool hasNodeToAsk:
+        !notImplemented
+        && (!app || app.mode !== "embedded" || embedded.hasNodeToAsk)
+
     /// Whether this screen is currently saying NOTHING AT ALL: no rows, and no
     /// rendered explanation of why there are none.
     ///
-    /// Read off the two placeholder items' OWN `visible`, not recomputed from
+    /// Read off the three placeholder items' OWN `visible`, not recomputed from
     /// the same terms they are keyed on. That is the whole point: a copy of
     /// their conditions would agree with them whether or not either actually
     /// renders, which is the "fixture that answers the same for every input"
@@ -77,9 +149,45 @@ Item {
     /// `loadedOnce` is the term that keeps it honest: before the first reply
     /// there is legitimately nothing to say yet, and without it this would fire
     /// on every launch.
+    ///
+    /// **`embeddedState.visible` is carried here from the `notImplementedState`
+    /// this replaced, and that carrying is a requirement rather than tidiness.**
+    /// An observable naming an item that no longer exists silently reduces to a
+    /// constant: `!undefined` is `true`, so this would go on reporting "nothing
+    /// is rendered" whatever the panel did, and `tests/ui/local.yaml`'s
+    /// blank-pane assertion — the only assertion that can see a blank pane at
+    /// all — would stop being able to fail while continuing to pass.
+    ///
+    /// **`loadedOnce` is deliberately not required where a state panel is the
+    /// thing that should be rendering.** Four of the seven Embedded states issue
+    /// no request at all, so `loadedOnce` never becomes true in them — and a
+    /// version that required it would be false in every one of those states
+    /// whether or not the panel rendered. That is the fixture-that-answers-the-
+    /// same-for-every-input trap in the observable itself: the spec's scenario
+    /// "the observable follows the rendered item, not a recomputed copy"
+    /// prevents the panel from rendering and requires this to go TRUE, and it
+    /// could not.
+    ///
+    /// So `expectingAPanel` splits the two situations. Where a panel is what
+    /// should be on screen, its absence is the defect and there is nothing to
+    /// wait for. Where a list is, `loadedOnce` still keeps this quiet until the
+    /// first reply lands.
+    readonly property bool expectingAPanel: embeddedShown || notImplemented
+
+    /// Whether the Embedded state panel is ACTUALLY rendering.
+    ///
+    /// Read off the item's own `visible` rather than from `embeddedShown`, which
+    /// is the condition it is keyed on. The distinction is the one
+    /// `sayingNothing` documents: a copy of the condition agrees whether or not
+    /// the item draws, so an assertion on it cannot see the panel failing to
+    /// render — which is precisely the defect worth catching.
+    readonly property bool embeddedPanelShown: embeddedState.visible
+
     readonly property bool sayingNothing:
-        count === 0 && loadedOnce && !loading
-        && !notImplementedState.visible && !placeholder.emptyShown
+        count === 0 && !loading
+        && !embeddedState.visible && !notImplementedState.visible
+        && !placeholder.emptyShown
+        && (expectingAPanel || loadedOnce)
 
     ListModel { id: repos }
 
@@ -94,11 +202,18 @@ Item {
 
     function fetch() {
         if (!app) return;
-        // Embedded has no node to ask, so it asks nothing. Fetching and then
-        // hiding the result is how this bug returns: the reply would still be
-        // in flight, would still pass the prefix-based guard below, and would
-        // still repopulate the model behind the placeholder.
-        if (page.notImplemented) {
+        // A mode with no node to ask asks nothing. Fetching and then hiding the
+        // result is how this bug returns: the reply would still be in flight,
+        // would still pass the prefix-based guard below, and would still
+        // repopulate the model behind the panel — rows appearing under a
+        // sentence saying no node exists.
+        //
+        // The guard was keyed on `notImplemented` — on STARTABILITY — and that
+        // is what lost this surface. `embedded` became startable, so the guard
+        // stopped firing for it at the same moment the panel it protected
+        // stopped rendering, and `localListRepos` went out against a home with
+        // no identity. See `hasNodeToAsk`.
+        if (!page.hasNodeToAsk) {
             page.loading = false;
             page.hasMore = false;
             return;
@@ -318,11 +433,21 @@ Item {
     LoadingState {
         id: placeholder
         anchors.fill: parent
-        // Silenced entirely in Embedded. "No repositories matched" is a
+        // Silenced wherever no node answered. "No repositories matched" is a
         // DIFFERENT false claim, not a milder one: it says an embedded node
-        // exists and holds nothing, when none exists at all. A spinner would
-        // be worse still — it promises an answer that is not coming.
-        visible: !page.notImplemented && count === 0
+        // exists and holds nothing, when none exists, none is loaded, or its
+        // start was refused. A spinner would be worse still — it promises an
+        // answer that is not coming.
+        //
+        // The one state where the wording WOULD be true — `runningEmpty`, a
+        // serving node whose list came back with nothing — is covered by the
+        // panel's own sentence instead, which says the same thing and adds what
+        // the generic string cannot: that this node lists what it is SEEDING, so
+        // an empty list reads as a node with nothing seeded rather than as a
+        // node that has lost something. Two centred messages over one pane is
+        // one too many, so the panel stands down this placeholder in all seven
+        // states rather than in six.
+        visible: !page.notImplemented && count === 0 && !page.embeddedShown
         loading: page.loading
         loaded: page.loadedOnce
         count: repos.count
@@ -330,13 +455,25 @@ Item {
         loadingText: "Loading repositories…"
     }
 
-    // ---- Embedded: not implemented ------------------------------------
+    // ---- a mode this build cannot start -------------------------------
     //
     // A state of its own rather than an empty list, because the two say
-    // different things and only one of them is true. The wording is lifted
-    // from the toggle's own caption ("not available in this version yet") so
-    // the header and the body agree — this module has already shipped one bug
-    // from having two vocabularies for one fact.
+    // different things and only one of them is true.
+    //
+    // **It no longer names Embedded**, and that is the point rather than a
+    // tidy-up. This copy was written when Embedded was the one unstartable mode
+    // and read "Embedded … is not available in this version yet"; Embedded is
+    // startable now, so naming it here would be a false sentence rendered for
+    // whichever mode the backend actually declines. `source-modes` requires this
+    // state to be derived from the reported startable SET rather than from a
+    // mode name, and the wording has to follow the derivation or it re-encodes
+    // the mode name one layer up in prose.
+    //
+    // No mode in this build reports as unstartable, so this is the state a
+    // FOURTH mode — or a build where one of the three cannot run — inherits
+    // without a line of new UI. It also still renders during the window before
+    // the first `getCapabilities` reply, if that reply ever reports a set
+    // omitting the mode in force.
     Column {
         id: notImplementedState
         objectName: "notImplementedState"
@@ -349,8 +486,8 @@ Item {
             objectName: "notImplementedNote"
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: "Embedded runs a node inside Basecamp with its own separate "
-                + "identity — it is not available in this version yet."
+            text: "This version cannot start the selected mode, so there is no "
+                + "node to list repositories from."
             color: Theme.textDim
             font.pixelSize: Theme.fontLg
             wrapMode: Text.WordWrap
@@ -358,7 +495,7 @@ Item {
         }
 
         // Says what to do instead, so the state is not merely a dead end. It
-        // names the other two modes by the words on their segments.
+        // names the other modes by the words on their segments.
         Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
@@ -368,6 +505,78 @@ Item {
             font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
+        }
+    }
+
+    // ---- Embedded: the state panel ------------------------------------
+    //
+    // One centred panel standing where the repository list would be, saying
+    // which of the seven states is in force and offering that state's own next
+    // action. Never a spinner, and never "No repositories matched" — see
+    // `EmbeddedState.qml` for why each state is its own sentence rather than one
+    // banner with one button.
+    //
+    // **This replaces `notImplementedState` as the thing `sayingNothing`
+    // watches**, and that carrying is a requirement in its own right: an
+    // observable naming an item that no longer exists reduces to a constant,
+    // and the end-to-end assertion consuming it stops being able to fail while
+    // continuing to pass.
+    Column {
+        id: embeddedState
+        objectName: "embeddedState"
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Theme.gapLg * 2, Theme.captionWidth)
+        spacing: Theme.gap
+        visible: page.embeddedShown
+
+        Text {
+            objectName: "embeddedStateNote"
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            // The state's sentence, verbatim where the backend wrote it. Bound
+            // rather than assigned, so a later reply moves the words with the
+            // state and the two cannot disagree.
+            text: page.embedded.sentence
+            color: Theme.textDim
+            font.pixelSize: Theme.fontLg
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+        }
+
+        // The state's own action. Absent — not disabled-and-unexplained — where
+        // the state offers none: `blocked` offers nothing that would write,
+        // because nothing could succeed, and the sentence above already names
+        // the obstacle.
+        Button {
+            objectName: "embeddedStateAction"
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: page.embedded.actionKind !== ""
+            enabled: page.embedded.actionEnabled
+            text: page.embedded.actionLabel
+            // Requests the act; performs none of it. A state panel that acted
+            // because it was displayed would act without being asked, so nothing
+            // here creates an identity, starts a node or writes the mode — the
+            // signal leaves and the host decides.
+            onClicked: page.embeddedActionTaken(page.embedded.actionKind)
+
+            background: Rectangle {
+                implicitWidth: 180; implicitHeight: 30
+                radius: Theme.radius
+                color: parent.enabled
+                       ? (parent.hovered ? Theme.accentSoft : Theme.surface)
+                       : Theme.surface
+                border.color: Theme.border
+                border.width: 1
+                opacity: parent.enabled ? 1.0 : 0.5
+            }
+            contentItem: Text {
+                text: parent.text
+                color: Theme.text
+                font.pixelSize: Theme.fontMd
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                opacity: parent.enabled ? 1.0 : 0.5
+            }
         }
     }
 }

@@ -384,6 +384,173 @@ This paragraph is moved from `docs/PLAN.md`, where it was recorded as a
 constraint on unbuilt work; the constraint is now discharged and its reasoning
 belongs with the code that acts on it.
 
+### The seven Embedded states are a component, derived, with the ordering as data
+
+`EmbeddedState.qml` is a non-visual `QtObject` holding seven *reply fields* —
+`pathsProblem`, `home`, `identityExists`, `running`, `serving`, plus the two
+facts only the view holds (`startPending`, `startError`) — and deriving
+`current`, `sentence`, `actionLabel`, `actionKind`, `actionEnabled` and
+`hasNodeToAsk` from them. `RepoList` binds the fields and renders the answers.
+
+Three separate decisions are folded into that shape, and each one is a thing
+this repo has paid for before.
+
+**A component rather than seven conditions in `RepoList`.** Same reason
+`NavState` and `SourceState` are components: the behaviour is untestable in a
+view. `tst_embedded_state.qml` asks 15 questions of a `QtObject` with no window,
+where the alternative was hunting a `Button`'s `enabled` through a scene graph
+seven times over.
+
+**There is no `property string state` that a reply assigns.** Every input is a
+field a backend reply carried, and `current` is a pure function of them. A
+stored state is a second opinion, and it is wrong exactly when it matters — after
+a node's threads die, after a passphrase is refused, after the mode is changed
+from elsewhere. **`test_the_state_follows_a_later_reply_rather_than_the_first`
+moves the fields to running-and-serving and back, and a stored state cannot
+move back.**
+
+**The ordering lives in one `if` chain, read top to bottom, not as seven
+independent predicates.** More than one condition holds at once — a start
+refused in a home that later reports a `pathsProblem` — so "which one wins" is a
+real question that seven booleans answer seven times. As a chain it is answered
+once, and the answer is the chain's order: most fundamental obstacle first, so a
+user is told there is nowhere to write *before* being told a start failed rather
+than being sent to retry a start that cannot succeed. **Hoisting `startFailed`
+above `blocked` turns `test_the_most_fundamental_obstacle_is_the_one_rendered`
+red** at its first assertion, and nothing else.
+
+Two places in that order are worth knowing before anyone tidies them:
+
+- **`stopped` sits above `starting`.** A start issued against a node still
+  reporting `running:false` renders as stopped, because the backend's report
+  wins over what the view is waiting for. The real `startNode` returns only once
+  the control socket answers, so the window is one poll wide, and telling a user
+  "starting…" about a node the backend says is not running is the second-opinion
+  failure this whole component avoids.
+- **`actionEnabled` reads `startPending` directly rather than through
+  `current`.** That is what keeps "a second node cannot be started over the
+  first" true in the `stopped` window as well as the `starting` one. Folding
+  `startPending` into the state would make the guard depend on which of two
+  states a poll happened to land in. **Deleting the `!startPending` term turns
+  `test_the_start_action_is_withheld_while_a_start_is_outstanding` red**, at its
+  first assertion — the one in the `stopped` window, which is the leg a
+  state-folded version would fail.
+
+### The fetch guard is keyed on having a node, not on being startable
+
+`RepoList.fetch()`'s bail-out was `if (page.notImplemented)` — startability — and
+that is the coupling that lost this surface. A mode counts as startable when it
+resolves a workable home, not when a node is running in it. So the core-module
+change that added `embedded` to `startableModes()` made `notImplemented`
+permanently false, which stopped the guard firing *and* stopped the panel behind
+it rendering, in the same commit, with no gate failing. `localListRepos` then
+went out against a home with no identity, the backend returned
+`absentProfileReason`, and it latched into the red strip under an empty list.
+
+`hasNodeToAsk` is the replacement, and it is a conjunction of two conditions that
+fail for different reasons: the reported startable set omitting the mode (no mode
+in this build, and still the view's property for any set it is given), and a
+startable mode whose node does not exist or is not loaded. `startFailed` is in
+the second group for the same reason `stopped` is — a refused start left no node
+loaded. `starting` and `notServing` are not: a loaded node can be read, and a
+node that has stopped serving still answers reads, because reads never touch the
+daemon.
+
+**Reverting the guard to `notImplemented` reddens seven tests in
+`tst_embedded_panel.qml` and two in `tst_embedded_wiring.qml`** — the second pair
+being the error-banner defect itself, at the layer that can see why it happens.
+Verified by mutation, both directions.
+
+The general lesson, which is why this is written down rather than left in the
+code: **a guard and the explanation it protects must not be keyed on the same
+condition.** They were, and they went away together. Keying the guard on "is
+there a node" and the panel on "which state is in force" means a future change to
+startability can move neither.
+
+### `sayingNothing` reads the item's `visible`, and the observable was carried
+
+`RepoList.sayingNothing` — the only observable in any layer that can see a pane
+rendering nothing at all — read `notImplementedState.visible` *by name*. The
+panel that replaces it is a different item, so the property had to be carried to
+it, and **the failure to carry it would have been silent in the worst way**:
+`!undefined` is `true`, so `sayingNothing` would have gone on reporting "nothing
+is rendered" whatever the panel did, and `tests/ui/local.yaml`'s blank-pane
+assertion would have stopped being able to fail while continuing to pass.
+
+It is read off the item's own `visible` rather than from `embeddedShown`, the
+condition the item is keyed on, for the reason the original already documented: a
+recomputed copy agrees with the item whether or not the item draws. **Replacing
+`embeddedState.visible` with `embeddedShown` reddens exactly one test —
+`test_the_observable_follows_the_rendered_item` — and leaves the other eighteen
+green.** That is the point of that test existing: it is the only thing standing
+between the observable and a copy of its own condition, and the mutation proves
+it rather than the comment asserting it.
+
+One term had to change with the carrying. `loadedOnce` gated the whole
+expression, and four of the seven Embedded states issue no request at all, so
+`loadedOnce` never becomes true in them — a version that kept the gate would be
+false in every one of those states whether or not the panel rendered, and the
+"panel prevented from rendering" scenario could not go true. `expectingAPanel`
+splits it: where a panel is what should be on screen its absence is the defect
+and there is nothing to wait for; where a list is, `loadedOnce` still keeps this
+quiet until the first reply lands.
+
+### `reposNotImplemented` was replaced rather than deleted
+
+`Main.qml:356` exposed `repoList.notImplemented` and `tests/ui/local.yaml`
+asserted `=== false` on it. With all three modes startable that assertion is one
+nothing can fail — and CLAUDE.md's rule is that a check which cannot fail is
+worth no more than one that cannot pass. But deleting it outright would have left
+the one state a user actually lands in with nothing asserting anything about it,
+and `undefined === false` fails the step anyway, so the choice was never "delete
+or keep".
+
+`reposEmbeddedPanel` (the item's own `visible`) and `reposEmbeddedState` (which
+of the seven) replace it, and both are asserted because they fail differently: a
+panel that derived correctly and never drew, versus a panel that drew the wrong
+state. `local.yaml` runs against a real embedded home with no identity, which is
+E1, so the spec names E1 — and `reposSayingNothing === false`, two steps earlier
+in the same spec, becomes genuinely meaningful for the first time, because the
+thing it now reads is the panel.
+
+### The panel's action emits a signal that nothing listens to
+
+`RepoList.embeddedActionTaken(kind)` is emitted with `"setup"`, `"start"` or
+`"restart"`. **Nothing connects to it in `Main.qml` today**, deliberately: the
+wizard's host is the next piece, and start/restart need a passphrase prompt this
+screen has no place for.
+
+The alternative — no control at all until a host exists — would have left E1 with
+a sentence and no next step, which is the dead end this capability was written to
+remove. The alternative in the other direction — performing the act here — is
+refused by the spec and by the shape: `RepoList` is injected with one `call`
+function, so every backend call it could make is in the test's log, which makes
+"rendering the state writes nothing" structural rather than a promise
+(`test_rendering_the_state_writes_nothing`).
+
+So the control is real, the signal is real, and it reaches nobody. That is
+marked `NO SPEC:` on the signal rather than left to be discovered, and it is the
+one thing in this change a reviewer should check has not quietly become
+permanent.
+
+### The generic unstartable copy stopped naming Embedded
+
+`notImplementedState`'s text read *"Embedded runs a node inside Basecamp … it is
+not available in this version yet"*. Embedded is startable now, so that sentence
+would be rendered — falsely — for whichever mode the backend actually declines.
+`source-modes` requires the state to be derived from the reported startable set
+rather than from a mode name, and prose naming a mode re-encodes the mode name
+one layer up where no gate can see it. The copy is now mode-neutral, and
+`test_embedded_shows_the_not_implemented_state` asserts the note does *not*
+contain the word "Embedded".
+
+`tst_embedded.qml` was re-pointed rather than deleted for the same reason the
+requirement survived: the file is about a mode the startable set omits, and it
+drives `local` now instead of `embedded`. Driving `embedded` had become
+incoherent — its "and it must actually list" leg collided with the panel's own
+fetch guard, because a startable Embedded with no node correctly issues nothing,
+so the assertion would have failed for a reason the file is not about.
+
 ### The alias is not pre-validated in the view
 
 `createEmbeddedIdentity` passes the `radicle` crate's own statement of the alias
@@ -405,6 +572,20 @@ write for the same reason.
 - **Six steps is a lot of screen for a one-time task.** Accepted because each
   step exists to state a consequence at the moment a decision is made, which is
   the whole reason the wizard is preferred to a single form.
+- **The Embedded state is read on mode-settle and on backend-ready, not
+  polled.** `getNodeStatus` probes a control socket, and the panel is a state a
+  user acts on rather than a live monitor — so a node that dies while the panel
+  is on screen goes on reading as `runningEmpty` until something asks again.
+  Polling belongs with node control in Settings › Node, which is where a user
+  who cares about liveness is. The cost is that E6 is reached on the next
+  refresh rather than immediately, which the `notServing` sentence handles
+  honestly once it does arrive.
+- **`Main.qml`'s own wiring has no component test.** No test instantiates
+  `Main.qml` — `tst_embedded_wiring.qml` reproduces its shape with the real
+  components — so `refreshEmbedded()`, the `embeddedSettled` `Connections` and
+  the new `app` properties are covered only by `local.yaml` at the end-to-end
+  layer. That is a real gap and it is stated rather than papered over: the
+  component suite being green says nothing about them.
 
 ## Open questions
 

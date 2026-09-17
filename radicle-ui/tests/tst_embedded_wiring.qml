@@ -129,18 +129,36 @@ Item {
     // ------------------------------------------------------------------
 
     property var caps: ({ mode: "local", localAvailable: true,
-                          startableModes: ["explore", "local"] })
+                          startableModes: ["explore", "local", "embedded"] })
 
     /// Push the backend's state into `caps` as a WHOLE new object, the way
     /// `onCapsJsonChanged` does — a mutated `var` does not re-evaluate the
     /// bindings that read it.
+    ///
+    /// **All three modes are reported startable**, which is what this build
+    /// actually reports. The fixture said `["explore", "local"]` while Embedded
+    /// was unstartable, and leaving it there after the flip would have been the
+    /// worst of both: the assertions below would keep passing on the strength of
+    /// a guard that no longer fires in the real app, which is precisely how this
+    /// surface was lost the first time.
     function publishCapabilities() {
         caps = {
             mode: backend.storedMode,
             localAvailable: backend.storedMode === "local",
-            startableModes: ["explore", "local"]
+            startableModes: ["explore", "local", "embedded"]
         };
     }
+
+    // What Embedded's state derives from, as Main.qml exposes it. A resolved
+    // home with NO identity — the state a user is in the moment they pick
+    // Embedded, and the one whose fetch this file is about.
+    property string embeddedPathsProblem: ""
+    property string embeddedHome: "/basecamp/embedded-home"
+    property bool embeddedIdentityExists: false
+    property bool embeddedRunning: false
+    property bool embeddedServing: false
+    property bool embeddedStartPending: false
+    property string embeddedStartError: ""
 
     /// The REAL SourceState, with Main.qml's own handlers on its real signals.
     ///
@@ -281,8 +299,15 @@ Item {
             settle();
 
             compare(harness.mode, "embedded", "precondition: Embedded is in force");
-            verify(repoList.notImplemented,
-                   "precondition: and the not-implemented state is showing");
+            // The Embedded STATE PANEL, not the not-implemented one. That
+            // assertion used to read `repoList.notImplemented`, which was true
+            // only because the fixture reported Embedded unstartable; with the
+            // set reporting what this build reports, it is false, and the thing
+            // standing where the list would be is the no-identity state.
+            verify(repoList.embeddedPanelShown,
+                   "precondition: and the Embedded state panel is showing");
+            compare(repoList.embedded.current, "noIdentity",
+                    "precondition: naming the state the user is actually in");
             compare(repoList.count, 0, "precondition: with no repositories");
             compare(nav.error, "",
                     "Embedded shows a not-implemented screen with an error "
