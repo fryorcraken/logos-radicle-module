@@ -30,10 +30,9 @@ happened twice.
 
 **You are dispatched with `isolation: "worktree"`, so you are already standing in
 a worktree of your own**, forked from the runner's HEAD. Use ordinary relative
-paths; there is no `git -C` and no absolute-path prefixing to do, and nothing to
-move into. Do not call `EnterWorktree` — you are in the right tree, and the call
-only takes you somewhere your Bash calls will be refused. `README.md`'s "Handing
-over between agents" records why, with both probes verbatim.
+paths, and do not call `EnterWorktree` — the call only takes you somewhere your
+Bash calls will be refused. `README.md`'s "Handing over between agents" records
+why.
 
 ## Every Bash call you make may cost the user an approval click
 

@@ -158,10 +158,9 @@ branch it has to guess. Never `git add -A`.
 ## Your worktree, and handing it back
 
 You arrive inside a worktree of your own, forked from the runner's HEAD, on a
-harness-named branch. Use ordinary relative paths — there is no `git -C` and no
-absolute-path prefixing to do — and do not call `EnterWorktree`: you are already in
-the right tree, and the call only moves you somewhere your Bash calls are refused.
-`README.md`'s "Handing over between agents" records why, with both probes verbatim.
+harness-named branch. Use ordinary relative paths, and do not call
+`EnterWorktree`: the call only moves you somewhere your Bash calls are refused.
+`README.md`'s "Handing over between agents" records why.
 
 **You cannot remove the tree — you are standing in it, and `git worktree remove`
 refuses the directory you are in.** That refusal reads like a permissions problem

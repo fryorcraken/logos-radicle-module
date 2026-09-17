@@ -24,16 +24,13 @@ worktree once its work is cherry-picked, and the reading below.
 ## One runner per piece, sitting in that piece's worktree
 
 **Your HEAD is the fork point for every agent you dispatch.** With
-`worktree.baseRef: "head"` (see README.md — it is required, and it is not in the
-repository), an agent dispatched with `isolation: "worktree"` gets a tree cut
-from wherever your session's HEAD is. Measured: runner HEAD `a949ec6`,
-`origin/main` `cafa02b`, agent reported `a949ec6`.
+`worktree.baseRef: "head"` (see README.md), an agent dispatched with
+`isolation: "worktree"` gets a tree cut from wherever your session's HEAD is.
 
 So **enter your piece's worktree once, with `EnterWorktree(path: <absolute
-path>)`, and stay there.** That works for you — a session moving *itself* is the
-case the tool is built for, verbatim *"Entered worktree at …/probe-baseref on
-branch probe/baseref. The session is now working in the worktree."* It is
-dispatched agents that cannot do it, for reasons README.md keeps.
+path>)`, and stay there.** A session moving *itself* is the case the tool is
+built for; it is dispatched agents that cannot do it, for reasons README.md
+keeps.
 
 **Why one runner per piece, and not one runner switching branches.** Two
 alternatives were on the table:
@@ -169,10 +166,10 @@ tree, forked from your HEAD, with a working directory it does not have to correc
 > `openspec/changes/<name>/findings/`. Piece branch `piece/<name>`. Commit to
 > your own branch and report its name, so the work can be cherry-picked.
 
-**Take the `git -C` instruction and the `EnterWorktree` prohibition out of your
-briefs.** An agent that is already in the right place needs neither, and a brief
-carrying them sends it hunting for a problem it does not have. The explanation
-stays in README.md, where a reader who meets the refusal can find it.
+**Keep `git -C` and `EnterWorktree` out of your briefs.** An agent already in the
+right place needs neither, and a brief carrying them sends it hunting for a
+problem it does not have. The explanation stays in README.md, where a reader who
+meets the refusal can find it.
 
 **What you must still ask for is the branch name.** The agent lands on a
 harness-named `worktree-agent-<id>`, not on `piece/<name>`, so its commits need
@@ -195,15 +192,14 @@ correct. It is writers that must be serialised.
 **A dispatched agent cannot be put inside a pre-existing worktree.** Not "usually
 fails" — two probes measured both routes and both fail, the second one *silently*
 until the agent's first Bash call. **The transcripts live in
-[`README.md`](README.md)**, under "Why the prohibition is still written down" and
-the `Works?` table beside it; they are quoted verbatim there and in one place
-only, because two copies of a measurement drift and the wrong one gets read.
+[`README.md`](README.md)**, under "Why the prohibition is written down anyway"
+and the `Works?` table beside it, in one place only because two copies of a
+measurement drift.
 
-What you need from them here is the operational consequence, which is short:
+The operational consequence is short:
 
-- **Dispatch with `isolation: "worktree"` and let the agent be**, which is what
-  the section above already tells you. That route works completely and is what
-  this flow runs on.
+- **Dispatch with `isolation: "worktree"` and let the agent be.** That route
+  works completely and is what this flow runs on.
 - **Do not reach for `EnterWorktree` on an agent's behalf, and do not put it in a
   brief.** The tool moves only the session that calls it, so you could not do it
   for an agent even if it were correct.
@@ -212,19 +208,10 @@ What you need from them here is the operational consequence, which is short:
   combination probe 2 measured failing — isolation *plus* an `EnterWorktree` call
   across into the piece tree. Isolation alone never crosses, so nothing breaks.
 
-An agent that meets the refusal without this context improvises, and the
-improvisations (`env -C`, `cd &&`) each cost the user an approval click — which
-is why a brief must not send one looking for a problem it does not have.
-
-`EnterWorktree` is the right tool for a **session moving itself** — which is what
-you are, when you enter your piece's worktree. It is dispatched agents that
-cannot use it.
-
 ### The setting this depends on, and how it fails
 
-`worktree.baseRef: "head"` lives in `.claude/settings.json`, which **`.gitignore`
-excludes** (`git check-ignore -v` names `.claude/*`). It therefore does not
-travel with a clone or a fresh checkout.
+`worktree.baseRef: "head"` lives in `.claude/settings.json`, which is **tracked**
+and so travels with a clone.
 
 **Nothing fails when it is missing.** Agents are simply cut from
 `origin/<default-branch>` instead of your HEAD, hold none of the piece's commits,
@@ -298,25 +285,21 @@ remote-tracking ref, and git's `branch.autoSetupMerge` default then writes
 branch is set up to push to `main` from the moment it exists.
 
 This is the cause of the bare-`git push`-lands-on-`main` warning that this file
-and `CLAUDE.md` both carry. Measured: `git config --get-regexp "^branch\.piece"`
-returned `merge refs/heads/main` for both piece branches created without the
-flag, and piece A's `git push origin piece/embedded-node-wizard` was **rejected
-by branch protection for `refs/heads/main`** — it only went through with a
-fully-qualified refspec. The agent reported the plain push form as "not safe in
-these worktrees", which is the wrong lesson to draw: the push was fine and the
-branch creation was at fault.
+and `CLAUDE.md` both carry. Measured: a branch created without the flag has
+`merge refs/heads/main` in its config, and `git push origin piece/<name>` from it
+was **rejected by branch protection for `refs/heads/main`**, going through only
+with a fully-qualified refspec. The lesson is about branch creation, not about
+the push form.
 
-**Check it with `git config`, not `git branch -vv`.** `branch -vv` is the check
-you may know from elsewhere and it cannot catch this: it prints `[origin/main]`,
-and nothing in that output tells an intended upstream from a wrong one. The
-positive signal is:
+**Check it with `git config`, not `git branch -vv`.** `branch -vv` cannot catch
+this: it prints `[origin/main]`, and nothing in that output tells an intended
+upstream from a wrong one. The positive signal is:
 
 ```
 git config --get-regexp "^branch\.<name>"
 ```
 
-**returning nothing.** Verified: with `--no-track` the creation output omits the
-"set up to track" line and that command returns nothing at all.
+**returning nothing.**
 
 A branch created this way has no upstream, so a push names the refspec in full:
 `git push origin refs/heads/piece/<name>:refs/heads/piece/<name>`.
@@ -326,8 +309,6 @@ A branch created this way has no upstream, so a push names the refspec in full:
 `git worktree remove <path>` as soon as a branch is merged or abandoned. Every
 stale checkout is a full copy of the repo, so a recursive grep hits each one —
 and a citation from a stale copy reads exactly like one from the real tree.
-
-This repo has reached **fifteen** at once, most on branches merged milestones ago.
 
 `git worktree list` read against the open-PR count is the check: a tree with no
 open PR and no running agent is prunable. The gap grows quietly, since nothing

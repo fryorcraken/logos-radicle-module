@@ -22,11 +22,10 @@ read no further than the lines you are mutating.
 
 **You are dispatched with `isolation: "worktree"`, so you arrive inside a worktree
 of your own**, forked from the runner's HEAD and on a harness-named branch. Use
-ordinary relative paths — there is no `git -C` and no absolute-path prefixing to
-do — and do not call `EnterWorktree`: you are already where you belong, and the call
-only moves you somewhere every Bash call is refused, which for you would mean no
-test run ever executes while the files you read look right. `README.md`'s "Handing
-over between agents" records why, with both probes verbatim.
+ordinary relative paths, and do not call `EnterWorktree`: the call only moves you
+somewhere every Bash call is refused, which for you would mean no test run ever
+executes while the files you read look right. `README.md`'s "Handing over between
+agents" records why.
 
 The isolation is what makes mutation safe: two reviewers sharing a tree see each
 other's broken code and cannot tell it from the author's.

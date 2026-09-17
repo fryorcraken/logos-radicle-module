@@ -180,16 +180,15 @@ rather than writing a test that cannot fail.
 
 ## Where your work lands
 
-**Use plain relative paths.** You are already in the right tree, so there is no
-`git -C`, no absolute-path prefixing and nothing to `cd` into — which also means
-the suites run plainly: `cargo test` and `sh radicle-ui/tests/run-qml-tests.sh`
-work as written. Never a compound command; `cd <dir> && cargo test` costs an
-approval click even though `cargo test` is allow-listed. For a suite in a
-subdirectory, prefer the tool's own path flag (`cargo test --manifest-path
-radicle/rust-ffi/Cargo.toml`) over moving directory.
+**Use plain relative paths.** You are already in the right tree, so the suites
+run as written: `cargo test` and `sh radicle-ui/tests/run-qml-tests.sh`. Never a
+compound command; `cd <dir> && cargo test` costs an approval click even though
+`cargo test` is allow-listed. For a suite in a subdirectory, prefer the tool's
+own path flag (`cargo test --manifest-path radicle/rust-ffi/Cargo.toml`) over
+moving directory.
 
-**You must not try to move.** `EnterWorktree` is for a session moving itself, not
-a dispatched agent; `README.md`'s "Handing over between agents" records why.
+**Do not call `EnterWorktree`** — it is for a session moving itself;
+`README.md`'s "Handing over between agents" says why a dispatched agent cannot.
 
 **You are not on `piece/<name>`.** The harness puts you on `worktree-agent-<id>`.
 Read it with `git rev-parse --abbrev-ref HEAD`, commit there, and **tick the

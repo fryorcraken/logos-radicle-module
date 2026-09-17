@@ -145,13 +145,9 @@ satisfied-by-construction and say what makes the absence real.
 ## Where your commits go
 
 **You arrive already inside your own worktree**, forked from the runner's HEAD,
-so it holds the piece's commits. Use **plain relative paths** — no `git -C`, no
-absolute-path prefixing, and nothing to `cd` into. You are in the right place
-before your first tool call.
-
-**You must not try to move.** `EnterWorktree` is for a session moving itself, not
-for a dispatched agent, and the two ways it fails are recorded in `README.md`'s
-"Handing over between agents". You have no reason to reach for it.
+so it holds the piece's commits. Use **plain relative paths**, and do not call
+`EnterWorktree` — it is for a session moving itself, and `README.md`'s "Handing
+over between agents" says why a dispatched agent cannot.
 
 **You are not on `piece/<name>`.** The harness puts you on its own branch, named
 `worktree-agent-<id>`. Read it rather than assuming it:
@@ -163,23 +159,17 @@ git rev-parse --abbrev-ref HEAD
 **`lgs basecamp build` acts on the cwd's project root — which is now yours, so
 run it plainly.** `lgs` resolves `scaffold.toml`'s relative module refs
 (`path:./radicle#lgx`) against the root it was invoked from, and there is no flag
-that changes it. Being placed in your own tree is what makes that a non-problem:
-the cwd is right, so the build is right.
+that changes it.
 
-**Recognise the failure a wrong cwd causes here, because it leaves no trace.** A
-build run from the wrong project root does not fail — it succeeds, reporting a
-green build of code you did not write, indistinguishable in the output from a
-green build of code you did. A tool that refused would be harmless; this one
-does not. So **if you are ever unsure which tree you are in, `pwd` before you
-trust a green build.** And never report a build you did not run.
+**A build run from the wrong project root leaves no trace.** It does not fail —
+it succeeds, reporting a green build of code you did not write, indistinguishable
+from a green build of code you did. So **if you are ever unsure which tree you
+are in, `pwd` before you trust a green build.** And never report a build you did
+not run.
 
 **Commit to your own branch**, the `worktree-agent-<id>` you are on. The runner
 cherry-picks it onto `piece/<name>` once you hand back, so **report the branch
-name in your report** — it is the one thing that cannot be recovered without you,
-and the runner cannot guess a name the harness chose.
-
-Let the commit message say what the commit is; the branch name is not the place
-for it, and here it is not even yours to choose.
+name** — the runner cannot guess a name the harness chose.
 
 Never `git add -A`; commit named paths, because a worktree collects build output
 (`.scaffold/`, `target/`, `result-*` out-links, `./tmp/` scratch). The README's
@@ -210,23 +200,17 @@ The first line is the upstream check and **expects no output**; the paragraph
 after this section says why, and why `git branch -vv` is not it.
 
 Then report your branch name and hand back. The runner cherry-picks your commits
-onto its own local `piece/<name>` afterwards — that is for *its* HEAD, which is
-the fork point for the next agent, and it is not what puts your work on the
-remote. You already did that.
+onto its own local `piece/<name>` afterwards — that is for *its* HEAD, the fork
+point for the next agent, and it is not what puts your work on the remote.
 
-**Why "you cannot open it" is the wrong conclusion**, stated because the argument
-for it sounds right: the objection is that your commits sit on a harness-named
-branch nothing downstream tracks. True, and the prohibition it supports is kept —
-**never push `worktree-agent-<id>` itself**, a harness-named branch on the remote
-being the same failure as a reviewer branch reaching it. But that is an objection
-to pushing *that ref*, not to pushing *to* `piece/<name>`, and a refspec
-distinguishes the two. Push the piece ref, never your own.
+**Never push `worktree-agent-<id>` itself** — a harness-named branch on the
+remote is the same failure as a reviewer branch reaching it. The refspec above
+distinguishes the two: push the piece ref, never your own.
 
 **You cannot check out `piece/<name>`, and must not try.** It is checked out in
-the runner's worktree, and git refuses a branch that is checked out elsewhere —
-measured: `fatal: 'piece/worktree-dispatch-fix' is already used by worktree at
-…`. That is why the sequence above pushes a refspec rather than cherry-picking
-locally. A local cherry-pick is the runner's, and it is not available to you.
+the runner's worktree, and git refuses a branch checked out elsewhere (`fatal:
+'piece/<name>' is already used by worktree at …`). That is why the sequence above
+pushes a refspec. A local cherry-pick is the runner's.
 
 Two reasons this cannot wait for review time:
 
@@ -239,14 +223,11 @@ Two reasons this cannot wait for review time:
   pass it always does: commit, push, never open a second.
 
 **That `git config --get-regexp "^branch\.piece"` check expects nothing back.**
-The piece branch is
-created with `git worktree add --no-track`, so no upstream is the positive
-signal. `git branch -vv` is *not* the check — it prints `[origin/main]` either
-way, giving no way to tell an intended upstream from a wrong one, which is how a
-bare `git push` has landed commits on `main` here more than once. That is also
-why the push above names both sides of the refspec rather than relying on a bare
-`git push`: with no upstream there is nothing for one to resolve to, and `HEAD`
-on the left is what carries your commits.
+The piece branch is created with `git worktree add --no-track`, so no upstream is
+the positive signal. `git branch -vv` is *not* the check — it prints
+`[origin/main]` either way, which is how a bare `git push` has landed commits on
+`main` here more than once. That is also why the push above names both sides of
+the refspec, with `HEAD` on the left as the ref carrying your commits.
 
 The title says what the change does, not which stage produced it; the body says
 why it exists and names every `NO SPEC:` you left. Do not narrate your commits —

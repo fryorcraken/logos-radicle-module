@@ -41,12 +41,6 @@ included.
 stable number, and that PLAN.md sheds as changes land. Cite by requirement
 name, or restate the substance in one clause.
 
-`grep -rn "§" openspec/specs` currently returns nothing here, so this is a rule
-kept rather than a mess being cleaned — which is the cheap moment to state it.
-The sibling dialectica repo has a live instance it chose to leave alone, on the
-grounds that an archive sweep which also edits prose is a sweep nobody can
-review; that is the right call and the reason to not acquire one.
-
 ### PLAN.md sheds in two directions
 
 As a change lands, the part of PLAN.md it implements moves out:
@@ -74,11 +68,6 @@ beside it records one spike and is finished. Both cite the crate source line by
 line, which is what makes a claim in PLAN.md re-verifiable rather than
 re-derivable. PLAN.md is the cross-milestone view; the two overlap on M3, and the
 more recently edited one wins.
-
-An earlier version of this paragraph called both files frozen. A milestone step
-edited one of them two days later, which is the lesson: **do not write down that
-a document has stopped changing.** It is a claim about the future, and the
-cheapest kind to get wrong.
 
 ## The roles
 
@@ -135,14 +124,11 @@ and each **deletes its worktree** when done rather than restoring, since deletin
 cannot half-succeed where a restore depends on having tracked every edit.
 
 **The runner creates each reviewer's worktree and names it in the dispatch**, and
-the reviewer deletes it. Stating the owner matters because the failure on ambiguity
-is silent and destructive in both directions: a reviewer that assumes it must make
-its own may instead mutate the tree it was launched in, which is the piece's; and
-one that assumes it was given one may `--force`-remove a tree holding the only copy
-of somebody's work. **A reviewer that was not given a worktree path stops and says
-so** rather than choosing either fallback.
-
-Every branch rule below follows from that asymmetry.
+the reviewer deletes it. Ambiguity here is silent and destructive both ways: a
+reviewer that assumes it must make its own may instead mutate the piece's tree,
+and one that assumes it was given one may `--force`-remove a tree holding the
+only copy of somebody's work. **A reviewer that was not given a worktree path
+stops and says so** rather than choosing either fallback.
 
 ### Branch names say which kind of branch it is
 
@@ -160,9 +146,6 @@ cherry-picked onto it — writers exactly as reviewers.
 `review/<name>/<dimension>` to predict, so an agent reports the name it actually
 landed on (`git rev-parse --abbrev-ref HEAD`) and the runner picks from that. A
 name nobody recorded is work nobody can find.
-
-Named for the role and not the stage, because `dev/x` invites a `test/x` beside
-it — which is the shape this section exists to stop.
 
 **The PR is opened on `piece/<name>` and nothing else. Whichever ref it is opened
 on, it is stuck with — and every workaround loses something.** A PR's head ref is
@@ -207,9 +190,6 @@ with `GH006`. The archive is the one that reads as though it might be exempt,
 being a bookkeeping commit; it is not, and it goes onto the piece branch like
 everything else.
 
-**Every agent gets its own branch**, reviewers included: the harness names a
-branch per dispatch and every agent lands on one.
-
 Cherry-pick rather than merge, so the task branch reads as a flat sequence rather
 than six merge commits carrying six branches.
 
@@ -223,10 +203,9 @@ rule:
   `target/`, `result-*` out-links, `./tmp/` scratch, and whatever is added to that
   list next. Noise, which a reviewer spots.
 
-The second reason is the one an agent remembers, being concrete; the first is the one
-that does damage, so it is stated first. **This is the canonical copy of the artefact
-list**; each agent file states the rule and points here rather than repeating the
-list, which is the part that changes.
+**This is the canonical copy of the artefact list**; each agent file states the
+rule and points here rather than repeating the list, which is the part that
+changes.
 
 **Check `git config --get-regexp "^branch\.<name>"` before any git write, and
 expect it to return nothing.** A bare `git push` has landed commits directly on
@@ -277,20 +256,13 @@ keeping `[x]` single-valued, and it is the right way round — a tool that count
 skipped stage beats one that cannot tell it from a finished one.
 
 **A piece with no behaviour change still gets a change folder and a stage block.**
-A test-only or docs-only piece adds no requirement, so it has no spec delta and its
-spec row is struck through with that reason — declared as `skip_specs: true`
+A test-only or docs-only piece adds no requirement, so it has no spec delta and
+its spec row is struck through with that reason — declared as `skip_specs: true`
 **alongside a `schema:` key** in the change's `.openspec.yaml`, because the marker
 on its own is reported as "not valid change metadata, so the marker is not
 honored". It still needs reviewing, and without the block there is no unticked row
-to say so.
-
-**A piece with no behaviour change still gets a change folder and a stage block.**
-A test-only piece — an integration target, a regression suite — adds no
-requirement, so it has no spec delta and its spec row is struck through with that
-reason. It still needs reviewing, and without the block there is no unticked row to
-say so: the signal that catches a missing reviewer is absent exactly where it is
-easiest to skip one. The first such piece here reached review with no
-`openspec/changes/<name>/` at all, so a reviewer had no row to tick and said so.
+to say so: the signal that catches a missing reviewer is absent exactly where it
+is easiest to skip one.
 
 **`findings/<dimension>.md`**, one file per reviewer — `correctness`, `security`,
 `readability`, `architecture`, `spec-test`, `design-review`. **Every finding is a
@@ -312,15 +284,14 @@ before merge, once no box is empty.
 So "blocks the merge" is literal and checkable: `grep -rn "^- \[ \]"` over the
 directory either returns lines or it does not.
 
-Three consequences worth knowing whatever your role:
+Four consequences worth knowing whatever your role:
 
 - **An unticked entry blocks the merge.** A file, not a convention, so a forgotten
   finding stops a PR instead of evaporating.
 - **The gate only sees checkboxes.** `grep -rn "^- \[ \]"` reports a file of
-  headings as clean, so an entry written any other way is invisible to it — this
-  has already happened, with forty findings including four high-severity defects
-  reading as done. Before trusting an empty result, check the files have boxes at
-  all: `grep -rc "^- \[" findings/` should be non-zero for every one.
+  headings as clean, so an entry written any other way is invisible to it. Before
+  trusting an empty result, check the files have boxes at all:
+  `grep -rc "^- \[" findings/` should be non-zero for every one.
 - **Findings stay attributable**, which is what a rejection needs: a fixer that
   disagrees knows which reviewer to argue with.
 - **Never relay a finding through a brief.** Name the file. A paraphrase arrives
@@ -346,17 +317,16 @@ is dispatched with `isolation: "worktree"` and arrives in a correct tree already
 > `piece/embedded-wizard`. Commit to your own branch and say what it is called,
 > so the work can be cherry-picked onto the piece.
 
-**Keep a `git -C <worktree>` instruction and an `EnterWorktree` prohibition out
-of the briefs** — an agent that is already in the right place needs neither, and
-a brief carrying them sends it looking for a problem it does not have. What the
-brief must say is where the commits end up.
+**Keep `git -C <worktree>` and `EnterWorktree` out of the briefs** — an agent
+already in the right place needs neither, and a brief carrying them sends it
+looking for a problem it does not have. What the brief must say is where the
+commits end up.
 
 #### Why the prohibition is written down anyway
 
-What follows is not an operating instruction; it is the explanation for why
-dispatches look the way they do. Keep it findable, because an agent that meets
-the refusal without this context improvises, and the improvisations cost real
-time.
+This is not an operating instruction but the explanation behind one. Keep it
+findable: an agent that meets the refusal without it improvises, reaching for
+`env -C` or `cd &&` — an approval click each, and neither needed.
 
 **A dispatched agent must not call `EnterWorktree`.** Not "should try and fall
 back" — the call cannot succeed usefully, and two probes measured both routes:
@@ -384,25 +354,15 @@ long after the agent has concluded it is in the right place. Do not reach for
 `isolation: "worktree"` on discovering route 1 — that is the trap this paragraph
 exists to close.
 
-**The cost of leaving this unexplained is what makes it worth the space.** An
-agent that meets the refusal with no explanation to hand reaches for `env -C` or
-`cd &&`, each of which costs the user an approval click and neither of which it
-needs — it is already in the right tree.
-
-**The tool itself is not broken — it is for a session moving itself**, which is
-what `CLAUDE.md` describes and what it is built for. The distinction is who
-calls it, not whether it works.
-
 ### How an agent actually gets the right tree: `isolation: "worktree"`
 
-**This is the route the flow runs on.** Everything above is why it is not
-`EnterWorktree`. **Dispatch with `isolation: "worktree"` and no `EnterWorktree`
-call**, and the agent arrives in its own worktree with a working directory that
-needs no correcting: relative paths resolve, every Bash command runs, and there
-is nothing to prefix with `git -C`.
+**This is the route the flow runs on. Dispatch with `isolation: "worktree"` and
+no `EnterWorktree` call**, and the agent arrives in its own worktree with a
+working directory that needs no correcting: relative paths resolve and every Bash
+command runs.
 
-**That is not a contradiction of the section above, and the distinction is the
-single easiest thing to conflate**, so it is worth stating flatly:
+The distinction is the single easiest thing to conflate, so it is worth stating
+flatly:
 
 | | Works? |
 |---|---|
@@ -417,31 +377,26 @@ session called `EnterWorktree(path: …)` and got *"Entered worktree at
 …/probe-baseref on branch probe/baseref. The session is now working in the
 worktree."* **Who calls it decides the outcome, not whether the tool works.**
 
-#### `baseRef: "head"` is required, and it is not in the repository
+#### `baseRef: "head"` is required
 
 By default the agent's tree is cut from `worktree.baseRef: "fresh"` —
 `origin/<default-branch>` — which holds **none** of the piece's commits. An agent
-reviewing or extending a piece would be reading the wrong code. `.claude/settings.json`
-fixes the fork point to the runner's HEAD:
+reviewing or extending a piece would be reading the wrong code.
+`.claude/settings.json` fixes the fork point to the runner's HEAD:
 
 ```json
 { "worktree": { "baseRef": "head" } }
 ```
 
-Measured with a fork point deliberately different from `origin/main` so the
-result could not be a coincidence: runner HEAD `a949ec6`, `origin/main`
-`cafa02b`, and the dispatched agent reported `a949ec6`. It also had a working
-cwd, unrefused Bash, and read `.claude/agents/RUNNER.md` by relative path.
+**That file is tracked, so it arrives with a clone.** `.gitignore` excludes
+`.claude/*` but re-admits it by name, for the reason recorded beside the rule:
+ignored, it reached no fresh checkout, and **nothing failed when it was absent** —
+agents were silently cut from `origin/main` and no error said so. If an agent
+reports a fork point that is not your HEAD, check this file before looking
+anywhere else.
 
-**`.gitignore` excludes `.claude/*`, so this file is not in the repository** —
-`git check-ignore -v .claude/settings.json` names line 37. It therefore does not
-arrive with a clone, and a fresh checkout silently reverts to forking every agent
-from `origin/main`. **Nothing fails when it is missing**; agents simply get the
-wrong tree and no error says so. Treat creating it as a setup step for this flow,
-and if agents start reporting a fork point that is not your HEAD, check that this
-file exists before looking anywhere else.
-
-It is the **user's** file. Do not edit it on your own initiative.
+It is the **user's** file. Do not edit it on your own initiative; machine-local
+settings belong in `settings.local.json`, which stays ignored.
 
 #### What the agent's own branch means for getting work back
 

@@ -12,20 +12,17 @@ moves, and a stale section is how a change gets designed against a decision that
 was reversed.
 
 **You arrive already inside your own worktree**, forked from the runner's HEAD,
-so it holds the piece's commits. Use **plain relative paths** — no `git -C`, no
-absolute-path prefixing, nothing to `cd` into. You must not try to move;
-`EnterWorktree` is for a session moving itself, and `README.md`'s "Handing over
-between agents" records why a dispatched agent cannot use it.
+so it holds the piece's commits. Use **plain relative paths**, and do not call
+`EnterWorktree` — it is for a session moving itself, and `README.md`'s "Handing
+over between agents" says why a dispatched agent cannot.
 
 **You are not on `piece/<name>`** — the harness puts you on `worktree-agent-<id>`.
 Read it with `git rev-parse --abbrev-ref HEAD` rather than assuming, and **report
 the name**, because the runner cherry-picks your commits onto the piece and
 cannot guess a name the harness chose.
 
-**Run `openspec` plainly.** It resolves its root from the cwd and has no `-C`
-flag, and your cwd is the tree holding your change, so it finds the right root.
-If it cannot find the change, check `pwd` before concluding anything about the
-CLI.
+**Run `openspec` plainly.** It resolves its root from the cwd, so it finds your
+change. If it cannot, check `pwd` before concluding anything about the CLI.
 
 Commit to your own branch; **do not push and do not open a PR.** Pushing a
 harness-named branch puts something on the remote that is not a piece branch.

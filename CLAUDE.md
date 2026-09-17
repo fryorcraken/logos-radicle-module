@@ -193,9 +193,10 @@ The ones that catch people repeatedly:
   approval clicks. That is the route this repo runs on, so a brief carries no
   `git -C <worktree>` instruction. It depends on `.claude/settings.json`
   carrying `{"worktree": {"baseRef": "head"}}`, which forks each agent from
-  the runner's HEAD rather than `origin/main` — **and
-  `.gitignore` excludes that file, so it arrives with no clone and nothing fails
-  when it is missing**; agents are simply cut from the wrong base. See
+  the runner's HEAD rather than `origin/main`. **That file is tracked** —
+  `.gitignore` excludes `.claude/*` and re-admits it by name, because while it
+  was ignored nothing failed when it was absent; agents were simply cut from the
+  wrong base. See
   [`.claude/agents/README.md`](.claude/agents/README.md) for the probes and
   [`.claude/agents/RUNNER.md`](.claude/agents/RUNNER.md) for one-runner-per-piece.
   **Settings are the user's — do not write that file on your own initiative.**
@@ -475,8 +476,8 @@ it is a different feature area from anything above.
 ### The bundled `basecamp` skill may document an older release
 
 `lgs init` generates `.claude/skills/`, `.cursor/` and `AGENTS.md`; `.gitignore`
-excludes `.claude/` wholesale (so `settings.json`, `agents/` and `worktrees/`
-are untracked too), and none of it refreshes when you upgrade `lgs`. So the
+excludes `.claude/*` (the role agents and `settings.json` are re-admitted by
+name), and none of it refreshes when you upgrade `lgs`. So the
 copy on disk documents whichever release last ran `init` — which may predate
 the `[modules.*]` schema and the `develop` / `build` / `run` / `paths` verbs,
 making it read as though raw `nix` were the only way to do anything.
