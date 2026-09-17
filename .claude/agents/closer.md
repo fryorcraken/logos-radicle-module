@@ -36,17 +36,14 @@ nothing to `cd` into. You must not try to move; `EnterWorktree` is for a session
 moving itself, and `README.md`'s "Handing over between agents" records why a
 dispatched agent cannot use it.
 
-**`openspec` now works plainly, and that matters most to you.** It resolves its
-root from the cwd and has no `-C` flag, which used to mean a dispatched agent
-could not validate a change living in a worktree at all. Your cwd is the right
-tree, so `openspec validate --strict` runs directly. If it cannot find the
-change, check `pwd` and `git rev-parse --abbrev-ref HEAD` before concluding
-anything about the CLI.
+**Run `openspec` plainly, which matters most to you.** It resolves its root from
+the cwd and has no `-C` flag, and your cwd is the right tree, so `openspec
+validate --strict` runs directly. If it cannot find the change, check `pwd` and
+`git rev-parse --abbrev-ref HEAD` before concluding anything about the CLI.
 
 **Do not report a validation you did not perform**, and do not let a skipped
 `validate --strict` pass silently into the merge — an unrun gate is worse than a
-red one, because the row gets ticked either way. That rule is unchanged; what has
-changed is that you now have no excuse to invoke it.
+red one, because the row gets ticked either way.
 
 **One thing to get right about branches.** You are on `worktree-agent-<id>`, not
 `piece/<name>`. Your archive commit therefore needs to reach the piece branch
@@ -216,14 +213,10 @@ visible. Check the reported root anyway before concluding a change is missing or
 the CLI is broken — it distinguishes "no such change" from "wrong tree", which
 otherwise look identical.
 
-(This paragraph has now been wrong twice, in opposite directions: it first said
-"if you entered the worktree as this file says, you are already in the right
-place", which was left behind when `EnterWorktree` went; it was then corrected to
-"you are at the repository root", which the `isolation: "worktree"` dispatch made
-false in turn. **Both survived because they describe where you stand without
-naming the mechanism that puts you there** — the kind of claim a keyword sweep
-cannot find. If the dispatch model changes again, this paragraph is the one to
-re-read first.)
+(**That paragraph depends on the dispatch model, so re-read it first if the
+model changes.** It describes where you stand without naming the mechanism that
+puts you there, which is the kind of claim a keyword sweep for the mechanism's
+name cannot find.)
 
 Three things to get right in the closing context specifically:
 

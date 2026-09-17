@@ -190,10 +190,10 @@ The ones that catch people repeatedly:
 
   **Agents get their tree from `isolation: "worktree"` instead**, which places
   them inside their own worktree with a working cwd, plain relative paths and no
-  approval clicks. That is the route this repo runs on, so the old `git -C
-  <worktree>` instruction is gone from the briefs. It depends on
-  `.claude/settings.json` carrying `{"worktree": {"baseRef": "head"}}`, which
-  forks each agent from the runner's HEAD rather than `origin/main` — **and
+  approval clicks. That is the route this repo runs on, so a brief carries no
+  `git -C <worktree>` instruction. It depends on `.claude/settings.json`
+  carrying `{"worktree": {"baseRef": "head"}}`, which forks each agent from
+  the runner's HEAD rather than `origin/main` — **and
   `.gitignore` excludes that file, so it arrives with no clone and nothing fails
   when it is missing**; agents are simply cut from the wrong base. See
   [`.claude/agents/README.md`](.claude/agents/README.md) for the probes and

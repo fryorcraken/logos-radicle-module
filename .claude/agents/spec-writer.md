@@ -22,11 +22,10 @@ Read it with `git rev-parse --abbrev-ref HEAD` rather than assuming, and **repor
 the name**, because the runner cherry-picks your commits onto the piece and
 cannot guess a name the harness chose.
 
-**Good news for you specifically: `openspec` now works plainly.** It resolves its
-root from the cwd and has no `-C` flag, which used to mean a dispatched agent
-could not see a change living in a worktree at all. Your cwd is now the right
-tree, so run it directly. If it still cannot find the change, check `pwd` before
-concluding anything about the CLI.
+**Run `openspec` plainly.** It resolves its root from the cwd and has no `-C`
+flag, and your cwd is the tree holding your change, so it finds the right root.
+If it cannot find the change, check `pwd` before concluding anything about the
+CLI.
 
 Commit to your own branch; **do not push and do not open a PR.** Pushing a
 harness-named branch puts something on the remote that is not a piece branch.

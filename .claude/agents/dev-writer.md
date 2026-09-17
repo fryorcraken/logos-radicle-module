@@ -166,14 +166,12 @@ run it plainly.** `lgs` resolves `scaffold.toml`'s relative module refs
 that changes it. Being placed in your own tree is what makes that a non-problem:
 the cwd is right, so the build is right.
 
-**Know the failure it used to cause, because it leaves no trace.** Under the old
-dispatch an agent's cwd was the main checkout, and its first `lgs basecamp build`
-built *that* — succeeding, and reporting a green build of code the agent had not
-written. Measured; it recovered only by falling back to raw `nix build` with a
-hand-written `--override-input`. A wrong-tree build is indistinguishable in the
-output from a right-tree one, which is why this is worth remembering even though
-the cause is fixed: **if you ever find yourself unsure which tree you are in,
-`pwd` before you trust a green build.** And never report a build you did not run.
+**Recognise the failure a wrong cwd causes here, because it leaves no trace.** A
+build run from the wrong project root does not fail — it succeeds, reporting a
+green build of code you did not write, indistinguishable in the output from a
+green build of code you did. A tool that refused would be harmless; this one
+does not. So **if you are ever unsure which tree you are in, `pwd` before you
+trust a green build.** And never report a build you did not run.
 
 **Commit to your own branch**, the `worktree-agent-<id>` you are on. The runner
 cherry-picks it onto `piece/<name>` once you hand back, so **report the branch
@@ -216,14 +214,13 @@ onto its own local `piece/<name>` afterwards — that is for *its* HEAD, which i
 the fork point for the next agent, and it is not what puts your work on the
 remote. You already did that.
 
-**Why "you cannot open it" was the wrong conclusion**, since an earlier version
-of this file said so and the argument sounds right: the objection was that your
-commits sit on a harness-named branch nothing downstream tracks. True, and the
-prohibition it supports is kept — **never push `worktree-agent-<id>` itself**, a
-harness-named branch on the remote being the same failure as a reviewer branch
-reaching it. But that is an objection to pushing *that ref*, not to pushing *to*
-`piece/<name>`, and a refspec distinguishes the two. Push the piece ref, never
-your own.
+**Why "you cannot open it" is the wrong conclusion**, stated because the argument
+for it sounds right: the objection is that your commits sit on a harness-named
+branch nothing downstream tracks. True, and the prohibition it supports is kept —
+**never push `worktree-agent-<id>` itself**, a harness-named branch on the remote
+being the same failure as a reviewer branch reaching it. But that is an objection
+to pushing *that ref*, not to pushing *to* `piece/<name>`, and a refspec
+distinguishes the two. Push the piece ref, never your own.
 
 **You cannot check out `piece/<name>`, and must not try.** It is checked out in
 the runner's worktree, and git refuses a branch that is checked out elsewhere —

@@ -57,9 +57,9 @@ count is not a stable property: how many hunks git prints depends on how far
 apart the edits fall, and the shape of the edits themselves depends on what the
 delta already had. The rule most often quoted ("prepend a title, rename the
 heading, two hunks") is wrong on both halves for a delta that already carries a
-title line. An earlier version of this page replaced it with "three hunks", which
-was wrong too — those three edits fall within three lines of each other, so git
-coalesces them into **one**.
+title line. "Three hunks" is wrong too, and is the tempting correction to reach
+for — those three edits fall within three lines of each other, so git coalesces
+them into **one**.
 
 Measured on `2026-09-12-m3-embedded-node-foundations/specs/node-paths/spec.md`
 against `openspec/specs/node-paths/spec.md` — the local reference pair, **one
@@ -119,13 +119,13 @@ up from the current directory to the first `openspec/` it finds. There is **no
 `--directory`, `-C` or `--root`**. `--store` takes a registered kebab-case store
 id, not a path.
 
-Agents work in worktrees, so this used to bite immediately: an agent's cwd was
-the main checkout while its change lived in a worktree, and the change was simply
-not listed. **That is fixed by where agents now stand rather than by anything in
-`openspec`.** Dispatched with `isolation: "worktree"`, an agent's cwd *is* the
-tree holding its change, so `openspec` resolves the right root and runs plainly —
-no compound command, no approval click, no workaround. A tool that takes its root
-from the cwd is correct exactly when the cwd is.
+Agents work in worktrees, so where an agent stands decides whether its change is
+visible at all — an agent whose cwd is the main checkout while its change lives
+in a worktree gets the change simply not listed. **The dispatch is what makes
+this a non-problem, not anything in `openspec`.** With `isolation: "worktree"`,
+an agent's cwd *is* the tree holding its change, so `openspec` resolves the right
+root and runs plainly — no compound command, no approval click, no workaround. A
+tool that takes its root from the cwd is correct exactly when the cwd is.
 
 **Check the reported root before concluding a change is missing or the CLI is
 broken.** It is one line of `openspec list --json`, and it distinguishes "the

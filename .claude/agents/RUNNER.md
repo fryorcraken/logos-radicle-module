@@ -212,14 +212,13 @@ What you need from them here is the operational consequence, which is short:
   combination probe 2 measured failing — isolation *plus* an `EnterWorktree` call
   across into the piece tree. Isolation alone never crosses, so nothing breaks.
 
-The cost of getting this wrong was measured: four agents in one session hit the
-refusal, and two burned significant time inventing workarounds (`env -C`, `cd
-&&`) that each cost the user an approval click, because the brief told them the
-shape was supposed to work.
+An agent that meets the refusal without this context improvises, and the
+improvisations (`env -C`, `cd &&`) each cost the user an approval click — which
+is why a brief must not send one looking for a problem it does not have.
 
-`EnterWorktree` is still the right tool for a **session moving itself** — which
-is what you are, when you enter your piece's worktree. It is dispatched agents
-that cannot use it.
+`EnterWorktree` is the right tool for a **session moving itself** — which is what
+you are, when you enter your piece's worktree. It is dispatched agents that
+cannot use it.
 
 ### The setting this depends on, and how it fails
 
@@ -307,10 +306,10 @@ fully-qualified refspec. The agent reported the plain push form as "not safe in
 these worktrees", which is the wrong lesson to draw: the push was fine and the
 branch creation was at fault.
 
-**Check it with `git config`, not `git branch -vv`.** `branch -vv` prints
-`[origin/main]` and there is nothing in that output to tell an intended upstream
-from a wrong one, so the check both documents used to prescribe cannot catch
-this. The positive signal is:
+**Check it with `git config`, not `git branch -vv`.** `branch -vv` is the check
+you may know from elsewhere and it cannot catch this: it prints `[origin/main]`,
+and nothing in that output tells an intended upstream from a wrong one. The
+positive signal is:
 
 ```
 git config --get-regexp "^branch\.<name>"
@@ -338,19 +337,17 @@ whose directories are already gone.
 **Check merged-ness with `gh pr list`, not `git branch --merged`** — this repo
 squash-merges, so a squashed branch never looks merged to git.
 
-**Removing each agent's worktree is now yours, and it is not optional
-housekeeping — it is the last step of collecting the work.** An agent cannot
-remove its own tree any more: it is standing in it, and `git worktree remove`
-refuses the directory you are in. So the sequence after an agent hands back is
-cherry-pick its commits off its branch, then remove its tree.
+**Removing each agent's worktree is yours, and it is not optional housekeeping —
+it is the last step of collecting the work.** An agent cannot remove its own
+tree: it is standing in it, and `git worktree remove` refuses the directory you
+are in. So the sequence after an agent hands back is cherry-pick its commits off
+its branch, then remove its tree.
 
-This also settles a failure that previously had no clean fix. A reviewer was once
-told not to remove its tree and removed it anyway; nothing was lost only because
-its findings commit was already cherry-picked. **You keep a tree when something
-may still need reading** — re-checking a finding against the exact tree that
-produced it, comparing two reviewers' citations, recovering a mutation — and
-`--force` destroys all of it. That used to depend on every agent remembering an
-instruction. It now holds because the agent has no way to do it.
+**You keep a tree while something may still need reading** — re-checking a
+finding against the exact tree that produced it, comparing two reviewers'
+citations, recovering a mutation an agent left uncommitted — and `--force`
+destroys all of it. You are the only party that knows whether any of that is
+still wanted, which is why the removal is yours rather than each agent's.
 
 Agent trees accumulate faster than piece trees, one per dispatch rather than one
 per piece, so `git worktree list` is worth running at the end of each review
