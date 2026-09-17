@@ -6,6 +6,7 @@
 #include "local_store.h"
 #include "local_writer.h"
 #include "logos_module_context.h"
+#include "node_config.h"
 #include "seed_client.h"
 #include "settings_store.h"
 
@@ -358,11 +359,17 @@ public:
      * correct — and the only correct value — for an identity created without
      * one, which is what `createEmbeddedIdentity("", …)` produces.
      *
-     * **The node binds no TCP port.** It can fetch from peers and announce to
-     * them, but peers **cannot fetch from it**. That is the right default for a
-     * desktop behind NAT — no port, no firewall rule, and no way to collide with
-     * a node the user already runs on 8776 — and it is a real limitation a view
-     * must state rather than imply away. `listening` reports it, empty today.
+     * **The node binds what `getNodeConfig`'s `listen` names, and by default
+     * that is nothing.** An unconfigured node can fetch from peers and announce
+     * to them, but peers **cannot fetch from it**. That is the right default for
+     * a desktop behind NAT — no port, no firewall rule, and no way to collide
+     * with a node the user already runs on 8776 — and it is a real limitation a
+     * view must state rather than imply away.
+     *
+     * `listening` reports the addresses the node **actually bound**, not what
+     * the configuration asked for. A view states what is true from that field; a
+     * reply that echoed its input would read identically whether the
+     * configuration was honoured or discarded, which is what this used to do.
      *
      * **Returns only once the control socket answers.** A spawned thread is not
      * a started node; reporting one would hand a view a success it then has to
@@ -402,6 +409,144 @@ public:
      * touch the daemon. `serving` is the only field that notices.
      */
     std::string getNodeStatus();
+
+    // ======================================================================
+    // THE NODE'S OWN CONFIGURATION, and its seeding policies.
+    //
+    // Two stores, deliberately not one surface. `config.json` is read by the
+    // node when it is CONSTRUCTED, so a change to it reaches a running node at
+    // its next start and never before. `policies.db` is read as the node works,
+    // so a seeding change takes effect at once. A view has to tell the user
+    // which of those it just did, and one combined call whose halves answer
+    // "when does this apply" differently would make that impossible to say.
+    //
+    // **This is not `getSettings`.** Those five keys describe the MODULE — which
+    // node it points at, where git is — and live in the module's own
+    // `settings.json`. These describe the NODE, and live in a file the node owns
+    // and reads for itself. `setSetting` continues to refuse every key here.
+    //
+    // **None of them takes a home**, for the reason the node trio above does
+    // not: the paths are the module's to resolve, and these WRITE, so a
+    // caller-supplied home crossing the QtRO boundary would let a sandboxed view
+    // rewrite the configuration and seeding policies of a node this module does
+    // not own.
+    //
+    // **`local` is readable and not writable, and that asymmetry is the point.**
+    // In that mode the home is the user's own: this module did not create the
+    // node and does not run it. Showing a user what their node is set to is
+    // useful; changing it behind their back is not. `explore` resolves no home,
+    // so all five refuse there, naming the mode.
+    // ======================================================================
+
+    /**
+     * The node's own configuration, as a panel renders it.
+     *
+     * -> {"alias":"…","listen":[…],"externalAddresses":[…],"connect":[…],
+     *     "peers":"static"|"dynamic","inboundReachable":bool,
+     *     "restartRequired":bool}
+     * -> {"error":"…"}
+     *
+     * **Exactly the fields the `radicle` crate has**, spelled as `config.json`
+     * spells them, so a value read here and one read from that file cannot
+     * disagree about a name. Fields the crate has and no panel asks for —
+     * `proxy`, `limits`, `workers`, `database` and the rest — are deliberately
+     * absent: a setting nobody renders is a validation surface nobody exercises.
+     *
+     * **`inboundReachable` and `restartRequired` are derived, not stored**, and
+     * `setNodeConfig` refuses both by name. `inboundReachable` is false exactly
+     * when `listen` is empty. `restartRequired` is true exactly when a node is
+     * running and `config.json` no longer says what that node was started with —
+     * a comparison, not a flag, so a change that is undone clears it.
+     *
+     * **A home with no `config.json` is an error, not a set of defaults.**
+     * Defaults presented as a configuration are indistinguishable on screen from
+     * a real one, and a view would offer to edit a node that does not exist.
+     */
+    std::string getNodeConfig();
+
+    /**
+     * Change one or more node-configuration fields.
+     *
+     * `changes` is a JSON object naming a **subset** of the settable fields:
+     * `alias`, `listen`, `externalAddresses`, `connect`, `peers`. Fields it does
+     * not name are left as they were.
+     *
+     * -> the same object `getNodeConfig` returns, or {"error":"…"}
+     *
+     * **The reply is the whole configuration, not the fields that changed**, so
+     * a view re-renders from what was stored rather than from what it submitted.
+     *
+     * **Everything is validated before the file is opened**, using the crate's
+     * own parsers rather than rules restated here — so a value this module
+     * accepts is one the node can load, and a refusal leaves `config.json`
+     * byte-for-byte as it was. The two address fields take different spellings
+     * and are not interchangeable: `connect` entries carry a node id
+     * (`<nid>@<host>:<port>`), `externalAddresses` entries do not.
+     *
+     * **A key this build does not understand survives the write.** A newer
+     * `rad` may have written fields this build has no name for, and changing an
+     * alias must never be how a user loses them.
+     *
+     * **The change reaches the node at its next start.** A node reads its
+     * configuration once, when it is constructed, so there is no later point at
+     * which a running one could pick this up — which is why `restartRequired`
+     * exists and why a view must say so rather than imply the change is live.
+     */
+    std::string setNodeConfig(const std::string& changes);
+
+    /**
+     * Every repository this node is seeding, with each entry's scope.
+     *
+     * -> {"items":[{"rid":"rad:…","scope":"all"|"followed"}]} or {"error":"…"}
+     *
+     * **A different question from `localListRepos("seeded")`**, which reports
+     * what is in local STORAGE. A repository can be seeded by policy with
+     * nothing yet replicated, and can sit in storage with no policy seeding it;
+     * both are ordinary rather than faults. This reports policies and is never
+     * derived from storage.
+     *
+     * **An unreadable policy store is an error, not an empty list.** "Nothing is
+     * seeded" and "the policies could not be read" are different facts, and a
+     * view acting on the first when the second is true would offer to seed a
+     * repository that is already seeded.
+     */
+    std::string listSeeded();
+
+    /**
+     * Seed `rid`, with scope `all` or `followed`.
+     *
+     * -> {"rid":"rad:…","scope":"…"} or {"error":"…"}
+     *
+     * **This is the fix for the footgun `docs/PLAN.md` names.** `rad init` plus
+     * `rad id update --allow <DID>` does **not** replicate a private repository:
+     * every node that is to hold it must also seed the RID, and a private one
+     * needs scope `all`. Without both halves `rad sync` times out with "All
+     * seeds timed out", which names neither cause nor fix. A view offering this
+     * surface must state both halves.
+     *
+     * **The scope is not defaulted on the caller's behalf**, because the choice
+     * decides whether a private repository replicates at all: `all` seeds every
+     * remote, `followed` seeds only delegates and explicitly followed nodes.
+     *
+     * Seeding an already-seeded RID at a different scope replaces the scope
+     * rather than adding a second entry.
+     */
+    std::string seedRepo(const std::string& rid, const std::string& scope);
+
+    /**
+     * Stop seeding `rid`.
+     *
+     * -> {"unseeded":bool} or {"error":"…"}
+     *
+     * Unseeding what is not seeded is an **answer**, not an error: the caller
+     * has got what it asked for. The boolean is what lets a view say which of
+     * the two happened.
+     *
+     * **Nothing is deleted from local storage.** A policy and a replicated copy
+     * are different things, and removing a policy is reversible where deleting
+     * storage is not.
+     */
+    std::string unseedRepo(const std::string& rid);
 
     // ======================================================================
     // REMOTE — proxied to a public seed over HTTPS.
@@ -668,6 +813,32 @@ private:
      */
     void adoptPersistedSettings();
 
+    /**
+     * Rebuild every dependency that is derived from the resolved home.
+     *
+     * Two call sites repoint this instance at a different profile — a mode or
+     * home setting changing, and an embedded identity being created — and each
+     * one used to spell the rebuild out by hand. That is how the set came to be
+     * got *almost* right: each copy listed the members that existed when it was
+     * written, so adding a home-derived member meant remembering every place,
+     * and the one that was forgotten would keep answering for the previous
+     * profile with nothing failing.
+     *
+     * One method means one list, and a member added here is rebuilt at every
+     * site for free.
+     *
+     * **`setDependenciesForTest` deliberately does not call this**, and that is
+     * not an oversight: this method derives the store *from the settings*, which
+     * would discard the store a test injected. The two differ in exactly which
+     * store wins, so they stay separate — collapsing them would make an injected
+     * store silently ignored.
+     *
+     * It also does NOT emit `localAvailabilityChanged`: whether a repoint is
+     * worth announcing is the caller's question, and folding the event in would
+     * give this two jobs.
+     */
+    void rebuildFromSettings();
+
     // Instance-scoped dependencies. These used to be function-local `static`s
     // in radicle_impl.cpp — built once per process on first use and never
     // rebuilt, which is what made this class untestable (see the constructor
@@ -692,4 +863,10 @@ private:
     radicle::LocalStore m_local;
     radicle::LocalReader m_localReader;
     radicle::LocalWriter m_localWriter;
+    // Built from the store's home like the two above, and rebuilt with them
+    // whenever a setting repoints the module. It takes no socket: neither the
+    // node's `config.json` nor its `policies.db` is reached through the control
+    // socket — both are files under the home, edited with the node running or
+    // stopped. See `node_config.h`.
+    radicle::NodeConfig m_nodeConfig;
 };

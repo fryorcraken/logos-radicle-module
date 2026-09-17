@@ -63,6 +63,8 @@ logos_module(
         src/local_writer.cpp
         src/embedded_node.h
         src/embedded_node.cpp
+        src/node_config.h
+        src/node_config.cpp
         src/settings_store.h
         src/settings_store.cpp
         src/radicle_ffi.h
