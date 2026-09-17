@@ -82,20 +82,22 @@ node's threads are outside `guarded()`'s reach — are in
 [`rust-ffi.md`](rust-ffi.md) and
 [`M3-embedded-node-plan.md`](M3-embedded-node-plan.md).
 
-**The wizard and the configuration panel (Phase 2 step 4).** QML only, provided
-`getEmbeddedIdentity` and `createEmbeddedIdentity` are still exposed through
-`radicle_ui.rep` — check that file rather than trusting this sentence, because
-"QML only" is true exactly as long as they are.
+~~**The wizard (Phase 2 step 4).**~~ — **specified** in `embedded-setup`: six
+steps in a fixed order, what each preflight finding blocks, and the three
+consequences the flow must state at the moment the user decides. It is QML
+only — every slot it drives was already exposed through `radicle_ui.rep`.
 
-The wizard's steps, each failing loudly rather than proceeding on a guess:
-preflight (is `git` there, is there an existing home, is a node already running
-on its socket, can we write our own home — reported *before* offering a choice);
-mode, with the identity consequence stated in one sentence each; identity
-(alias plus passphrase, defaulting to setting one, with the trade-off stated);
-network (inbound off by default, preferred seeds prefilled); start (launch, wait
-for the control socket, show the NID, and say why on failure); and confirm,
-restating the "this is a new identity" consequence with the
-`rad id update --allow <DID>` line ready to copy.
+**The configuration panel (Phase 2 step 4).** QML only, and what makes that
+true is now the `node-config` and `node-seeding` capabilities rather than the
+identity pair alone.
+
+One scope change worth naming, because the wizard's step list used to carry it:
+**the inbound opt-in is the panel's, not the wizard's.** Nothing persists a
+listen address, so a toggle in the wizard would record nothing and the node
+would keep binding no port. The wizard therefore states the outbound-only
+default and says the control is not available there; the opt-in with its port
+field belongs to the panel, which is the surface that introduces a channel for
+persisting it.
 
 The panel is backed by `node/config.rs`'s real fields, nothing invented:
 identity (alias, NID/DID read-only and copyable, change passphrase); tools (the
@@ -134,13 +136,10 @@ that code will look.
 Testable now, and worth testing early, since it constrains every write feature.
 
 ~~**Whether the node needs the passphrase at start or only at sign time**~~ —
-**answered by step 3: at start.** `Runtime::init` takes an already-decrypted
-signing key, so there is no later point at which one could be supplied. The
-consequence is a real constraint on the wizard rather than a detail: **an
-encrypted embedded profile cannot start unattended**, so offering a passphrase
-by default — which is the right security posture — means the node needs an
-unlock every time Basecamp starts it. Step 4 has to state that trade at the
-moment the user chooses, not discover it later.
+**answered, and acted on.** At start; the constraint that followed for the
+wizard is discharged, and `embedded-setup` requires the trade to be stated where
+the choice is made. The reasoning is in the `embedded-node-wizard` change's
+`design.md`.
 
 **A fully isolated embedded node has its own NID/DID**, and for a user who
 already runs `rad` it is a new machine joining their network. ~~Why that was
@@ -148,8 +147,9 @@ accepted rather than designed around, and the two rejected non-goals that follow
 (no copying an existing home, no importing an existing key)~~ — decided and
 acted on; the reasoning is in the `m3-embedded-node-foundations` change's
 archived `design.md`, and the consequence the UI owes the user is specified in
-`source-modes` and `embedded-identity`. What remains ahead is only that the
-wizard must state it at the moment a user picks Embedded.
+`source-modes` and `embedded-identity`. The wizard's duty to state it at the
+moment a user picks Embedded is now `embedded-setup`'s, at both the mode step
+and the confirm step; nothing about it remains ahead.
 
 **`listen: []` is the embedded default, and the UI must be honest about it.** A
 node with no listen address is outbound-only: it can fetch and announce, but

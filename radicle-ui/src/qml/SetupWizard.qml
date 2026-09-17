@@ -1,0 +1,662 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import "Theme.js" as Theme
+
+/*
+ * The embedded node's guided setup, rendered.
+ *
+ * Six steps — preflight, mode, identity, network, start, confirm — over module
+ * methods that already exist. This file is the SCREEN; `SetupFlow.qml` beside
+ * it is the state, the blocking rules and the calls. Read that first: every
+ * "why" about ordering, gating and staleness is there, and nothing here decides
+ * any of it.
+ *
+ * ## What this screen is for
+ *
+ * Embedded mode is selectable without it, and chosen cold it does nothing a
+ * user can account for: the mode persists, the home repoints, `localAvailable`
+ * goes false, and everything after that is separate methods with no order and
+ * no screen naming the consequences.
+ *
+ * Three of those consequences are decisions the user owes an answer to, and
+ * each is cheapest to state where the choice is made rather than discovered
+ * afterwards. This screen exists to state them at those three moments:
+ *
+ *  - **the passphrase trade**, at the identity step, where the control is;
+ *  - **that this is a NEW identity**, at the mode step BEFORE anything is
+ *    created, and again at confirm with the DID that now exists;
+ *  - **that the node accepts no inbound connections**, at the network step, as
+ *    the setting in force rather than as a choice.
+ *
+ * ## Why the trade statements are not conditional on the control
+ *
+ * The passphrase statement is visible for BOTH settings of its switch. A
+ * statement that vanishes when the control is turned off tells the user least
+ * at the moment they choose the riskier option, and a statement naming only the
+ * security benefit is a recommendation rather than a trade — the user cannot
+ * weigh one side.
+ *
+ * ## Why the network step has no inbound control
+ *
+ * Nothing persists a listen address: the settings store is fixed at five keys
+ * and none describes `listen`. A toggle here would record nothing and the node
+ * would keep binding no port, which is worse than no control at all. So the
+ * step states the default, states its consequence, and states that enabling
+ * inbound is not available HERE — the absence is named rather than left looking
+ * like an oversight. The opt-in belongs to the configuration panel, which is
+ * the surface that introduces a channel for persisting it.
+ */
+Item {
+    id: wizard
+
+    /// The state. Exposed so a host can wire the injected call functions and a
+    /// test can drive the flow without reaching through the scene graph.
+    property alias flow: setupFlow
+
+    /// The user is done, or gave up. The HOST decides what that means — this
+    /// screen does not close itself, the same rule SettingsPanel follows.
+    ///
+    /// NO SPEC: `embedded-setup` defines the flow's six steps and what each
+    /// must state, but says nothing about where the flow is ENTERED from or
+    /// what closing it does. Nothing in this change wires an entry point into
+    /// `Main.qml`, and the close control emits rather than deciding — so the
+    /// host's choice stays open and no unspecified navigation is baked in here.
+    /// The surrounding surface belongs to the configuration panel change.
+    signal closed()
+
+    implicitWidth: 560
+    implicitHeight: body.implicitHeight + Theme.gapLg * 2
+
+    // ---- test-observable state -------------------------------------------
+    // Assertions should ask the screen what it believes rather than infer it
+    // from rendered pixels — Main.qml and SettingsPanel do the same.
+    readonly property string currentStep: setupFlow.step
+    readonly property bool backEnabled: setupFlow.canGoBack
+    readonly property bool advanceEnabled: setupFlow.canAdvance
+    readonly property bool createEnabled: setupFlow.canCreateIdentity
+    readonly property bool startEnabled: setupFlow.canStartNode
+    readonly property string errorShown: setupFlow.lastError
+
+    SetupFlow {
+        id: setupFlow
+    }
+
+    Component.onCompleted: setupFlow.runPreflight()
+
+    // The passphrase the identity step took, held here because the START step
+    // needs it: the node is handed an already-decrypted signing key when it is
+    // built, so there is no later point at which one could be supplied.
+    //
+    // Read from the field rather than stored separately, so there is one copy.
+    readonly property string passphrase:
+        passphraseSwitch.checked ? passphraseField.text : ""
+
+    ScrollView {
+        id: scroller
+        anchors.fill: parent
+        anchors.margins: Theme.gapLg
+        clip: true
+        contentWidth: availableWidth
+
+        Column {
+            id: body
+            width: scroller.availableWidth
+            spacing: Theme.gap
+
+            // ---- header ---------------------------------------------------
+
+            Row {
+                width: body.width
+                spacing: Theme.gapSm
+
+                Text {
+                    objectName: "wizardTitle"
+                    text: "Set up an embedded node"
+                    color: Theme.text
+                    font.pixelSize: Theme.fontXl
+                    font.bold: true
+                }
+            }
+
+            /// Which step, of how many. A wizard that does not say where you
+            /// are in it is a sequence of unexplained screens.
+            Text {
+                objectName: "wizardStepLabel"
+                width: body.width
+                text: "Step " + (setupFlow.stepIndex + 1) + " of "
+                      + setupFlow.steps.length + " — " + setupFlow.step
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSm
+            }
+
+            // ---- the backend's refusal, wherever it came from --------------
+            //
+            // Shown verbatim. The module's refusals name the home that was in
+            // the way, the path to remove, the value that was tried and the
+            // limit that was exceeded — which is the whole reason validation
+            // happens on write. Replacing one with this screen's own wording
+            // throws away the only actionable part.
+            Rectangle {
+                objectName: "wizardError"
+                visible: setupFlow.lastError !== ""
+                width: body.width
+                height: errorText.implicitHeight + Theme.gapSm * 2
+                radius: Theme.radiusSm
+                color: Theme.surfaceAlt
+                border.width: 1
+                border.color: Theme.bad
+
+                Text {
+                    id: errorText
+                    objectName: "wizardErrorText"
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Theme.gapSm
+                    anchors.rightMargin: Theme.gapSm
+                    text: setupFlow.lastError
+                    color: Theme.bad
+                    font.pixelSize: Theme.fontSm
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            // ---- the steps ------------------------------------------------
+
+            StackLayout {
+                width: body.width
+                height: currentIndex >= 0 ? implicitHeight : 0
+                currentIndex: setupFlow.stepIndex
+
+                // ---- 1. preflight -------------------------------------------
+                //
+                // Four findings, each its own outcome. NOT one pass/fail: a
+                // user has to see WHICH one failed, and each blocks only what
+                // it actually makes impossible.
+                Column {
+                    id: preflightStep
+                    spacing: Theme.gapSm
+
+                    Text {
+                        width: body.width
+                        text: "Checking what is already here. Nothing is "
+                            + "written or started by these checks."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Finding {
+                        objectName: "findingGit"
+                        width: body.width
+                        label: "git"
+                        answered: setupFlow.preflightDone
+                        ok: setupFlow.gitFound
+                        okText: "A git executable resolves."
+                        // The backend's sentence names the path that was tried;
+                        // the fallback has to stand on its own because it is
+                        // what shows when the backend supplied nothing.
+                        failText: setupFlow.problemFor(
+                            setupFlow.gitProblem,
+                            "No git executable could be resolved. Radicle "
+                          + "spawns git to read and write storage.")
+                    }
+
+                    Finding {
+                        objectName: "findingIdentity"
+                        width: body.width
+                        label: "identity"
+                        answered: setupFlow.preflightDone
+                        // Not a failure either way — this reports WHAT IS
+                        // THERE. An existing identity blocks creation, which
+                        // the identity step says; it is not a broken preflight.
+                        neutral: true
+                        // The wording is deliberate: "no identity exists",
+                        // never "the home is empty". getEmbeddedIdentity
+                        // reports exists:false for a half-created home too, and
+                        // telling a user it is empty sends them looking for a
+                        // different problem when creation is then refused for a
+                        // keys path that is demonstrably there.
+                        okText: setupFlow.identityExists
+                                ? "An identity already exists here: "
+                                  + setupFlow.identityNodeId
+                                : "No identity exists here yet."
+                        failText: setupFlow.identityProblem
+                    }
+
+                    Finding {
+                        objectName: "findingNode"
+                        width: body.width
+                        label: "node socket"
+                        answered: setupFlow.preflightDone
+                        ok: !setupFlow.alreadyServing
+                        okText: "No node is answering on the resolved socket."
+                        failText: "A node is already answering on the resolved "
+                                + "socket. Starting a second one would contend "
+                                + "for it."
+                    }
+
+                    Finding {
+                        objectName: "findingHome"
+                        width: body.width
+                        label: "home"
+                        answered: setupFlow.preflightDone
+                        ok: setupFlow.homeResolved
+                        okText: "A home can be written to: "
+                                + setupFlow.embeddedHome
+                        failText: setupFlow.problemFor(
+                            setupFlow.pathsProblem,
+                            setupFlow.identityProblem,
+                            "No Radicle home could be resolved to write into.")
+                    }
+                }
+
+                // ---- 2. mode -------------------------------------------------
+                //
+                // ModePicker already states the per-mode identity consequence,
+                // including that Embedded creates a SEPARATE identity from any
+                // node the user already runs. Reused rather than restated: a
+                // second copy of that wording would be free to drift from the
+                // first with no gate noticing.
+                Column {
+                    spacing: Theme.gapSm
+
+                    Text {
+                        width: body.width
+                        text: "Which node this module uses. What each choice "
+                            + "means for your identity is stated in the option "
+                            + "itself."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    ModePicker {
+                        objectName: "wizardModePicker"
+                        width: body.width
+                        current: setupFlow.modeInForce
+                        startableModes: setupFlow.startableModes
+                        unavailableReason: setupFlow.modeUnavailableReason
+                        onModeChosen: function (mode) {
+                            setupFlow.chooseMode(mode);
+                        }
+                    }
+
+                    Text {
+                        objectName: "modeAdvanceBlocked"
+                        visible: setupFlow.advanceBlockedReason !== ""
+                        width: body.width
+                        text: setupFlow.advanceBlockedReason
+                        color: Theme.warn
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                // ---- 3. identity ---------------------------------------------
+                Column {
+                    spacing: Theme.gapSm
+
+                    Text {
+                        width: body.width
+                        text: "Create the identity this node operates as."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // Returning to a step that already acted reports what it
+                    // did rather than offering to do it again. Identity
+                    // creation is not reversible through this flow.
+                    Text {
+                        objectName: "identityCreated"
+                        visible: setupFlow.identityExists
+                                 && setupFlow.identityNodeId !== ""
+                        width: body.width
+                        text: "Created: " + setupFlow.identityNodeId
+                        color: Theme.good
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.mono
+                        wrapMode: Text.WrapAnywhere
+                    }
+
+                    Text {
+                        text: "Alias"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                    }
+
+                    TextField {
+                        id: aliasField
+                        objectName: "identityAlias"
+                        width: body.width
+                        enabled: setupFlow.canCreateIdentity
+                        placeholderText: "how this node names itself"
+                        // No pre-validation, deliberately. The backend passes
+                        // the radicle crate's own statement of the alias rule
+                        // back as its refusal, and a second rule here would
+                        // drift from it — presenting as this screen rejecting
+                        // an alias the backend would have accepted, with
+                        // nothing saying which layer refused.
+                    }
+
+                    // ---- the passphrase trade --------------------------------
+                    //
+                    // Default ON: leaving the control alone must produce the
+                    // safer outcome.
+                    Row {
+                        spacing: Theme.gapSm
+
+                        Switch {
+                            id: passphraseSwitch
+                            objectName: "identityPassphraseSwitch"
+                            checked: true
+                            enabled: setupFlow.canCreateIdentity
+                        }
+
+                        Text {
+                            anchors.verticalCenter: passphraseSwitch.verticalCenter
+                            text: "Encrypt the key with a passphrase"
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSm
+                        }
+                    }
+
+                    // BOTH halves, and visible for BOTH settings of the switch.
+                    // See the file header for why neither is conditional.
+                    Text {
+                        objectName: "passphraseTrade"
+                        width: body.width
+                        text: "With a passphrase, the node must be unlocked "
+                            + "every time it starts — it is handed an "
+                            + "already-decrypted key when it is built, so one "
+                            + "cannot be supplied later. Without a passphrase, "
+                            + "the node starts with no prompt, at the cost of "
+                            + "a secret stored in plaintext on disk."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    TextField {
+                        id: passphraseField
+                        objectName: "identityPassphrase"
+                        width: body.width
+                        visible: passphraseSwitch.checked
+                        enabled: setupFlow.canCreateIdentity
+                        echoMode: TextInput.Password
+                        placeholderText: "passphrase"
+                    }
+
+                    Text {
+                        objectName: "identityBlocked"
+                        visible: setupFlow.createBlockedReason !== ""
+                        width: body.width
+                        text: setupFlow.createBlockedReason
+                        color: Theme.warn
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Button {
+                        objectName: "identityCreate"
+                        text: "Create identity"
+                        enabled: setupFlow.canCreateIdentity
+                        onClicked: setupFlow.submitIdentity(aliasField.text,
+                                                            wizard.passphrase)
+                    }
+                }
+
+                // ---- 4. network ----------------------------------------------
+                Column {
+                    spacing: Theme.gapSm
+
+                    // The setting IN FORCE, not a recommendation and not a
+                    // choice about to be made.
+                    Text {
+                        objectName: "networkInbound"
+                        width: body.width
+                        text: "This node accepts no inbound connections. It "
+                            + "can fetch from peers and announce to them, but "
+                            + "peers cannot fetch from this node."
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // The absence is STATED. A control that silently recorded
+                    // nothing would be worse than none, and an unexplained gap
+                    // reads as an oversight.
+                    Text {
+                        objectName: "networkInboundUnavailable"
+                        width: body.width
+                        text: "Enabling inbound connections is not available "
+                            + "in this setup. It needs a listen address to be "
+                            + "persisted, which this flow has no way to do."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        text: "Seeds this node can fetch from"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                    }
+
+                    // A node that cannot be fetched from can still fetch, which
+                    // is what makes the seed list matter more here than it
+                    // would with inbound on.
+                    Repeater {
+                        objectName: "networkSeeds"
+                        model: setupFlow.seeds
+
+                        Text {
+                            required property var modelData
+                            objectName: "networkSeed"
+                            width: body.width
+                            text: (modelData.alias ? modelData.alias + " — " : "")
+                                  + modelData.url
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSm
+                            wrapMode: Text.WrapAnywhere
+                        }
+                    }
+                }
+
+                // ---- 5. start ------------------------------------------------
+                Column {
+                    spacing: Theme.gapSm
+
+                    Text {
+                        objectName: "startWaiting"
+                        visible: setupFlow.startPending
+                        width: body.width
+                        text: "Starting the node — waiting for its control "
+                            + "socket to answer…"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        objectName: "startBlocked"
+                        visible: setupFlow.startBlockedReason !== ""
+                        width: body.width
+                        text: setupFlow.startBlockedReason
+                        color: Theme.warn
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Button {
+                        objectName: "startNode"
+                        text: "Start the node"
+                        enabled: setupFlow.canStartNode
+                        onClicked: setupFlow.submitStart(wizard.passphrase)
+                    }
+
+                    Text {
+                        objectName: "startedNodeId"
+                        visible: setupFlow.nodeStarted
+                        width: body.width
+                        text: "Running as " + setupFlow.nodeId
+                        color: Theme.good
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.mono
+                        wrapMode: Text.WrapAnywhere
+                    }
+
+                    // EMPTY is the expected value and is displayed as such: it
+                    // is what confirms the outbound-only default the network
+                    // step described. Omitting it when empty would hide exactly
+                    // the case worth showing.
+                    Text {
+                        objectName: "startListening"
+                        visible: setupFlow.nodeStarted
+                        width: body.width
+                        text: setupFlow.listening.length === 0
+                              ? "Listening on no address — peers cannot fetch "
+                                + "from this node."
+                              : "Listening on "
+                                + setupFlow.listening.join(", ")
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // `serving`, not `running`: a node whose threads have died
+                    // leaves `running` true while `serving` goes false, and
+                    // that is the state a user cannot otherwise account for.
+                    Text {
+                        objectName: "startServing"
+                        visible: setupFlow.nodeStarted
+                        width: body.width
+                        text: setupFlow.nodeServing
+                              ? "The control socket is answering."
+                              : "The node is not answering its control socket."
+                        color: setupFlow.nodeServing ? Theme.good : Theme.bad
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                // ---- 6. confirm ----------------------------------------------
+                Column {
+                    spacing: Theme.gapSm
+
+                    // Restated, not stated for the first time: the mode step
+                    // said it before anything was created, and this says it
+                    // again with the DID that now exists.
+                    Text {
+                        objectName: "confirmSeparateIdentity"
+                        width: body.width
+                        text: "This is a new identity, separate from any "
+                            + "Radicle node you already run. The repositories "
+                            + "in your existing home are not in this node's "
+                            + "storage, and a private repository reaches this "
+                            + "node only once a delegate authorises this DID."
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        objectName: "confirmNodeId"
+                        visible: setupFlow.nodeId !== ""
+                        width: body.width
+                        text: setupFlow.nodeId
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.mono
+                        wrapMode: Text.WrapAnywhere
+                    }
+
+                    CopyableCommand {
+                        objectName: "confirmAllowCommand"
+                        width: body.width
+                        caption: "A delegate runs this on a repository to let "
+                               + "this node fetch it:"
+                        // The DID that was reported, never a placeholder — so
+                        // the line as shown is the line to run.
+                        command: setupFlow.allowCommand
+                    }
+                }
+            }
+
+            // ---- navigation -----------------------------------------------
+
+            Row {
+                width: body.width
+                spacing: Theme.gapSm
+
+                Button {
+                    objectName: "wizardBack"
+                    text: "Back"
+                    enabled: setupFlow.canGoBack
+                    onClicked: setupFlow.back()
+                }
+
+                Button {
+                    objectName: "wizardNext"
+                    text: "Next"
+                    enabled: setupFlow.canAdvance
+                    onClicked: setupFlow.advance()
+                }
+
+                Button {
+                    objectName: "wizardClose"
+                    text: setupFlow.step === "confirm" ? "Done" : "Cancel"
+                    onClicked: wizard.closed()
+                }
+            }
+        }
+    }
+
+    /// One preflight finding, as its own outcome.
+    ///
+    /// An inline component rather than a file of its own: it is four lines of
+    /// rendering used in exactly one place, and a separate file would put the
+    /// wording further from the step that owns it. Should a second screen ever
+    /// report findings, that is the moment to promote it — not before.
+    component Finding: Column {
+        property string label: ""
+        property bool answered: false
+        property bool ok: false
+        /// A finding that reports WHAT IS THERE rather than pass/fail. The
+        /// identity finding is one: an existing identity is not a broken
+        /// preflight, it is a fact that blocks one later step.
+        property bool neutral: false
+        property string okText: ""
+        property string failText: ""
+
+        spacing: 0
+
+        Text {
+            objectName: "findingLabel"
+            text: parent.label
+            color: Theme.textDim
+            font.pixelSize: Theme.fontXs
+            font.bold: true
+        }
+
+        Text {
+            objectName: "findingOutcome"
+            width: parent.width
+            // Until the preflight has answered, this says so rather than
+            // rendering a default as a result: every finding has a legitimate
+            // falsy value, so an unanswered probe is indistinguishable from a
+            // failed one unless it is named.
+            text: !parent.answered
+                  ? "checking…"
+                  : (parent.neutral || parent.ok ? parent.okText
+                                                 : parent.failText)
+            color: !parent.answered ? Theme.textFaint
+                   : (parent.neutral ? Theme.text
+                      : (parent.ok ? Theme.good : Theme.bad))
+            font.pixelSize: Theme.fontSm
+            wrapMode: Text.WordWrap
+        }
+    }
+}
