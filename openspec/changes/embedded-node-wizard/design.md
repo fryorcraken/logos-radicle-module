@@ -60,7 +60,7 @@ Each of the five blocking rules in the spec is expressed as a property that
 reads a *finding*, never a step's own remembered state:
 
     canCreateIdentity  <- homeResolved && !identityExists
-    canStartNode       <- gitFound && !alreadyServing
+    canStartNode       <- gitFound && !alreadyServing && !startPending
 
 The spec requires this directly ("Blocking MUST be keyed on the finding, so
 that a backend reporting the finding as passing removes the block with nothing
@@ -110,6 +110,115 @@ whatever that step happened to think was relevant.
 **Deleting the epoch check turns `test_a_late_reply_does_not_repopulate` red**,
 with a fake that holds its reply across a step change and then delivers it.
 
+### "A node is answering on the socket" is one value, not two
+
+`alreadyServing` is written by every reading of the node's state — the
+preflight's, the one that follows this flow's own successful start, and every
+later `refreshNodeStatus()`. It began as a preflight-only memory, and that was
+a bug review caught: `canStartNode` never withdrew after a success, so the
+start button stayed enabled and a user could start a second node over the
+first. `startBlockedReason` already named that contention for the case the
+preflight detected; the same contention was reachable through this flow's own
+button after its own start.
+
+The fix is the data shape rather than a second condition on `canStartNode`. A
+node this flow started and a node it found already running are the same fact
+about the socket, so they are the same property. Had it been written as
+`gitFound && !alreadyServing && !startPending && !nodeStarted`, the fourth
+clause would have been a second answer to a question already asked — and the
+"node whose threads died" case would then need a fifth clause to offer the
+control again, which falls out for free here.
+
+**Removing either write turns
+`test_a_successful_start_withdraws_the_start_control` red**: the one in
+`submitStart` covers the window before the status refresh replies, and the one
+in `refreshNodeStatus` keeps the value current afterwards. The test's second
+half — a start that *failed* must still offer the control — is what stops a
+flow that withdrew it unconditionally from passing.
+
+The fake had to change with it. Its `start()` now sets `serving = true`,
+because the real `startNode` returns only once the control socket answers: a
+fake reporting `started:true` while `getNodeStatus` kept saying
+`serving:false` was modelling a state the backend cannot produce, and a test
+written against it would have been asserting about a node that does not exist.
+
+### `neutral` governs colour, not whether a finding can fail
+
+`Finding`'s outcome was `neutral || ok ? okText : failText`, which made
+`failText` unreachable for any neutral finding — the identity one, whose
+`failText` carries `getEmbeddedIdentity().problem`. A genuine backend
+diagnostic, such as a permissions error reading the identity store, was
+silently replaced with "No identity exists here yet." That is directly against
+the spec's requirement that a backend sentence be displayed verbatim.
+
+The two ideas were folded into one flag. `neutral` means "no identity yet is
+not a failure" — a statement about how an *absence* is reported — never "this
+probe cannot fail". So the outcome now reads a separate `failed` property:
+`neutral ? failText !== "" : !ok`. A neutral finding fails exactly when it was
+given a sentence to show.
+
+**Weakening `failed` to `neutral ? false : !ok` turns
+`test_a_neutral_finding_still_shows_a_backend_problem` red.** That test's
+second half — an empty home with no problem still reading as "no identity
+exists here yet" — is what stops a finding stuck on `failText` from passing it.
+
+### The passphrase is cleared once both calls that need it have run
+
+`StackLayout` instantiates every child eagerly, so no step's controls are ever
+destroyed: a plaintext passphrase left in `passphraseField.text` stays
+resident for the rest of the wizard's life. That matters here specifically
+because this repo's dev Basecamp ships the QML inspector compiled in (see
+`docs/e2e.md`), and the inspector reads live object properties — so "resident"
+means "readable", for three steps after the last call that needed it.
+
+It is cleared on `nodeStarted` going true, which is the moment both consumers
+have run: `createEmbeddedIdentity` at the identity step and `startNode` at the
+start step. Keyed on the reply rather than done in the click handler, because
+the handler runs *before* the reply, and clearing there would destroy the
+passphrase a retry needs after a refusal.
+
+**Removing the `Connections` block turns
+`test_the_passphrase_does_not_outlive_the_calls_that_use_it` red.** The test
+reads the field back at the start step *before* submitting, so it proves the
+clearing happened rather than that the field was never filled.
+
+### The preflight's gating probes are named flags, not a counter
+
+`preflightDone` flipped on `preflightAnswers >= 3`, a literal several lines
+from the four `if (fetch…)` blocks that determined it. Three different nouns
+for three different counts sat within one screen — "four questions" (calls),
+"four findings" (git/identity/socket/home), "three probes" (calls that gate) —
+with nothing saying why three was right.
+
+They are genuinely three different numbers, and the header now says so: the
+home finding has no call of its own (it is derived from capabilities'
+`pathsProblem` and identity's `home`), and `listKnownSeeds` feeds the network
+step's seed list, which is not a finding and gates nothing. So four calls, four
+findings, three gating answers.
+
+The counter became three named booleans conjoined into `allProbesAnswered`.
+With a literal, a fifth probe leaves a threshold to be found and updated
+separately, and getting it wrong fires `preflightDone` early — reporting an
+unasked question as answered, the exact failure the "unanswered ≠ failure"
+decision exists to prevent — or never fires it at all. As a conjunction, adding
+a probe means adding a flag the conjunction cannot be satisfied without.
+
+### One capabilities reply, one mapping
+
+The same seven-property mapping of a `getCapabilities()` reply was written out
+twice, character-for-character identical apart from the trailing call, in the
+preflight and in `refreshCapabilities()`. `applyCapabilities(caps)` is now the
+single copy both call.
+
+This is the `wantRid`/`syncEpoch` lesson applied before it costs anything
+rather than after: that guard was hand-written four slightly different ways and
+dropped a different capture each time, and each omission needed its own
+regression test. Two copies of a seven-line mapping is where that starts.
+
+`nodeId` is the one conditional assignment in it, and deliberately so —
+capabilities carries a DID only as a fallback, so a more specific one already
+reported by `createEmbeddedIdentity` or `startNode` is not overwritten.
+
 ### Replies are the authority; the flow records nothing it was told
 
 `identityExists`, `nodeId`, `modeInForce` and `serving` are all set from reply
@@ -155,6 +264,19 @@ the same one", which is the sentence the spec requires at the mode step. Reusing
 it keeps one copy of that wording; writing a second one in the wizard would give
 the repo two statements of the same consequence, free to drift, with no gate
 that notices.
+
+**The blurb carries an `objectName` so the test can assert on it as rendered.**
+The test first read `picker.modes[i].blurb` — the data array the row is built
+from — which stays correct however the row is drawn. Review proved the gap by
+blanking the rendered `Text` to `""`: every view test stayed green, including
+that one. A statement the spec requires the user to *see* had no gate that
+could notice it vanishing. Asserting through `modeBlurb_<key>` closes that, and
+the same mutation now reddens
+`test_the_mode_step_states_the_separate_identity_consequence`.
+
+This is the repo's "a fake returning the same thing for every input" lesson in
+a second form: an assertion read off the input rather than the output cannot
+distinguish "rendered" from "never rendered".
 
 ### The network step has no inbound control, and says so
 
