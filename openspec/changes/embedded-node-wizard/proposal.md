@@ -33,6 +33,20 @@ embedded home is empty, half-created or occupied, and whether a node is already
 answering on the resolved socket are all questions whose answers change what may
 be offered, and all of them are answerable before anything is written.
 
+**And a wizard nothing reaches is not a fix.** A user who picks Embedded today
+gets an empty repository list, a red `no embedded identity yet` banner and the
+words "No repositories matched" — which is not a missing wizard but a deleted
+dead end. Making Embedded startable made `modeStartable` true, which made
+`RepoList.notImplemented` false, which stopped the honest "not available in this
+version yet" panel rendering; the same flag was the guard on `RepoList.fetch()`,
+so the list then issued `localListRepos` against a home with no identity and
+rendered the backend's refusal as an error banner. The guard and the explanation
+it protected were keyed on one condition, so both went away together.
+
+That is the regression, and it is separate from the wizard: the screen must say
+which of Embedded's states the user is in, and offer the one action that state
+admits, before there is anywhere for a setup entry point to live.
+
 ## What Changes
 
 - Adds a six-step guided setup for Embedded mode — preflight, embedded,
@@ -51,6 +65,18 @@ be offered, and all of them are answerable before anything is written.
   state and when**, not as prose in a design document: the passphrase trade at
   the identity step, the new-identity consequence at both the embedded step and
   the confirm step, and the inbound default at the network step.
+- **Replaces the deleted dead end with a state surface.** Embedded's empty
+  repository list becomes one of seven states derived from the backend's
+  replies, each with its own sentence and its own action — a banner cannot carry
+  these, because the states differ in what the user may do next and not only in
+  their wording. Two of them are states no field distinguishes on its own: a
+  node being started and a node whose threads have died both report
+  `running:true, serving:false`, and only the view knows whether a start is
+  outstanding.
+- **Re-keys the guard that stops a request going to a node that does not
+  exist**, from "is this mode startable" to "does this mode have a node to ask".
+  Hiding the reply instead is not an option: the reply stays in flight, passes
+  the staleness guard, and repopulates the model behind the panel.
 - **No module methods are added.** `getCapabilities`, `getSettings`,
   `setSetting`, `getEmbeddedIdentity`, `createEmbeddedIdentity`, `startNode`,
   `stopNode`, `getNodeStatus` and `listKnownSeeds` are all already exposed
@@ -58,9 +84,20 @@ be offered, and all of them are answerable before anything is written.
 
 Not covered, deliberately:
 
+- **How the setup is hosted.** The state surface offers an action that requests
+  the setup be opened, and emitting that request is where its responsibility
+  ends. The overlay that hosts the wizard, and the mutual exclusion with the
+  settings pane, are the next piece's.
+- **The header caption and the mode-detail slot.** `SourceToggle.note`'s
+  Embedded branch still says "not available in this version yet", which is now
+  false and on screen — but it is a second surface with its own height
+  reservation, and correcting it alongside the list would put two surfaces in
+  one change with no test able to separate them.
 - **The configuration panel.** Identity display, git path, network fields,
-  seeded RIDs with scope, node control and the log tail are a separate change.
-  The wizard sets a node up once; the panel is where it is tuned afterwards.
+  seeded RIDs with scope, node control and the log tail are a separate change,
+  and it depends on methods that are not merged. The wizard sets a node up once;
+  the panel is where it is tuned afterwards. The state surface points at it by
+  name only once it exists.
 - **Persisting an inbound-connections choice.** The settings store holds five
   keys and none of them describes `listen`, and no method writes a node config.
   The network step therefore states the outbound-only default and offers the
@@ -83,13 +120,26 @@ Not covered, deliberately:
   the moment the user decides rather than afterwards. Owns the wizard's
   behaviour only; the module methods it drives are specified by
   `embedded-identity`, `source-modes`, `module-settings` and `node-paths`.
+- `embedded-state`: What the repository list shows in Embedded when there are no
+  repositories to show — seven states derived from `getCapabilities()`,
+  `getEmbeddedIdentity()` and `getNodeStatus()`, each with its own sentence and
+  its own action, and the guard that stops a list request being issued to a mode
+  with no node to ask. Owns the state surface, not the setup it offers to open.
 
 ### Modified Capabilities
 
-None. The wizard consumes the four existing capabilities and changes no
-requirement in any of them. In particular it adds no mode, no setting and no
-identity behaviour — `createEmbeddedIdentity`'s refusals, `startNode`'s
-mode restriction and the passphrase rule are consumed as specified.
+- `source-modes`: **"A mode that cannot start asks its node for nothing"** is
+  re-keyed. It required a view to decline a request for a mode *the startable
+  set omits*, and Embedded is startable — it resolves a workable home — so the
+  guard stopped firing for it while the node it would have asked still did not
+  exist. The requirement now names both conditions that leave a mode with
+  nothing able to answer, and the scenario recorded there as unpinned by a test
+  is closed by `embedded-state` rather than left as an annotation.
+
+The wizard itself still changes no requirement in `embedded-identity`,
+`module-settings` or `node-paths`: it adds no mode, no setting and no identity
+behaviour — `createEmbeddedIdentity`'s refusals, `startNode`'s mode restriction
+and the passphrase rule are consumed as specified.
 
 ## Impact
 

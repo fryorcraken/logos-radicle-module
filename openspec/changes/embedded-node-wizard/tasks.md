@@ -13,6 +13,15 @@
 - [ ] `openspec validate --strict`, then `archive` — `closer`
 - [ ] CI green, title/body checked, PR merged — `closer`
 
+**The spec was reopened after the ticked rows above were ticked.** A design pass
+found that the screen a user reaches on picking Embedded has no surface at all —
+the dead-end panel was deleted by the core-module change that made Embedded
+startable, and nothing replaced it — so this change gained a capability
+(`embedded-state`) and re-keyed one in `source-modes`. The `dev-writer` and
+every reviewer row above was ticked against a spec that did not contain them.
+**The runner owns re-dispatching those stages**; `spec-writer` flips only its own
+row, which is why they are left ticked rather than silently reset here.
+
 ## Implementation
 
 <!-- The dev-writer owns this section. -->
