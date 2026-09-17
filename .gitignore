@@ -34,10 +34,19 @@ generated_code/
 # So: re-exclude everything under `agents/`, then re-admit only the role files
 # themselves. Verified with `git check-ignore`: `agents/code-reviewer.md` is
 # tracked, `agents/scratch/tmp.json` and `agents/settings.local.json` are not.
+#
+# `settings.json` is re-admitted for the same reason, and it is not a
+# preference file: it carries `worktree.baseRef = "head"`, which is what makes
+# `isolation: "worktree"` fork an agent from the runner's HEAD instead of
+# `origin/main`. Ignored, it reached no clone and no fresh checkout, and
+# **nothing failed when it was absent** — agents were silently cut from the
+# wrong base, which is the failure this repo keeps re-learning. Machine-local
+# settings belong in `settings.local.json`, which stays ignored.
 .claude/*
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/*.md
+!.claude/settings.json
 .cursor/
 AGENTS.md
 

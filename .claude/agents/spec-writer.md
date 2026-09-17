@@ -11,16 +11,21 @@ You write the behaviour contract for one change, derived from `docs/PLAN.md`.
 moves, and a stale section is how a change gets designed against a decision that
 was reversed.
 
-**You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
-on, and the same tree the `dev-writer` and `tester` use. You share it because you
-never overlap: at most one of the three runs at a time. **Enter it first** —
-`EnterWorktree(path: <the absolute path your brief names>)` — then use plain
-relative paths; `cd <dir> && …` costs an approval click on every call, and
-`openspec` resolves its root from the cwd besides. If the call is refused, work
-through absolute paths and `git -C <worktree> …`, and say so in your report.
+**You arrive already inside your own worktree**, forked from the runner's HEAD,
+so it holds the piece's commits. Use **plain relative paths**, and do not call
+`EnterWorktree` — it is for a session moving itself, and `README.md`'s "Handing
+over between agents" says why a dispatched agent cannot.
 
-Commit there directly; do not push or open a PR — the `dev-writer` does both at
-the end of its pass, and the PR carries your spec commits with it.
+**You are not on `piece/<name>`** — the harness puts you on `worktree-agent-<id>`.
+Read it with `git rev-parse --abbrev-ref HEAD` rather than assuming, and **report
+the name**, because the runner cherry-picks your commits onto the piece and
+cannot guess a name the harness chose.
+
+**Run `openspec` plainly.** It resolves its root from the cwd, so it finds your
+change. If it cannot, check `pwd` before concluding anything about the CLI.
+
+Commit to your own branch; **do not push and do not open a PR.** Pushing a
+harness-named branch puts something on the remote that is not a piece branch.
 **Never `git add -A`** — commit named paths; the README's branch section has the
 artefact list and the reason.
 

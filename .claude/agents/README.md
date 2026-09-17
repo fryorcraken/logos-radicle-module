@@ -41,12 +41,6 @@ included.
 stable number, and that PLAN.md sheds as changes land. Cite by requirement
 name, or restate the substance in one clause.
 
-`grep -rn "§" openspec/specs` currently returns nothing here, so this is a rule
-kept rather than a mess being cleaned — which is the cheap moment to state it.
-The sibling dialectica repo has a live instance it chose to leave alone, on the
-grounds that an archive sweep which also edits prose is a sweep nobody can
-review; that is the right call and the reason to not acquire one.
-
 ### PLAN.md sheds in two directions
 
 As a change lands, the part of PLAN.md it implements moves out:
@@ -74,11 +68,6 @@ beside it records one spike and is finished. Both cite the crate source line by
 line, which is what makes a claim in PLAN.md re-verifiable rather than
 re-derivable. PLAN.md is the cross-milestone view; the two overlap on M3, and the
 more recently edited one wins.
-
-An earlier version of this paragraph called both files frozen. A milestone step
-edited one of them two days later, which is the lesson: **do not write down that
-a document has stopped changing.** It is a claim about the future, and the
-cheapest kind to get wrong.
 
 ## The roles
 
@@ -111,9 +100,12 @@ honours it.
 ### One writer at a time; reviewers in parallel
 
 **A piece has at most one `spec-writer`, `dev-writer` or `tester` running** — not
-one of each, **one in total**. They share the piece's single worktree, which they
-can do precisely because they never overlap. Two reasons, and neither surfaces as a
-git conflict:
+one of each, **one in total**. Each gets its own worktree, so this is not about
+sharing a tree; it is about what the *next* agent forks from. Every dispatch is
+cut from the runner's HEAD, so a second writer launched before the first's
+commits are cherry-picked forks from a HEAD that does not contain them, and the
+two diverge silently. Two further reasons, neither of which surfaces as a git
+conflict either:
 
 - **A spec must not move while code is written against it.** Run the pair together
   and the implementation answers a contract that changed underneath it, with
@@ -132,30 +124,28 @@ and each **deletes its worktree** when done rather than restoring, since deletin
 cannot half-succeed where a restore depends on having tracked every edit.
 
 **The runner creates each reviewer's worktree and names it in the dispatch**, and
-the reviewer deletes it. Stating the owner matters because the failure on ambiguity
-is silent and destructive in both directions: a reviewer that assumes it must make
-its own may instead mutate the tree it was launched in, which is the piece's; and
-one that assumes it was given one may `--force`-remove a tree holding the only copy
-of somebody's work. **A reviewer that was not given a worktree path stops and says
-so** rather than choosing either fallback.
-
-Every branch rule below follows from that asymmetry.
+the reviewer deletes it. Ambiguity here is silent and destructive both ways: a
+reviewer that assumes it must make its own may instead mutate the piece's tree,
+and one that assumes it was given one may `--force`-remove a tree holding the
+only copy of somebody's work. **A reviewer that was not given a worktree path
+stops and says so** rather than choosing either fallback.
 
 ### Branch names say which kind of branch it is
 
 | Branch | Worktree | Whose | Holds |
 |---|---|---|---|
-| `piece/<name>` | one, shared | the three writers in turn, then the `closer` | **the** task branch, and the only branch of the three that is pushed. Spec, code, tests, findings-fixes and the archive all commit here directly |
-| `review/<name>/<dimension>` | one each | one reviewer | **local only** — its findings file, nothing else, cherry-picked onto the piece and never pushed |
+| `piece/<name>` | the runner's | the runner, and the PR | **the** task branch, and the only one ever pushed. Work reaches it two ways: the runner cherry-picks every agent's commits onto its local copy, and the `dev-writer` and `closer` push a refspec to the remote copy |
+| `worktree-agent-<id>` | one per dispatch | one agent | **local only, and named by the harness** — whatever that agent committed, cherry-picked onto the piece and never pushed |
 | `main` | — | nobody | **no agent ever pushes here.** It takes commits through a PR only |
 
-**`spec-writer`, `dev-writer` and `tester` share one worktree, checked out on
-`piece/<name>`.** They can share it precisely because they never run at the same
-time; handing each its own tree would buy nothing and add a cherry-pick to get
-wrong. Reviewers get a tree each because they are the only agents that overlap.
+**Every dispatched agent gets its own worktree and its own branch**, cut from the
+runner's HEAD. No agent stands in the piece's tree, so every agent's commits are
+cherry-picked onto it — writers exactly as reviewers.
 
-Named for the role and not the stage, because `dev/x` invites a `test/x` beside
-it — which is the shape this section exists to stop.
+**The branch name is the harness's, not the runner's.** There is no
+`review/<name>/<dimension>` to predict, so an agent reports the name it actually
+landed on (`git rev-parse --abbrev-ref HEAD`) and the runner picks from that. A
+name nobody recorded is work nobody can find.
 
 **The PR is opened on `piece/<name>` and nothing else. Whichever ref it is opened
 on, it is stuck with — and every workaround loses something.** A PR's head ref is
@@ -183,22 +173,22 @@ rather than merged shows here even though its content is in, so read the commits
 rather than the count. Say in the closing comment where the work went, and keep
 the branch.
 
-**Each agent pushes its own commits, once its work is done** — `dev-writer` and
-`tester` after theirs. The `dev-writer` pushes at the end of its first pass and
-opens the PR there; see [`dev-writer.md`](dev-writer.md).
+**`piece/<name>` is pushed by two agents only, and never by cherry-pick.** The
+`dev-writer` pushes it at the end of its first pass and opens the PR there; the
+`closer` pushes it again after the archive commit. Both push a **refspec to the
+remote piece ref** rather than checking the branch out — it is checked out in the
+runner's worktree, and git refuses a branch checked out elsewhere. **When and how
+the `dev-writer` does it is [`dev-writer.md`](dev-writer.md)'s**, stated once
+there; this line points rather than restates, because two copies drift.
 
 The `closer` also pushes, after committing the **archive** to the piece branch,
 before the CI check and the merge.
 
-**Nobody pushes `main`.** It takes commits through a PR only — `enforce_admins`
-is on, and a direct push is rejected with `GH006`. This page and `closer.md` both
-used to say the archive was an exception, until a closer tried it.
-
-**Only reviewers get a side branch**, because only reviewers run genuinely in
-parallel — six at once, while a fixer may still be changing the code they are
-reading. A reviewer's own branch is what stops its commit racing that. Everyone
-else writes the piece one at a time and commits to it directly; a side branch there
-would add a step to get wrong and misname the commits besides.
+**Nobody pushes `main`, and the archive commit is not an exception.** It takes
+commits through a PR only — `enforce_admins` is on, and a direct push is rejected
+with `GH006`. The archive is the one that reads as though it might be exempt,
+being a bookkeeping commit; it is not, and it goes onto the piece branch like
+everything else.
 
 Cherry-pick rather than merge, so the task branch reads as a flat sequence rather
 than six merge commits carrying six branches.
@@ -213,16 +203,29 @@ rule:
   `target/`, `result-*` out-links, `./tmp/` scratch, and whatever is added to that
   list next. Noise, which a reviewer spots.
 
-The second reason is the one an agent remembers, being concrete; the first is the one
-that does damage, so it is stated first. **This is the canonical copy of the artefact
-list**; each agent file states the rule and points here rather than repeating the
-list, which is the part that changes.
+**This is the canonical copy of the artefact list**; each agent file states the
+rule and points here rather than repeating the list, which is the part that
+changes.
 
-**Check `git branch -vv` before any git write** — a worktree created from a branch
-inherits that branch's upstream, and a bare `git push` has landed commits directly
-on `main` here more than once. CLAUDE.md's "Working in a git worktree" has the rest —
-in particular that worktrees branch from `origin/main`, and that the stash stack is
-shared with every other worktree, so never bare `git stash pop`.
+**Check `git config --get-regexp "^branch\.<name>"` before any git write, and
+expect it to return nothing.** A bare `git push` has landed commits directly on
+`main` here more than once, and the cause is the creation command: `git worktree
+add <path> -b piece/<name> origin/main` branches from a remote-tracking ref, so
+`branch.autoSetupMerge` writes `merge = refs/heads/main` into the new branch's
+config — measured, for both piece branches made that way. `git worktree add
+--no-track` is the fix and `RUNNER.md` carries it; a branch made with the flag
+returns nothing from that `git config` call.
+
+**`git branch -vv` does not catch this**, so do not reach for it as the check: it
+prints `[origin/main]`, and nothing in that output distinguishes an intended
+upstream from a wrong one.
+
+A `--no-track` branch has no upstream, so push the refspec in full:
+`git push origin refs/heads/piece/<name>:refs/heads/piece/<name>`.
+
+CLAUDE.md's "Working in a git worktree" has the rest — in particular that
+worktrees branch from `origin/main`, and that the stash stack is shared with
+every other worktree, so never bare `git stash pop`.
 
 ## Two files carry the state of a change
 
@@ -253,20 +256,13 @@ keeping `[x]` single-valued, and it is the right way round — a tool that count
 skipped stage beats one that cannot tell it from a finished one.
 
 **A piece with no behaviour change still gets a change folder and a stage block.**
-A test-only or docs-only piece adds no requirement, so it has no spec delta and its
-spec row is struck through with that reason — declared as `skip_specs: true`
+A test-only or docs-only piece adds no requirement, so it has no spec delta and
+its spec row is struck through with that reason — declared as `skip_specs: true`
 **alongside a `schema:` key** in the change's `.openspec.yaml`, because the marker
 on its own is reported as "not valid change metadata, so the marker is not
 honored". It still needs reviewing, and without the block there is no unticked row
-to say so.
-
-**A piece with no behaviour change still gets a change folder and a stage block.**
-A test-only piece — an integration target, a regression suite — adds no
-requirement, so it has no spec delta and its spec row is struck through with that
-reason. It still needs reviewing, and without the block there is no unticked row to
-say so: the signal that catches a missing reviewer is absent exactly where it is
-easiest to skip one. The first such piece here reached review with no
-`openspec/changes/<name>/` at all, so a reviewer had no row to tick and said so.
+to say so: the signal that catches a missing reviewer is absent exactly where it
+is easiest to skip one.
 
 **`findings/<dimension>.md`**, one file per reviewer — `correctness`, `security`,
 `readability`, `architecture`, `spec-test`, `design-review`. **Every finding is a
@@ -288,15 +284,14 @@ before merge, once no box is empty.
 So "blocks the merge" is literal and checkable: `grep -rn "^- \[ \]"` over the
 directory either returns lines or it does not.
 
-Three consequences worth knowing whatever your role:
+Four consequences worth knowing whatever your role:
 
 - **An unticked entry blocks the merge.** A file, not a convention, so a forgotten
   finding stops a PR instead of evaporating.
 - **The gate only sees checkboxes.** `grep -rn "^- \[ \]"` reports a file of
-  headings as clean, so an entry written any other way is invisible to it — this
-  has already happened, with forty findings including four high-severity defects
-  reading as done. Before trusting an empty result, check the files have boxes at
-  all: `grep -rc "^- \[" findings/` should be non-zero for every one.
+  headings as clean, so an entry written any other way is invisible to it. Before
+  trusting an empty result, check the files have boxes at all:
+  `grep -rc "^- \[" findings/` should be non-zero for every one.
 - **Findings stay attributable**, which is what a rejection needs: a fixer that
   disagrees knows which reviewer to argue with.
 - **Never relay a finding through a brief.** Name the file. A paraphrase arrives
@@ -313,52 +308,151 @@ scaffolding; the reasoning is not.
 does not reach you is its *report*, which returns to the runner; so anything an
 agent needs passed on must be in a file, not in a report.
 
-**A brief points at the work; it does not contain it.** A dispatch is which piece,
-which worktree, which file — and it tells the agent to enter that worktree first:
+**A brief points at the work; it does not contain it.** A dispatch is which piece
+and which file. **It carries no worktree instructions at all**, because the agent
+is dispatched with `isolation: "worktree"` and arrives in a correct tree already:
 
 > Act on the findings for `dev-writer` in
 > `openspec/changes/embedded-node-wizard/findings/`. Piece branch
-> `piece/embedded-wizard`, worktree `.claude/worktrees/piece-embedded` — enter it
-> with `EnterWorktree(path: "…/.claude/worktrees/piece-embedded")` before anything
-> else, then use plain relative paths.
+> `piece/embedded-wizard`. Commit to your own branch and say what it is called,
+> so the work can be cherry-picked onto the piece.
 
-**Say that in every brief, because it is what keeps an agent out of the shapes
-that cost a permission click.** An agent that never moves its working directory
-reaches for `cd <dir> && …` or `git -C <dir> …` on every call — the first is the
-single biggest source of prompts here, and the second spreads an absolute path
-through every git command an agent writes. `EnterWorktree` moves the session into
-the tree once, and everything after is an ordinary relative-path command in the
-right place.
+**Keep `git -C <worktree>` and `EnterWorktree` out of the briefs** — an agent
+already in the right place needs neither, and a brief carrying them sends it
+looking for a problem it does not have. What the brief must say is where the
+commits end up.
 
-Two things about the tool that decide how it is used here:
+#### Why the prohibition is written down anyway
 
-- **`path` enters an existing worktree; `name` creates one.** The runner has
-  already made the piece's worktree with `git worktree add`, so a dispatched agent
-  passes `path` and never `name` — `name` would branch from `origin/main` and
-  strand the agent in an empty tree with none of the piece's commits.
-- **It only moves the agent that calls it.** From an agent whose directory was
-  pinned at launch, the switch affects that agent alone. So the runner cannot
-  enter a worktree on an agent's behalf; the instruction has to be in the brief,
-  which is why it belongs in the dispatch shape above rather than in a setup step.
-- **It can refuse, and the fallback matters.** A session sitting at the repository
-  root has been refused with *"switching is only available to sessions whose
-  working directory is inside a worktree"* — measured here, by a reviewer that was
-  then unable to follow its own file. **If the call is refused, work through
-  absolute paths and `git -C <worktree> …`, and say so in your report.** `git -C`
-  is one plain command and costs no approval click, unlike the `cd <dir> && …`
-  chain this rule exists to avoid.
+This is not an operating instruction but the explanation behind one. Keep it
+findable: an agent that meets the refusal without it improvises, reaching for
+`env -C` or `cd &&` — an approval click each, and neither needed.
 
-The runner itself stays in the main checkout. It dispatches and reads; it is the
-agents that need to be somewhere specific.
+**A dispatched agent must not call `EnterWorktree`.** Not "should try and fall
+back" — the call cannot succeed usefully, and two probes measured both routes:
 
-**A reviewer has to step out before it deletes its tree.** `git worktree remove`
-cannot remove the directory you are standing in, so the last two acts are
-`ExitWorktree(action: "keep")` — which returns the session to where it started and
-leaves the tree alone — and then the `git worktree remove <absolute-path> --force`
-its own file already specifies. `keep` is the right action there rather than
-`remove`: `ExitWorktree` only removes worktrees it created itself, and these were
-made by the runner with `git worktree add`, so asking it to remove one does
-nothing and the tree would survive.
+- **Dispatched normally**, working directory at the repository root, worktree
+  correctly registered in `git worktree list`. Verbatim: *"Cannot enter worktree:
+  the current working directory /…/radicle-logos-module is the repository root,
+  not an isolated worktree — switching is only available to sessions whose
+  working directory is inside a worktree of this repository."* The repository
+  root is where every dispatched agent starts, so this refusal is certain rather
+  than possible.
+- **Dispatched with `isolation: "worktree"`**, which pins the working directory
+  inside a throwaway worktree and so clears that precondition. The call
+  **succeeded** and an environment update reported the directory change — then
+  the agent was split: the Read tool followed the switch and read the piece
+  branch by relative path, while **every Bash call was refused** with *"This
+  agent is isolated in the worktree …/agent-<id>, but this command's working
+  directory resolved to the shared checkout (…). Refusing to run it there — a
+  worktree-isolated agent's commands must run inside its worktree."*
+
+**There is no supported way to place a dispatched subagent inside a pre-existing
+worktree with full tool access.** Route 2 is the more dangerous of the two
+because it *looks* like it worked: nothing goes wrong until the first Bash call,
+long after the agent has concluded it is in the right place. Do not reach for
+`isolation: "worktree"` on discovering route 1 — that is the trap this paragraph
+exists to close.
+
+### How an agent actually gets the right tree: `isolation: "worktree"`
+
+**This is the route the flow runs on. Dispatch with `isolation: "worktree"` and
+no `EnterWorktree` call**, and the agent arrives in its own worktree with a
+working directory that needs no correcting: relative paths resolve and every Bash
+command runs.
+
+The distinction is the single easiest thing to conflate, so it is worth stating
+flatly:
+
+| | Works? |
+|---|---|
+| a dispatched agent entering a **pre-existing** worktree (`EnterWorktree`) | **no**, and both failure modes are above |
+| a dispatched agent placed in **its own** fresh worktree (`isolation`) | **yes** |
+| a **session moving itself** into a worktree (`EnterWorktree`) | **yes** — the case the tool is built for |
+
+Probe 2 failed because it *crossed* from an isolated tree into a pre-existing
+one. `isolation: "worktree"` alone never crosses, so nothing breaks. And a
+session moving *itself* is a third thing again — measured: the main interactive
+session called `EnterWorktree(path: …)` and got *"Entered worktree at
+…/probe-baseref on branch probe/baseref. The session is now working in the
+worktree."* **Who calls it decides the outcome, not whether the tool works.**
+
+#### `baseRef: "head"` is required
+
+By default the agent's tree is cut from `worktree.baseRef: "fresh"` —
+`origin/<default-branch>` — which holds **none** of the piece's commits. An agent
+reviewing or extending a piece would be reading the wrong code.
+`.claude/settings.json` fixes the fork point to the runner's HEAD:
+
+```json
+{ "worktree": { "baseRef": "head" } }
+```
+
+**That file is tracked, so it arrives with a clone.** `.gitignore` excludes
+`.claude/*` but re-admits it by name, for the reason recorded beside the rule:
+ignored, it reached no fresh checkout, and **nothing failed when it was absent** —
+agents were silently cut from `origin/main` and no error said so. If an agent
+reports a fork point that is not your HEAD, check this file before looking
+anywhere else.
+
+It is the **user's** file. Do not edit it on your own initiative; machine-local
+settings belong in `settings.local.json`, which stays ignored.
+
+#### What the agent's own branch means for getting work back
+
+The agent lands on a harness-named branch, `worktree-agent-<id>` — **not** the
+piece branch. So commits still need a cherry-pick onto `piece/<name>`, exactly
+the step reviewers already perform for findings, with one difference worth
+noticing: the branch name is assigned by the harness rather than being the
+`review/<name>/<dimension>` the runner chose, so **read it rather than assuming
+it** (`git rev-parse --abbrev-ref HEAD`).
+
+This applies to writers as much as reviewers: no agent stands in the piece's
+tree, so nobody commits straight to the piece branch.
+
+#### Tools that resolve their root from the cwd
+
+Two tools here cannot be pointed at another tree: **`openspec`** resolves its
+root from the cwd and has no `-C`, `--directory` or `--root`; **`lgs basecamp
+build`** resolves `scaffold.toml`'s relative module refs against the root it was
+invoked from.
+
+**Placing the agent correctly is what makes both work**, and that is the
+strongest practical argument for this dispatch shape: a tool that takes its root
+from the cwd is right whenever the cwd is right. An agent in its own tree runs
+`openspec` and `lgs` plainly, with no workaround and no compound command.
+
+The hazard they share is worth keeping in view, because it is what makes a wrong
+cwd expensive rather than merely inconvenient: **a wrong-tree success is
+indistinguishable from a right-tree one in the output.** `lgs basecamp build`
+from the wrong root does not fail — it reports a green build of code you did not
+write. A tool that refused would be harmless. So before trusting either against a
+tree you have not verified, `pwd` and `git rev-parse --abbrev-ref HEAD` cost
+nothing.
+
+And the rule that outlives any dispatch shape: **never report a result you did
+not obtain against the tree in question.** An unrun gate reported as run is worse
+than a red one, because the row gets ticked either way.
+
+#### Who removes the agent's tree
+
+**An agent cannot remove its own worktree, because it is standing in it.** `git
+worktree remove` refuses the directory you are in, so **tree removal belongs to
+the runner.** An agent's last act is to report its branch name and that its tree
+is ready to prune; the runner removes it after cherry-picking the work off.
+
+**The reason the runner keeps a tree is that it may still need reading**: to
+re-check a finding against the exact tree that produced it, to compare two
+reviewers' citations, or to recover a mutation the reviewer left behind. Once
+`--force` has run, the evidence behind the finding is gone — and the runner is
+the only party that knows whether any of that is still wanted.
+
+That the agent *cannot* delete it is the better shape: the invariant holds by
+construction rather than by every agent remembering an instruction. See CLAUDE.md
+on putting complexity in the data rather than the logic.
+
+An agent that hands back does not step out of its tree first — there is no
+`ExitWorktree` step in this flow.
 
 **If you are writing out what a finding says, you have the wrong shape.** The
 reviewer already wrote it with the measurement behind it; a restatement puts a
@@ -373,8 +467,9 @@ approach impossible has produced a result worth as much as the review, and
 unwritten the next agent spends the same afternoon. It goes in `design.md`, beside
 the decision it rules out.
 
-**The runner owns dispatching; the `dev-writer` opens the PR; the `closer` owns
-the last three stage rows.** `tasks.md`'s stage block is the list — read it to
+**The runner owns dispatching; the `dev-writer` opens the PR at the end of its
+first pass (see [`dev-writer.md`](dev-writer.md) for the sequence); the `closer`
+owns the last three stage rows.** `tasks.md`'s stage block is the list — read it to
 see what is left, because an unticked row with no agent running is a stage nobody
 is doing.
 
@@ -440,9 +535,30 @@ Each of these is in the agent files because it cost something here.
 found six comments in a single file arguing from premises the code disproves, and
 the worst were quantities, because a quantity reads as though someone measured it:
 *"wrong for two years"* in a repo five days old — written, no less, in the commit
-titled "stop three comments from saying the wrong thing". Get a duration or a count
-from a command (`git log -S`, `grep -c`) before writing it. A plausible number
+titled "stop three comments from saying the wrong thing". A plausible number
 nobody checks is a fabricated citation that looks like evidence.
+
+**So this is a step, not a caution: run the command before you write the
+number.** `grep -c "function test_" <file>` for QML test functions, `grep -c
+"#\[test\]"` for Rust ones, `git log -S` for a duration — whichever answers the
+claim you are about to make. It is one call, and it is the difference between a
+measurement and a guess that reads like one. This is CLAUDE.md's "do not write
+down anything a command can answer" applied to the thing an agent writes most
+often: a count in a report, a task list or a doc comment.
+
+The caution became a step because a single review round found **five** fabricated
+quantities and **one** phantom test name across two independently written pieces
+— assertion counts, test counts, and a doc comment citing a test that did not
+exist. None of the writers was careless; each number was the kind that feels
+remembered rather than invented.
+
+**When you correct a stale number, measure it fresh — do not apply the delta a
+reviewer quoted.** The reviewer's figure was itself measured at some earlier
+moment, and a branch moves. Verified on this very piece: the phantom test name a
+reviewer reported in `nodeconfig.rs` had already been corrected on that branch by
+the time it was re-checked, so writing down the reviewer's number would have
+introduced a second wrong claim while fixing the first. Re-run the command
+against the tree in front of you.
 
 **Make fakes input-dependent, or the assertion is decoration.** A fake that
 returns the same thing for every input cannot tell "reloaded" from "never

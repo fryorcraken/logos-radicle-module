@@ -173,16 +173,33 @@ The ones that catch people repeatedly:
   has run went through unprompted, and the single prompt came from prefixing
   one with a `cd`.
 
-  **When the working directory genuinely is wrong, `EnterWorktree` moves the
-  session rather than prefixing a command.** An agent working in a worktree
-  enters it once with `EnterWorktree(path: <absolute path>)` and then uses
+  **When the working directory genuinely is wrong, `EnterWorktree` moves a
+  session rather than prefixing a command** — an interactive session enters a
+  worktree once with `EnterWorktree(path: <absolute path>)` and then uses
   ordinary relative paths: no `cd` for the checker to trip over, and no
-  `git -C <dir>` spread through every git call. That is the shape to put in an
-  agent's brief — see [`.claude/agents/README.md`](.claude/agents/README.md).
-  Pass `path` and never `name`: `name` creates a *new* worktree branched from
-  `origin/main`, so an agent meant to work on an existing piece lands in a tree
-  holding none of its commits. Note the tool moves only the agent that calls it,
-  so a runner cannot enter a worktree on a subagent's behalf.
+  `git -C <dir>` spread through every git call. Pass `path` and never `name`:
+  `name` creates a *new* worktree branched from `origin/main`.
+
+  **A dispatched agent must not call it, and does not need to.** A subagent that
+  tries lands on one of two failures: dispatched normally its cwd is the
+  repository root, which the tool refuses outright (*"switching is only available
+  to sessions whose working directory is inside a worktree of this repository"*);
+  and crossing from one worktree into another *succeeds* while leaving **every
+  Bash call refused** for resolving to "the shared checkout" — the worse of the
+  two, because it looks like it worked until the first shell command.
+
+  **Agents get their tree from `isolation: "worktree"` instead**, which places
+  them inside their own worktree with a working cwd, plain relative paths and no
+  approval clicks. That is the route this repo runs on, so a brief carries no
+  `git -C <worktree>` instruction. It depends on `.claude/settings.json`
+  carrying `{"worktree": {"baseRef": "head"}}`, which forks each agent from
+  the runner's HEAD rather than `origin/main`. **That file is tracked** —
+  `.gitignore` excludes `.claude/*` and re-admits it by name, because while it
+  was ignored nothing failed when it was absent; agents were simply cut from the
+  wrong base. See
+  [`.claude/agents/README.md`](.claude/agents/README.md) for the probes and
+  [`.claude/agents/RUNNER.md`](.claude/agents/RUNNER.md) for one-runner-per-piece.
+  **Settings are the user's — do not write that file on your own initiative.**
 - **A long output is not a reason to pipe.** This is the most common way the rule
   above gets broken by someone who already knows it: appending `| tail -30` to
   keep a test run's output manageable turns a call the checker would have
@@ -459,8 +476,8 @@ it is a different feature area from anything above.
 ### The bundled `basecamp` skill may document an older release
 
 `lgs init` generates `.claude/skills/`, `.cursor/` and `AGENTS.md`; `.gitignore`
-excludes `.claude/` wholesale (so `settings.json`, `agents/` and `worktrees/`
-are untracked too), and none of it refreshes when you upgrade `lgs`. So the
+excludes `.claude/*` (the role agents and `settings.json` are re-admitted by
+name), and none of it refreshes when you upgrade `lgs`. So the
 copy on disk documents whichever release last ran `init` — which may predate
 the `[modules.*]` schema and the `develop` / `build` / `run` / `paths` verbs,
 making it read as though raw `nix` were the only way to do anything.
@@ -516,12 +533,40 @@ trusting a copy already in context**, including this one. A stale `CLAUDE.md`
 is the most likely thing to mislead you, because it is the file most likely to
 be in context from the start and least likely to be re-read.
 
+**Create the worktree with `--no-track`, or the branch is configured to push to
+`main`:**
+
+```
+git worktree add --no-track -b <branch> .claude/worktrees/<name> origin/main
+```
+
+Branching from a remote-tracking ref makes git's `branch.autoSetupMerge` default
+write `remote = origin` and `merge = refs/heads/main` into the new branch's
+config. That — not anything about worktrees inheriting state — is why a bare
+`git push` from one has landed commits on `main` here. Measured: `git config
+--get-regexp "^branch\.piece"` returned `merge refs/heads/main` for both piece
+branches created without the flag, and one branch's `git push origin
+piece/embedded-node-wizard` was **rejected by branch protection for
+`refs/heads/main`**.
+
+**Check it with `git config --get-regexp "^branch\.<name>"`, which returns
+nothing when the branch is right.** `git branch -vv` cannot catch this: it prints
+`[origin/main]`, and nothing in that output distinguishes an intended upstream
+from a wrong one. A `--no-track` branch has no upstream, so push the refspec in
+full: `git push origin refs/heads/<branch>:refs/heads/<branch>`.
+
 **The stash stack is shared with the main checkout and every other worktree,
 and other sessions may be using it concurrently.** Never bare `git stash` /
 `git stash pop`. Prefer a throwaway WIP commit to set work aside — it is local
 to your branch and cannot be popped by anyone else. If you must stash, use
 `git stash push -u -m "<unique-tag>"` and recover with `git stash apply <sha>`,
 never `pop`.
+
+**Agent worktrees are the runner's to remove, and they arrive faster than piece
+worktrees** — one per dispatch rather than one per piece. An agent cannot remove
+its own: it is standing in it, and `git worktree remove` refuses the directory
+you are in. So the runner cherry-picks the agent's commits off its branch and
+then removes the tree. See [`.claude/agents/RUNNER.md`](.claude/agents/RUNNER.md).
 
 **Clean up when the branch lands.** Worktrees accumulate silently and nothing
 prunes them: this repo reached **15** at once, most on branches merged
@@ -711,6 +756,23 @@ Pick the cheapest layer that can actually see the behaviour you changed.
 The unit-test row is raw `nix` on purpose — `lgs` has no verb for a flake's
 `checks` outputs. Everything *building* the modules goes through `lgs`, in CI
 as well as locally; see "This is a scaffold-managed project" at the top.
+
+**`run-qml-tests.sh`'s output truncates before the run ends** when an agent runs
+it, because the script covers around thirty files. The suite itself is fine and
+CI reads all of it; what truncates is what you get back in a tool result. So a
+local pass is a **green gate you cannot read to the end**, and that has already
+produced a wrong conclusion here — a reviewer recorded a mutation as survived
+when the output had simply stopped before reaching the mutated file.
+
+When you need an unambiguous answer about one file, run the runner against that
+file alone and read the whole thing:
+
+```
+qmltestrunner -input radicle-ui/tests/tst_<name>.qml
+```
+
+**Not `| tail`** — see "a long output is not a reason to pipe" above. The answer
+to output you cannot read is a narrower command, and here there is one.
 
 Logic that does not need a view belongs in the core module, where it is testable
 without Qt at all. A component test is the right layer for anything one QML file

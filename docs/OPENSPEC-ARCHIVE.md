@@ -57,9 +57,9 @@ count is not a stable property: how many hunks git prints depends on how far
 apart the edits fall, and the shape of the edits themselves depends on what the
 delta already had. The rule most often quoted ("prepend a title, rename the
 heading, two hunks") is wrong on both halves for a delta that already carries a
-title line. An earlier version of this page replaced it with "three hunks", which
-was wrong too — those three edits fall within three lines of each other, so git
-coalesces them into **one**.
+title line. "Three hunks" is wrong too, and is the tempting correction to reach
+for — those three edits fall within three lines of each other, so git coalesces
+them into **one**.
 
 Measured on `2026-09-12-m3-embedded-node-foundations/specs/node-paths/spec.md`
 against `openspec/specs/node-paths/spec.md` — the local reference pair, **one
@@ -119,13 +119,30 @@ up from the current directory to the first `openspec/` it finds. There is **no
 `--directory`, `-C` or `--root`**. `--store` takes a registered kebab-case store
 id, not a path.
 
-Agents work in worktrees, so this bites immediately: run from the main checkout
-and a change in a worktree is simply not listed. **Enter the worktree** —
-`EnterWorktree(path: …)` — and run `openspec` there with plain relative paths.
-Do not reach for `cd <dir> && openspec …`: the permission checker cannot analyse
-a compound command, so it costs an approval click *even though* `Bash(openspec:*)`
-is allow-listed. **Check the reported root before concluding a change is missing
-or the CLI is broken.**
+Agents work in worktrees, so where an agent stands decides whether its change is
+visible at all — an agent whose cwd is the main checkout while its change lives
+in a worktree gets the change simply not listed. **The dispatch is what makes
+this a non-problem, not anything in `openspec`.** With `isolation: "worktree"`,
+an agent's cwd *is* the tree holding its change, so `openspec` resolves the right
+root and runs plainly — no compound command, no approval click, no workaround. A
+tool that takes its root from the cwd is correct exactly when the cwd is.
+
+**Check the reported root before concluding a change is missing or the CLI is
+broken.** It is one line of `openspec list --json`, and it distinguishes "the
+change does not exist" from "I am standing in the wrong tree" — which otherwise
+look identical.
+
+Two things not to reach for if it ever does go wrong. **`EnterWorktree` is not
+for a dispatched agent** — it refuses a session at the repository root, and
+crossing between worktrees succeeds while leaving every Bash call refused;
+`.claude/agents/README.md`'s "Handing over between agents" has both probes
+verbatim. And **`cd <dir> && openspec …` costs an approval click** even though
+`Bash(openspec:*)` is allow-listed, because the checker cannot analyse a compound
+command.
+
+If validation genuinely cannot run, **say in the report that it did not run, and
+why**. An unrun gate reported as passed is worse than a skipped one, because the
+row gets ticked either way.
 
 ## Reading two capabilities together
 

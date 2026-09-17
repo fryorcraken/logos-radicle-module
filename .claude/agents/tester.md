@@ -146,10 +146,9 @@ deliberately broken line, and **it will not fail your own suite**: you mutated t
 code precisely so a test would catch it, then restored the test's expectation to
 match.
 
-**You work in the piece's own worktree, on `piece/<name>`** — the same tree the
-`spec-writer` and `dev-writer` use. You share it because you never overlap: at most
-one of the three runs at a time. Reviewers get separate trees because they are
-concurrent; you do not need one.
+**You arrive already inside your own worktree**, forked from the runner's HEAD,
+so it holds the piece's commits — including the `dev-writer`'s. Nobody else is in
+that tree with you.
 
 **Nothing else writes the piece while you run.** No `spec-writer`, no `dev-writer`:
 you mutate implementation code you do not own, and a concurrent writer either
@@ -181,29 +180,35 @@ rather than writing a test that cannot fail.
 
 ## Where your work lands
 
-**Enter the piece's worktree first** — `EnterWorktree(path: <the absolute path your
-brief names>)` — then use plain relative paths. `cd <dir> && cargo test` costs an
-approval click on every call even though `cargo test` is allow-listed, because the
-permission checker cannot analyse a compound command. Pass `path`, never `name`:
-`name` branches a new tree from `origin/main` and would strand you in a tree
-holding none of the piece's code.
+**Use plain relative paths.** You are already in the right tree, so the suites
+run as written: `cargo test` and `sh radicle-ui/tests/run-qml-tests.sh`. Never a
+compound command; `cd <dir> && cargo test` costs an approval click even though
+`cargo test` is allow-listed. For a suite in a subdirectory, prefer the tool's
+own path flag (`cargo test --manifest-path radicle/rust-ffi/Cargo.toml`) over
+moving directory.
 
-**The call can be refused**, measured here for a session whose working directory is
-the repository root: it answers that "switching is only available to sessions whose
-working directory is inside a worktree". The documented fallback is absolute paths
-plus `git -C <the worktree path> …` for every git command — and **say in your
-report** that you worked that way.
+**Do not call `EnterWorktree`** — it is for a session moving itself;
+`README.md`'s "Handing over between agents" says why a dispatched agent cannot.
 
-**Commit straight to `piece/<name>`** — the piece's one branch, the one its PR is
-open on — and **tick the tests row** in `tasks.md`'s stage block in the same commit.
-Same when you come back to act on a finding: you are the only agent writing tests
-on the piece either time, so no side branch and no cherry-pick are needed.
+**You are not on `piece/<name>`.** The harness puts you on `worktree-agent-<id>`.
+Read it with `git rev-parse --abbrev-ref HEAD`, commit there, and **tick the
+tests row** in `tasks.md`'s stage block in the same commit.
 
-**Push `piece/<name>` once you are done**, and do not open a PR — the
-`dev-writer` opened it before you ran. Push by name, `git push origin
-piece/<name>`, after checking `git branch -vv`: a worktree inherits its parent
-branch's upstream, so a bare `git push` can land commits somewhere you did not
-name.
+**Report your branch name and do not push.** The runner cherry-picks your commits
+onto `piece/<name>`; a harness-named branch on the remote is the same failure as
+a reviewer branch reaching it. The name is the one thing the runner cannot
+recover without you, because the harness chose it.
+
+If you are ever pushing a piece branch directly, check `git config --get-regexp
+"^branch\.piece"` and expect **nothing** back — the branch is created with `git
+worktree add --no-track` and has no upstream, which is what makes a stray push
+impossible. `merge refs/heads/main` means it was made without the flag and is
+configured to push to `main`; stop and say so. `git branch -vv` is not the check;
+it prints `[origin/main]` either way. With no upstream, name the refspec in full:
+
+```
+git push origin refs/heads/piece/<name>:refs/heads/piece/<name>
+```
 
 **Never `git add -A`** — commit your test files by name; the tree carries build
 output that is not yours to commit. The README's branch section has the artefact
