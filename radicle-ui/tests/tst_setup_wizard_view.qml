@@ -93,6 +93,18 @@ Item {
         return n ? String(n.text) : "";
     }
 
+    /// The outcome line a named `Finding` renders — the text a user reads,
+    /// not the property it was computed from. Findings are an inline component
+    /// whose two `Text` children share one objectName each, so this walks to
+    /// the outcome rather than the label.
+    function outcomeOf(findingName) {
+        var node = harness.findByName(wizard, findingName);
+        for (var i = 0; node && i < node.children.length; i++)
+            if (node.children[i].objectName === "findingOutcome")
+                return String(node.children[i].text);
+        return "";
+    }
+
     TestCase {
         name: "SetupWizardView"
         when: windowShown
@@ -145,6 +157,48 @@ Item {
                    + "than rendered as a failed finding, got: " + outcome);
         }
 
+        /// **A neutral finding still shows a backend sentence.** The spec
+        /// requires that where the backend supplied one — `gitProblem`,
+        /// `pathsProblem` or `getEmbeddedIdentity().problem` — it is displayed
+        /// verbatim. The identity finding is rendered `neutral` because "no
+        /// identity yet" is not a failure, and an outcome expression that read
+        /// `neutral || ok ? okText : failText` made its `failText` permanently
+        /// unreachable — swallowing a real diagnostic such as a permissions
+        /// error reading the identity store.
+        ///
+        /// The second half is what stops this passing against a finding that
+        /// shows `failText` unconditionally: with no problem sentence, the
+        /// ordinary "no identity exists here yet" wording must still be what
+        /// is shown.
+        function test_a_neutral_finding_still_shows_a_backend_problem() {
+            var sentence = "cannot read the identity store: permission denied";
+            wizard.flow.reset();
+            wizard.flow.fetchIdentity = function (cb) {
+                cb({ home: "/home/u/.local/share/basecamp/radicle",
+                     exists: false, nodeId: "", problem: sentence });
+            };
+            wizard.flow.runPreflight();
+            compare(wizard.flow.preflightDone, true, "precondition");
+            compare(wizard.flow.identityProblem, sentence,
+                    "precondition: the flow holds the backend's sentence");
+
+            var shown = harness.outcomeOf("findingIdentity");
+            compare(shown, sentence,
+                    "a backend sentence must be displayed verbatim rather than "
+                    + "swallowed by the finding's neutral styling");
+
+            // Without a problem sentence the ordinary wording is what shows —
+            // so the assertion above cannot pass against a finding stuck on
+            // failText.
+            wizard.flow.reset();
+            wizard.flow.fetchIdentity = function (cb) { fake.identity(cb); };
+            wizard.flow.runPreflight();
+            var ordinary = harness.outcomeOf("findingIdentity").toLowerCase();
+            verify(ordinary.indexOf("no identity exists") !== -1,
+                   "an empty home with no problem must still read as no "
+                   + "identity yet, got: " + ordinary);
+        }
+
         // ---- the mode step's identity consequence ---------------------------
 
         /// The separateness statement must be visible at the MODE step, before
@@ -154,28 +208,31 @@ Item {
         /// Asserted through the real `ModePicker`, which is where the wording
         /// lives, so a change there cannot silently remove the consequence the
         /// wizard relies on it to state.
+        /// Asserted on the blurb AS RENDERED, not on `picker.modes[i].blurb`.
+        /// Reading the data array cannot fail if the row stops drawing the
+        /// blurb at all — the array is untouched by an edit that deletes the
+        /// `Text`, sets `visible: false`, or drops it from the row's `Column`,
+        /// so the statement the spec requires could vanish from the screen
+        /// with this test still green.
         function test_the_mode_step_states_the_separate_identity_consequence() {
             goTo("mode");
 
             var picker = harness.findByName(wizard, "wizardModePicker");
             verify(picker !== null, "the mode step must offer the modes");
 
-            var embedded = null;
-            for (var i = 0; i < picker.modes.length; i++)
-                if (picker.modes[i].key === "embedded")
-                    embedded = picker.modes[i];
-            verify(embedded !== null, "embedded must be among the modes");
+            var node = harness.findByName(wizard, "modeBlurb_embedded");
+            verify(node !== null && node.visible,
+                   "the embedded option's blurb must be on screen");
 
-            var blurb = String(embedded.blurb).toLowerCase();
+            var blurb = String(node.text).toLowerCase();
             verify(blurb.indexOf("separate identity") !== -1,
                    "the embedded option must state that it is a separate "
-                   + "identity, got: " + embedded.blurb);
+                   + "identity, got: " + node.text);
 
-            var localBlurb = "";
-            for (var j = 0; j < picker.modes.length; j++)
-                if (picker.modes[j].key === "local")
-                    localBlurb = String(picker.modes[j].blurb).toLowerCase();
-            verify(localBlurb.indexOf("separate identity") === -1,
+            var localNode = harness.findByName(wizard, "modeBlurb_local");
+            verify(localNode !== null, "the local option must be offered too");
+            verify(String(localNode.text).toLowerCase()
+                       .indexOf("separate identity") === -1,
                    "and the local option must NOT make that statement — it is "
                    + "the user's own identity");
         }
@@ -222,6 +279,44 @@ Item {
             verify(trade.indexOf("unlock") !== -1
                    && trade.indexOf("plaintext") !== -1,
                    "and must still state both halves, got: " + trade);
+        }
+
+        /// **The passphrase does not outlive the calls that consume it.**
+        ///
+        /// `passphraseField` lives in a `StackLayout` child, and a StackLayout
+        /// instantiates every child eagerly — nothing is destroyed when the
+        /// step changes. So a plaintext passphrase left in `text` stays
+        /// resident for the rest of the wizard's life, readable through the QML
+        /// inspector that this repo's dev Basecamp ships with compiled in.
+        ///
+        /// Both consumers have run by the time the start step reports a started
+        /// node: `createEmbeddedIdentity` at identity, `startNode` at start.
+        /// That is the moment there is nothing left to hold it for.
+        function test_the_passphrase_does_not_outlive_the_calls_that_use_it() {
+            goTo("identity");
+            var field = harness.findByName(wizard, "identityPassphrase");
+            verify(field !== null, "the passphrase control must be present");
+
+            field.text = "correct horse battery";
+            wizard.flow.submitIdentity("tester", wizard.passphrase);
+            compare(wizard.flow.identityExists, true,
+                    "precondition: the identity was created");
+
+            goTo("start");
+            // Read it back before the start call, so this test proves the
+            // clearing happens at start rather than that the field was never
+            // filled.
+            compare(String(field.text), "correct horse battery",
+                    "precondition: the start step still has the passphrase to "
+                    + "hand to startNode");
+
+            wizard.flow.submitStart(wizard.passphrase);
+            compare(wizard.flow.nodeStarted, true,
+                    "precondition: the node started");
+
+            compare(String(field.text), "",
+                    "the plaintext passphrase must not stay resident once both "
+                    + "calls that need it have been made");
         }
 
         // ---- the network step -----------------------------------------------

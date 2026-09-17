@@ -135,7 +135,14 @@ Column {
                     font.bold: parent.parent.selected
                 }
 
+                // Named so a test can assert on the blurb AS RENDERED. Reading
+                // `picker.modes[i].blurb` instead asserts against the data the
+                // row is built from, which stays correct even if the row stops
+                // drawing it — and the embedded blurb is where the
+                // separate-identity consequence is stated, so a silently
+                // undrawn one is a requirement lost with every gate green.
                 Text {
+                    objectName: "modeBlurb_" + parent.parent.modelData.key
                     width: content.width
                     text: parent.parent.modelData.blurb
                     color: Theme.textDim
