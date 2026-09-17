@@ -62,11 +62,16 @@ Rust staticlib — every slot the flow drives was already exposed.
 
 ### Tests
 
-- [x] `tst_setup_wizard.qml` — 34 assertions against `SetupFlow`: order,
-      findings, blocking, refusals, start semantics, staleness.
-- [x] `tst_setup_wizard_view.qml` — 14 assertions against the rendered screen:
-      the three consequence statements, the seed list, the empty-listening
-      display, and the clipboard round trip.
+- [x] `tst_setup_wizard.qml` — tests against `SetupFlow`: order, findings,
+      blocking, refusals, mode persistence, start semantics, staleness.
+      Count them with `grep -c "function test_"` rather than trusting a number
+      written here; note `qmltestrunner`'s own total is two higher, because it
+      counts `initTestCase` and `cleanupTestCase`.
+- [x] `tst_setup_wizard_view.qml` — tests against the rendered screen: the
+      three consequence statements, the rendered mode blurb, a neutral
+      finding's backend sentence, the seed list, the empty-listening display,
+      the passphrase not outliving its use, and the clipboard round trip. Same
+      counting note as above.
 - [x] Fakes answer from their own arguments or from a scenario that differs in
       the value the assertion reads back. Two preflight scenarios fail
       **different** findings; two refusals are **different** sentences; the two

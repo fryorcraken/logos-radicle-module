@@ -92,12 +92,9 @@ true is now the `node-config` and `node-seeding` capabilities rather than the
 identity pair alone.
 
 One scope change worth naming, because the wizard's step list used to carry it:
-**the inbound opt-in is the panel's, not the wizard's.** Nothing persists a
-listen address, so a toggle in the wizard would record nothing and the node
-would keep binding no port. The wizard therefore states the outbound-only
-default and says the control is not available there; the opt-in with its port
-field belongs to the panel, which is the surface that introduces a channel for
-persisting it.
+**the inbound opt-in is the panel's, not the wizard's.** The reasoning is in
+the `embedded-node-wizard` change's `design.md`, under "The network step has no
+inbound control, and says so".
 
 The panel is backed by `node/config.rs`'s real fields, nothing invented:
 identity (alias, NID/DID read-only and copyable, change passphrase); tools (the
