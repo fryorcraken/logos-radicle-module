@@ -46,8 +46,16 @@ Rust staticlib — every slot the flow drives was already exposed.
 - [x] `SetupWizard.qml` — renders the six steps, owning no state beyond the
       fields a user types into. Injected call functions, the `SettingsPanel`
       pattern.
-- [x] The mode step **reuses `ModePicker`**, whose `embedded` blurb already
-      states the separate-identity consequence. One copy of that wording.
+- [x] The **embedded step is a confirmation, not a picker**. It states what
+      Embedded means and that the node runs as a new, separate identity, and
+      offers one control that puts Embedded in force. No `ModePicker`, no
+      Explore or Local, and no annotation of any mode as unstartable — the flow
+      does not read `startableModes` at all, so there is no value to caption
+      from. `ModePicker` itself is untouched and keeps its conservative empty
+      default; it remains the header toggle's and the settings panel's picker.
+- [x] `confirmEmbedded()` takes **no mode argument**, so `explore` and `local`
+      are not expressible from this flow, and is called only by a `Button` —
+      `advance()` and `back()` cannot reach it, so arriving writes no mode.
 - [x] The identity step states **both halves** of the passphrase trade, at the
       control, before it is touched, and keeps stating them when it is turned
       off. The switch arrives checked.
@@ -68,10 +76,12 @@ Rust staticlib — every slot the flow drives was already exposed.
       written here; note `qmltestrunner`'s own total is two higher, because it
       counts `initTestCase` and `cleanupTestCase`.
 - [x] `tst_setup_wizard_view.qml` — tests against the rendered screen: the
-      three consequence statements, the rendered mode blurb, a neutral
-      finding's backend sentence, the seed list, the empty-listening display,
-      the passphrase not outliving its use, and the clipboard round trip. Same
-      counting note as above.
+      three consequence statements (the embedded one read off the rendered
+      `Text`, never a data array), that no other mode is offered whatever
+      `startableModes` reports, that the rendered control is what writes the
+      mode, a neutral finding's backend sentence, the seed list, the
+      empty-listening display, the passphrase not outliving its use, and the
+      clipboard round trip. Same counting note as above.
 - [x] Fakes answer from their own arguments or from a scenario that differs in
       the value the assertion reads back. Two preflight scenarios fail
       **different** findings; two refusals are **different** sentences; the two
@@ -101,6 +111,33 @@ Rust staticlib — every slot the flow drives was already exposed.
 - [x] Each of the above proven by mutation: the fix reverted, the named test
       watched to fail, the fix restored.
 - [x] Full suite green — `sh radicle-ui/tests/run-qml-tests.sh`, zero failures.
+
+### The rewritten step 2 (third pass)
+
+The user ran the wizard and found step 2 of 6, inside a flow titled "Set up an
+embedded node", offering all three modes with every row captioned "This version
+cannot start this mode yet". The spec was rewritten; this is the code following
+it.
+
+- [x] `mode` → `embedded` throughout: `steps`, `canAdvance`,
+      `advanceBlockedReason`, both file headers, `design.md` and `PLAN.md`.
+- [x] `chooseMode(mode)` → `confirmEmbedded()`. No argument, so no other mode is
+      expressible; called only by a `Button`, so arriving and going back write
+      nothing.
+- [x] `canConfirmEmbedded` withholds the control once the backend reports
+      Embedded, while the statement of what Embedded means stays on screen.
+- [x] `startableModes` and `modeUnavailableReason` removed from `SetupFlow`
+      entirely, so the annotation cannot return without the property returning
+      first. `ModePicker.qml` untouched.
+- [x] New scenarios covered: arriving writes no mode, going back writes no mode,
+      the control puts Embedded in force, the mode in force is the reply not the
+      value written, a refusal neither advances nor moves it, returning does not
+      re-offer it, and the startable set changes nothing.
+- [x] Four mutations run, each reverted: write-on-arrival (7 red), trust the
+      written value without re-reading (1 red), an unconditional unstartable
+      caption (1 red), a caption keyed on the startable set (1 red, on the other
+      assertion). The one mutation that reddened **nothing** is recorded in the
+      test that would have had to catch it.
 
 ### Documentation
 

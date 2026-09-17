@@ -79,7 +79,7 @@ QtObject {
 
     // ---- the step in force -----------------------------------------------
 
-    readonly property var steps: ["preflight", "mode", "identity",
+    readonly property var steps: ["preflight", "embedded", "identity",
                                   "network", "start", "confirm"]
 
     /// Which step is in force, as an index. See the header for why an index.
@@ -143,11 +143,16 @@ QtObject {
     // Read from replies, never inferred from a call having been issued.
 
     /// getCapabilities().mode.
+    ///
+    /// **`startableModes` and `modeUnavailableReason` are deliberately NOT held
+    /// here.** This flow sets up one mode, so it has no unstartable alternative
+    /// to caption, and the spec forbids it annotating one whatever that array
+    /// reports. Not reading the array is what makes that structural rather than
+    /// a rendering choice: there is no value here to caption FROM, so a future
+    /// edit cannot reintroduce the annotation without first reintroducing the
+    /// property. The array remains the header toggle's and the settings panel's
+    /// business — see `ModePicker.qml`, which still consumes it and still must.
     property string modeInForce: ""
-    /// getCapabilities().startableModes.
-    property var startableModes: []
-    /// getCapabilities().modeUnavailableReason.
-    property string modeUnavailableReason: ""
 
     /// The seeds listKnownSeeds() reported.
     property var seeds: []
@@ -214,10 +219,19 @@ QtObject {
         return "";
     }
 
-    /// Only Embedded continues past the mode step: the four steps after it are
-    /// about a node no other mode runs. Read from capabilities rather than from
-    /// what the flow asked for.
+    /// Only Embedded continues past the embedded step: the four steps after it
+    /// are about a node no other mode runs. Read from capabilities rather than
+    /// from what the flow asked for.
     readonly property bool modeIsEmbedded: modeInForce === "embedded"
+
+    /// Whether the embedded step offers its confirm control.
+    ///
+    /// Withheld once Embedded is in force, because the backend has already
+    /// answered the question the control asks. Unlike identity creation and
+    /// node start this is idempotent, so withholding it is about not asking
+    /// twice rather than about preventing a second act — which is why the
+    /// STATEMENT of what Embedded means stays on screen either way.
+    readonly property bool canConfirmEmbedded: !modeIsEmbedded
 
     /// Whether advancing from the step in force is permitted.
     ///
@@ -226,15 +240,20 @@ QtObject {
     /// which step is in force.
     readonly property bool canAdvance: {
         if (stepIndex >= steps.length - 1) return false;
-        if (step === "mode") return modeIsEmbedded;
+        if (step === "embedded") return modeIsEmbedded;
         return true;
     }
 
     /// Why advancing is refused, or "" when it is not.
+    ///
+    /// Note what this does NOT say: it does not offer an alternative. A user
+    /// who does not want Embedded leaves through the control that closes the
+    /// flow, which every step offers — the flow sets up one mode and has no
+    /// second answer to give.
     readonly property string advanceBlockedReason:
-        (step === "mode" && !modeIsEmbedded)
-            ? "Embedded is the mode the remaining steps set up. Choose it to "
-            + "continue, or close this setup to stay in "
+        (step === "embedded" && !modeIsEmbedded)
+            ? "Embedded is not yet in force. Confirm it to continue, or close "
+            + "this setup to stay in "
             + (modeInForce !== "" ? modeInForce : "the current mode") + "."
             : ""
 
@@ -393,17 +412,34 @@ QtObject {
         return "";
     }
 
-    // ---- the mode step ----------------------------------------------------
+    // ---- the embedded step -------------------------------------------------
 
-    /// Persist a mode. Does NOT record the flow's own copy: `modeInForce` is
-    /// refreshed from capabilities, so the flow shows what is in force rather
-    /// than what it asked for. A refused write therefore leaves the step where
-    /// it was, with the refusal on screen.
-    function chooseMode(mode) {
-        if (!saveSetting) return;
+    /// Put Embedded in force.
+    ///
+    /// **Takes no mode argument, and that is the point.** Its predecessor was
+    /// `chooseMode(mode)`, which could express `explore` and `local` — and a
+    /// picker offering all three is what the wizard shipped as its second step,
+    /// inside a flow whose next four steps are about a node neither of the
+    /// other two runs. With no parameter there is no second answer to express:
+    /// the only write reachable from this flow is `mode=embedded`, so the
+    /// spec's "MUST NOT offer explore or local" holds in the state object and
+    /// not only in what the screen happens to draw.
+    ///
+    /// **Called by a control, never by arriving at the step.** A mode written
+    /// on arrival would put a module into Embedded because someone opened a
+    /// screen, and would leave the separate-identity consequence something the
+    /// user was shown rather than something they answered. Nothing in this file
+    /// calls it; `back()` and `advance()` cannot reach it.
+    ///
+    /// Does NOT record the flow's own copy of the result: `modeInForce` is
+    /// refreshed from capabilities, so the flow reports what is in force rather
+    /// than what it asked for. A refused write therefore leaves the mode and
+    /// the step exactly where they were, with the refusal on screen.
+    function confirmEmbedded() {
+        if (!saveSetting) return false;
         var issuedAt = epoch;
         lastError = "";
-        saveSetting("mode", mode, function (reply) {
+        saveSetting("mode", "embedded", function (reply) {
             if (!isCurrent(issuedAt)) return;
             if (reply && reply.error) {
                 flow.lastError = reply.error;
@@ -414,12 +450,13 @@ QtObject {
             // the flow keep no second opinion.
             flow.refreshCapabilities();
         });
+        return true;
     }
 
     /// Everything a `getCapabilities()` reply says, written to the properties
     /// that hold it.
     ///
-    /// One function rather than the same seven assignments at each call site.
+    /// One function rather than the same assignments at each call site.
     /// Both callers — the preflight and `refreshCapabilities` — need exactly
     /// this mapping, and a hand-written second copy is the shape CLAUDE.md
     /// names as this repo's standing defect: the `wantRid`/`syncEpoch` guard
@@ -435,8 +472,6 @@ QtObject {
         gitProblem = caps.gitProblem || "";
         pathsProblem = caps.pathsProblem || "";
         modeInForce = caps.mode || "";
-        startableModes = caps.startableModes || [];
-        modeUnavailableReason = caps.modeUnavailableReason || "";
         if (nodeId === "") nodeId = caps.nodeId || "";
     }
 
@@ -546,11 +581,6 @@ QtObject {
             // updates the same value rather than a second copy that can
             // disagree. A node whose threads have since died therefore offers
             // the start control again, which is correct.
-            // One question, one answer: "is a node answering on the socket" is
-            // the same question the preflight asked, so a later reading of it
-            // updates the same value rather than a second copy that can
-            // disagree. A node whose threads have since died therefore offers
-            // the start control again, which is correct.
             flow.alreadyServing = reply.serving === true;
         });
     }
@@ -587,8 +617,6 @@ QtObject {
         embeddedHome = "";
         pathsProblem = "";
         modeInForce = "";
-        startableModes = [];
-        modeUnavailableReason = "";
         seeds = [];
         nodeStarted = false;
         listening = [];

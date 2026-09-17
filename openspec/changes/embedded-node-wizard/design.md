@@ -3,7 +3,7 @@
 ## Context
 
 The spec (`specs/embedded-setup/spec.md`) defines a six-step flow — preflight,
-mode, identity, network, start, confirm — over module methods that all already
+embedded, identity, network, start, confirm — over module methods that all already
 exist in `radicle_ui.rep`. No transport change, no core-module change, no new
 slot. What is being decided here is therefore entirely about **shape in QML**:
 where the flow's state lives, how "which step is in force" and "what blocks
@@ -256,27 +256,96 @@ against.
 deleting the `clip.copy()` call turns it red only because the verifier is
 separate.
 
-### The mode step reuses `ModePicker`, which already states the consequence
+### Step 2 is a confirmation, not a mode picker
 
-`ModePicker.qml`'s `embedded` blurb already says the mode "creates a SEPARATE
-identity from any node you already run — a new machine joining your network, not
-the same one", which is the sentence the spec requires at the mode step. Reusing
-it keeps one copy of that wording; writing a second one in the wizard would give
-the repo two statements of the same consequence, free to drift, with no gate
-that notices.
+The step began as a `ModePicker` — the wizard offering Explore, Local and
+Embedded, reusing the picker's wording so the separate-identity sentence had one
+copy. That was faithful to the spec as written and wrong in front of a user, who
+ran it and saw *step 2 of 6, inside a flow titled "Set up an embedded node",
+asking them to choose between three modes, all three captioned "This version
+cannot start this mode yet"*. Their words: "the wizard is ONLY for the embedded
+node! Explore and local were working out of the box, they don't need a wizard."
 
-**The blurb carries an `objectName` so the test can assert on it as rendered.**
-The test first read `picker.modes[i].blurb` — the data array the row is built
-from — which stays correct however the row is drawn. Review proved the gap by
-blanking the rendered `Text` to `""`: every view test stayed green, including
-that one. A statement the spec requires the user to *see* had no gate that
-could notice it vanishing. Asserting through `modeBlurb_<key>` closes that, and
-the same mutation now reddens
-`test_the_mode_step_states_the_separate_identity_consequence`.
+Both halves of that are real defects and they have different causes.
 
-This is the repo's "a fake returning the same thing for every input" lesson in
-a second form: an assertion read off the input rather than the output cannot
-distinguish "rendered" from "never rendered".
+**The choice should never have been offered.** A user who opened this flow has
+already chosen Embedded. Explore and Local need no setup at all, and the four
+steps after this one are about a node neither of them runs — so picking either
+abandons the rest of the flow. A choice the flow then refuses to continue from
+has one permitted answer, which is not a choice. The spec was rewritten to say
+so, and `confirmEmbedded()` replaced `chooseMode(mode)`.
+
+**The caption came from a default that is correct where it lives.**
+`ModePicker.startableModes` defaults to `[]` and is populated only when
+`getCapabilities()` replies, so every row captions itself unstartable in the
+window before that. `ModePicker.qml:55-58` documents that as deliberate: a
+caller that forgets to wire the array gets over-annotation, which is visible,
+rather than under-annotation, which is the bug the property was introduced to
+end. So `ModePicker` is untouched — it remains the header toggle's and the
+settings panel's picker, which are the surfaces where a user compares the three.
+The wizard simply stopped being one of them.
+
+**Why the step survived at all rather than being deleted.** Two things still
+need it. The separate-identity consequence must be stated *before* any identity
+is created — the confirm step restates it with the DID that by then exists, and
+a statement made only there is made after the decision it informs. And the mode
+write needs somewhere to hang: Embedded has to be in force before the four node
+steps mean anything, and `getCapabilities().mode` is what the flow reads to know
+it landed.
+
+**Why the write is an explicit act rather than something arrival does.** Putting
+`confirmEmbedded()` in `advance()` would be shorter and it is the wrong shape: it
+would put a module into Embedded because someone opened a screen, and would make
+the stated consequence something the user was *shown* rather than something they
+*answered*. A user who reads the statement and thinks better of it must be able
+to close the flow and still be in the mode they started in. So `advance()` and
+`back()` cannot reach the write, and a `Button` is the only caller.
+
+**`confirmEmbedded()` takes no argument, and that is the guard.** Its
+predecessor `chooseMode(mode)` could express `explore` and `local`; with no
+parameter the only write reachable from this flow is `mode=embedded`, so "MUST
+NOT offer explore or local" holds in the state object rather than only in what
+the screen happens to draw. For the same reason `SetupFlow` no longer holds
+`startableModes` or `modeUnavailableReason` at all: there is no value here to
+caption *from*, so the annotation cannot be reintroduced without first
+reintroducing the property — a two-step regression rather than a one-line one.
+
+**What breaks without each guard**, so a later reader knows what they are
+deleting:
+
+- Moving `confirmEmbedded()` into `advance()` reddens seven tests, among them
+  `test_arriving_at_the_embedded_step_writes_no_mode`,
+  `test_going_back_from_the_embedded_step_writes_no_mode` and
+  `test_the_rendered_control_puts_embedded_in_force`. Verified by mutation.
+- Deleting `refreshCapabilities()` from `confirmEmbedded`'s success path reddens
+  `test_the_mode_in_force_is_the_reply_not_the_value_written`, on its call-log
+  assertion. Note the *value* assertion alone cannot catch it: the fake is
+  synchronous, so a flow that assigned `modeInForce` and also re-read would have
+  the assignment overwritten in the same turn and stay green. The call log is
+  what carries that requirement.
+- Re-adding any text keyed on a startable array reddens
+  `test_no_other_mode_is_offered_whatever_the_startable_set_says`, on either its
+  "no text stating a mode cannot be started" assertion (an unconditional
+  caption) or its "unchanged by the startable set" comparison (a conditional
+  one). Both halves proven to discriminate independently.
+
+**The lesson kept from the version this replaces**, because it is about how the
+test is written rather than about `ModePicker`: **the statement is asserted as
+RENDERED, not read off a data array.** The old test read
+`picker.modes[i].blurb`, which stays correct however the row is drawn — review
+proved the gap by blanking the rendered `Text` to `""` and watching every view
+test, including that one, stay green. A statement the spec requires the user to
+*see* had no gate that could notice it vanishing.
+`test_the_embedded_step_states_the_separate_identity_consequence` now walks the
+scene graph to the `Text` and reads `text` off it, so deleting it, hiding it or
+blanking it all redden.
+
+That is the repo's "a fake returning the same thing for every input" lesson in a
+second form: an assertion read off the *input* rather than the output cannot
+distinguish "rendered" from "never rendered". It is also why the "no other mode
+is offered" test asserts on a walk of every visible string rather than on
+objectNames alone — an objectName check catches the caption coming back under
+its old name and misses a hand-written second copy of the same sentence.
 
 ### The network step has no inbound control, and says so
 
@@ -357,7 +426,7 @@ becoming permanent by accident.
   `test_an_unanswered_finding_is_not_reported_as_a_failure`.
 
 A third question the spec settles but the flow surfaces: **advancing past the
-mode step requires `getCapabilities().mode === "embedded"`, so a flow whose
+embedded step requires `getCapabilities().mode === "embedded"`, so a flow whose
 capabilities have not yet answered does not advance.** That is the requirement
 read literally — an unanswered backend has not reported `embedded` — and it is
 pinned by `test_an_unanswered_mode_does_not_advance` rather than left implicit,

@@ -34,14 +34,25 @@ Item {
 
         property bool identityExists: false
         property string nodeId: ""
+
+        /// The mode `getCapabilities()` reports. Settable so a test can put the
+        /// flow in `local` and watch the embedded step's control move it —
+        /// the default is `embedded` so the other steps' tests can walk past it.
+        property string mode: "embedded"
+
+        /// Reported as startable throughout, and deliberately all three: this
+        /// is the scenario the wizard shipped wrong, and the requirement is
+        /// that the embedded step offers nothing extra whatever it says.
+        property var startableModes: ["explore", "local", "embedded"]
+
         property var seedItems: [
             { url: "https://seed.radicle.xyz", alias: "radicle", source: "builtin" },
             { url: "https://seed.example.org", alias: "example", source: "builtin" }
         ]
 
         function capabilities(cb) {
-            cb({ mode: "embedded",
-                 startableModes: ["explore", "local", "embedded"],
+            cb({ mode: mode,
+                 startableModes: startableModes,
                  modeUnavailableReason: "",
                  gitFound: true, gitProblem: "", pathsProblem: "",
                  nodeId: nodeId });
@@ -93,6 +104,30 @@ Item {
         return n ? String(n.text) : "";
     }
 
+    /// Every visible string the scene graph holds, concatenated.
+    ///
+    /// Needed for the requirements phrased as an ABSENCE — "no text MUST be
+    /// displayed stating that a mode cannot be started". An objectName check
+    /// cannot express that: it catches the caption coming back as
+    /// `modeUnavailable_*`, and misses a hand-written second copy of the same
+    /// sentence under any other name. Walking for the string catches both.
+    ///
+    /// It is also what makes "what is displayed MUST be unchanged" assertable
+    /// between two startable sets, which is the scenario's own wording.
+    ///
+    /// `visible` is checked per node rather than only on the leaf, because a
+    /// Text inside a hidden Column reports `visible` false — Qt propagates it
+    /// — but a Text inside a StackLayout's non-current child does too, which is
+    /// what keeps the other five steps out of this.
+    function visibleTextUnder(node) {
+        if (!node || node.visible === false) return "";
+        var out = (node.text !== undefined && String(node.text) !== "")
+                  ? String(node.text) + "\n" : "";
+        for (var i = 0; i < node.children.length; i++)
+            out += harness.visibleTextUnder(node.children[i]);
+        return out;
+    }
+
     /// The outcome line a named `Finding` renders — the text a user reads,
     /// not the property it was computed from. Findings are an inline component
     /// whose two `Text` children share one objectName each, so this walks to
@@ -112,6 +147,14 @@ Item {
         function init() {
             fake.identityExists = false;
             fake.nodeId = "";
+            fake.mode = "embedded";
+            fake.startableModes = ["explore", "local", "embedded"];
+            fake.seedItems = [
+                { url: "https://seed.radicle.xyz", alias: "radicle",
+                  source: "builtin" },
+                { url: "https://seed.example.org", alias: "example",
+                  source: "builtin" }
+            ];
             wizard.flow.fetchCapabilities = function (cb) { fake.capabilities(cb); };
             wizard.flow.fetchIdentity = function (cb) { fake.identity(cb); };
             wizard.flow.fetchNodeStatus = function (cb) { fake.nodeStatus(cb); };
@@ -199,42 +242,148 @@ Item {
                    + "identity yet, got: " + ordinary);
         }
 
-        // ---- the mode step's identity consequence ---------------------------
+        // ---- the embedded step ----------------------------------------------
 
-        /// The separateness statement must be visible at the MODE step, before
-        /// anything is created — a statement made only after the identity
-        /// exists is made after the decision it informs.
+        /// **The separateness statement is asserted AS RENDERED.** This is the
+        /// lesson kept from the version of this test that read
+        /// `ModePicker.modes[i].blurb`: the data array a row is built from
+        /// stays correct however the row is drawn, so review proved the gap by
+        /// blanking the rendered `Text` to `""` and watching every view test —
+        /// including that one — stay green. A statement the spec requires the
+        /// user to SEE had no gate that could notice it vanishing.
         ///
-        /// Asserted through the real `ModePicker`, which is where the wording
-        /// lives, so a change there cannot silently remove the consequence the
-        /// wizard relies on it to state.
-        /// Asserted on the blurb AS RENDERED, not on `picker.modes[i].blurb`.
-        /// Reading the data array cannot fail if the row stops drawing the
-        /// blurb at all — the array is untouched by an edit that deletes the
-        /// `Text`, sets `visible: false`, or drops it from the row's `Column`,
-        /// so the statement the spec requires could vanish from the screen
-        /// with this test still green.
-        function test_the_mode_step_states_the_separate_identity_consequence() {
-            goTo("mode");
+        /// So this walks the scene graph to the `Text` and reads `text` off it.
+        /// Deleting the `Text`, setting `visible: false` or blanking its string
+        /// all redden this.
+        ///
+        /// It is the repo's "a fake returning the same thing for every input"
+        /// lesson in a second form: an assertion read off the INPUT rather than
+        /// the output cannot distinguish "rendered" from "never rendered".
+        function test_the_embedded_step_states_the_separate_identity_consequence() {
+            goTo("embedded");
 
-            var picker = harness.findByName(wizard, "wizardModePicker");
-            verify(picker !== null, "the mode step must offer the modes");
-
-            var node = harness.findByName(wizard, "modeBlurb_embedded");
+            var node = harness.findByName(wizard, "embeddedExplains");
             verify(node !== null && node.visible,
-                   "the embedded option's blurb must be on screen");
+                   "the statement must be on screen");
 
-            var blurb = String(node.text).toLowerCase();
-            verify(blurb.indexOf("separate identity") !== -1,
-                   "the embedded option must state that it is a separate "
-                   + "identity, got: " + node.text);
+            var t = String(node.text).toLowerCase();
+            verify(t.indexOf("runs the node itself") !== -1
+                   || t.indexOf("runs the node") !== -1,
+                   "the step must state that this module runs a node of its "
+                   + "own, got: " + node.text);
+            verify(t.indexOf("new identity") !== -1,
+                   "and that the node operates as a new identity, got: "
+                   + node.text);
+            verify(t.indexOf("separate from any radicle node you already run")
+                   !== -1,
+                   "separate from any node the user already runs, got: "
+                   + node.text);
+        }
 
-            var localNode = harness.findByName(wizard, "modeBlurb_local");
-            verify(localNode !== null, "the local option must be offered too");
-            verify(String(localNode.text).toLowerCase()
-                       .indexOf("separate identity") === -1,
-                   "and the local option must NOT make that statement — it is "
-                   + "the user's own identity");
+        /// The statement precedes any identity write: it is on screen at the
+        /// embedded step, and `createEmbeddedIdentity` has not been called.
+        function test_the_separateness_statement_precedes_any_identity_write() {
+            var created = 0;
+            wizard.flow.createIdentity = function (a, p, cb) {
+                created = created + 1;
+                fake.create(a, p, cb);
+            };
+
+            goTo("embedded");
+            var node = harness.findByName(wizard, "embeddedExplains");
+            verify(node !== null && node.visible,
+                   "the statement must be visible at this step");
+            compare(created, 0,
+                    "and no identity must have been created by the time it is "
+                    + "stated");
+        }
+
+        /// **No other mode is offered, whatever the startable set reports.**
+        /// The fake reports all three as startable throughout, which is the
+        /// scenario the wizard actually shipped wrong: a `ModePicker` offering
+        /// Explore, Local and Embedded, each captioned "This version cannot
+        /// start this mode yet".
+        ///
+        /// The picker's objectNames are the ones asserted absent because they
+        /// are what the wizard used to render — `wizardModePicker` reappearing
+        /// is precisely the regression, and `modeUnavailable_*` reappearing is
+        /// the caption. The generic sentence is checked against the whole
+        /// step's rendered text as well, so a hand-written second copy of the
+        /// caption would be caught too.
+        function test_no_other_mode_is_offered_whatever_the_startable_set_says() {
+            goTo("embedded");
+
+            compare(harness.findByName(wizard, "wizardModePicker"), null,
+                    "the step must not present the modes as a set to pick from");
+            compare(harness.findByName(wizard, "modePick_explore"), null,
+                    "no control selecting explore must be present");
+            compare(harness.findByName(wizard, "modePick_local"), null,
+                    "no control selecting local must be present");
+            compare(harness.findByName(wizard, "modeUnavailable_embedded"),
+                    null,
+                    "and no mode must be annotated as unstartable");
+
+            var shown = harness.visibleTextUnder(wizard).toLowerCase();
+            verify(shown.indexOf("cannot start this mode") === -1,
+                   "no text stating a mode cannot be started, got: " + shown);
+
+            // The same step told a startable set of `embedded` alone must show
+            // exactly the same thing — without this the assertions above could
+            // pass against a step that reads the array and happens to caption
+            // nothing for this particular value.
+            var withAll = harness.visibleTextUnder(wizard);
+            wizard.flow.fetchCapabilities = function (cb) {
+                cb({ mode: "embedded", startableModes: ["embedded"],
+                     modeUnavailableReason: "", gitFound: true,
+                     gitProblem: "", pathsProblem: "", nodeId: fake.nodeId });
+            };
+            wizard.flow.refreshCapabilities();
+            compare(harness.visibleTextUnder(wizard), withAll,
+                    "what is displayed must be unchanged by the startable set");
+        }
+
+        /// **The control is what puts Embedded in force**, and arriving does
+        /// not. Driven through the rendered Button rather than through the flow
+        /// function, because the requirement is that the step OFFERS a control
+        /// the user performs.
+        function test_the_rendered_control_puts_embedded_in_force() {
+            var writes = [];
+            wizard.flow.saveSetting = function (k, v, cb) {
+                writes.push(k + "=" + v);
+                fake.mode = v;
+                fake.setting(k, v, cb);
+            };
+            fake.mode = "local";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+
+            goTo("embedded");
+            compare(writes.length, 0,
+                    "arriving at the step must write nothing, got: "
+                    + JSON.stringify(writes));
+
+            var btn = harness.findByName(wizard, "embeddedConfirm");
+            verify(btn !== null && btn.visible,
+                   "the step must offer a control that puts Embedded in force");
+            compare(btn.enabled, true,
+                    "which must be enabled while Embedded is not in force");
+
+            btn.clicked();
+            compare(writes.length, 1, "exactly one write, got: "
+                    + JSON.stringify(writes));
+            compare(writes[0], "mode=embedded");
+            compare(wizard.flow.modeInForce, "embedded");
+            compare(btn.enabled, false,
+                    "and the control must not be re-offered once the backend "
+                    + "reports Embedded in force");
+
+            // The statement stays displayed either way — the step is not
+            // finished with saying what Embedded means once it is chosen.
+            var node = harness.findByName(wizard, "embeddedExplains");
+            verify(node !== null && node.visible
+                   && String(node.text).toLowerCase()
+                          .indexOf("new identity") !== -1,
+                   "the new-identity statement must stay on screen");
         }
 
         // ---- the identity step's passphrase trade ---------------------------

@@ -6,11 +6,11 @@ import "Theme.js" as Theme
 /*
  * The embedded node's guided setup, rendered.
  *
- * Six steps — preflight, mode, identity, network, start, confirm — over module
- * methods that already exist. This file is the SCREEN; `SetupFlow.qml` beside
- * it is the state, the blocking rules and the calls. Read that first: every
- * "why" about ordering, gating and staleness is there, and nothing here decides
- * any of it.
+ * Six steps — preflight, embedded, identity, network, start, confirm — over
+ * module methods that already exist. This file is the SCREEN; `SetupFlow.qml`
+ * beside it is the state, the blocking rules and the calls. Read that first:
+ * every "why" about ordering, gating and staleness is there, and nothing here
+ * decides any of it.
  *
  * ## What this screen is for
  *
@@ -24,7 +24,7 @@ import "Theme.js" as Theme
  * afterwards. This screen exists to state them at those three moments:
  *
  *  - **the passphrase trade**, at the identity step, where the control is;
- *  - **that this is a NEW identity**, at the mode step BEFORE anything is
+ *  - **that this is a NEW identity**, at the embedded step BEFORE anything is
  *    created, and again at confirm with the DID that now exists;
  *  - **that the node accepts no inbound connections**, at the network step, as
  *    the setting in force rather than as a choice.
@@ -74,6 +74,7 @@ Item {
     readonly property string currentStep: setupFlow.step
     readonly property bool backEnabled: setupFlow.canGoBack
     readonly property bool advanceEnabled: setupFlow.canAdvance
+    readonly property bool confirmEmbeddedEnabled: setupFlow.canConfirmEmbedded
     readonly property bool createEnabled: setupFlow.canCreateIdentity
     readonly property bool startEnabled: setupFlow.canStartNode
     readonly property string errorShown: setupFlow.lastError
@@ -252,39 +253,66 @@ Item {
                     }
                 }
 
-                // ---- 2. mode -------------------------------------------------
+                // ---- 2. embedded ---------------------------------------------
                 //
-                // ModePicker already states the per-mode identity consequence,
-                // including that Embedded creates a SEPARATE identity from any
-                // node the user already runs. Reused rather than restated: a
-                // second copy of that wording would be free to drift from the
-                // first with no gate noticing.
+                // A CONFIRMATION, not a pick. This flow sets up Embedded and
+                // nothing else, so there is no `ModePicker` here and no list of
+                // three: Explore and Local need no setup at all, and offering
+                // them inside a flow whose next four steps are about a node
+                // neither of them runs is a choice with one permitted answer.
+                //
+                // Nor is any mode annotated as unstartable. The wizard's second
+                // step used to render every row of a `ModePicker` captioned
+                // "This version cannot start this mode yet" — `startableModes`
+                // arrives empty and is populated only once `getCapabilities()`
+                // replies, so in the window before that every mode reads as
+                // broken. That default is right FOR ModePicker (a forgotten
+                // wiring over-annotates, which is visible) and it is why this
+                // step reads no such array at all: a flow setting up one mode
+                // has no unstartable alternative to caption.
                 Column {
                     spacing: Theme.gapSm
 
+                    // The statement the whole step exists for, and it is made
+                    // BEFORE any identity is created — a consequence stated only
+                    // at confirm is stated after the decision it informs.
                     Text {
+                        objectName: "embeddedExplains"
                         width: body.width
-                        text: "Which node this module uses. What each choice "
-                            + "means for your identity is stated in the option "
-                            + "itself."
-                        color: Theme.textDim
+                        text: "Embedded means this module keeps its own Radicle "
+                            + "home and runs the node itself. The node operates "
+                            + "as a new identity this module creates — separate "
+                            + "from any Radicle node you already run and from "
+                            + "any identity you already hold."
+                        color: Theme.text
                         font.pixelSize: Theme.fontSm
                         wrapMode: Text.WordWrap
                     }
 
-                    ModePicker {
-                        objectName: "wizardModePicker"
+                    // What is in force, from getCapabilities().mode — never
+                    // from what this flow asked for.
+                    Text {
+                        objectName: "embeddedInForce"
+                        visible: setupFlow.modeIsEmbedded
                         width: body.width
-                        current: setupFlow.modeInForce
-                        startableModes: setupFlow.startableModes
-                        unavailableReason: setupFlow.modeUnavailableReason
-                        onModeChosen: function (mode) {
-                            setupFlow.chooseMode(mode);
-                        }
+                        text: "Embedded is in force."
+                        color: Theme.good
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // The explicit act. Arriving at this step writes nothing:
+                    // a mode written on arrival would put a module into
+                    // Embedded because someone opened a screen.
+                    Button {
+                        objectName: "embeddedConfirm"
+                        text: "Use Embedded mode"
+                        enabled: setupFlow.canConfirmEmbedded
+                        onClicked: setupFlow.confirmEmbedded()
                     }
 
                     Text {
-                        objectName: "modeAdvanceBlocked"
+                        objectName: "embeddedAdvanceBlocked"
                         visible: setupFlow.advanceBlockedReason !== ""
                         width: body.width
                         text: setupFlow.advanceBlockedReason
@@ -571,9 +599,9 @@ Item {
                 Column {
                     spacing: Theme.gapSm
 
-                    // Restated, not stated for the first time: the mode step
-                    // said it before anything was created, and this says it
-                    // again with the DID that now exists.
+                    // Restated, not stated for the first time: the embedded
+                    // step said it before anything was created, and this says
+                    // it again with the DID that now exists.
                     Text {
                         objectName: "confirmSeparateIdentity"
                         width: body.width
