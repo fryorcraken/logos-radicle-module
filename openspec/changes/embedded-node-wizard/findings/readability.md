@@ -7,7 +7,7 @@ correctness, security and architecture are covered by other instances.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `SetupFlow.qml:323-334` — three different nouns for
+- [x] **`dev-writer`** — `SetupFlow.qml:323-334` — three different nouns for
       three different counts, in the same ten lines, with no comment
       reconciling them
       **Scenario:** `runPreflight()`'s own doc comment (line 273) says "Ask all
@@ -38,7 +38,24 @@ correctness, security and architecture are covered by other instances.
       within one screen of code, and none says "seeds does not count toward
       `preflightDone`, deliberately."
 
-- [ ] **`dev-writer`** — `SetupFlow.qml:281-289` and `SetupFlow.qml:378-386` —
+      **Fixed** in `f471999` and `8152bcc`. The three counts are genuinely
+      three different numbers, so the fix is to say that rather than to
+      reconcile them into one. `runPreflight()`'s doc comment now carries a
+      section — "Three counts that are deliberately not the same number" —
+      spelling out all three and the reason each differs: the home finding has
+      no call of its own (derived from capabilities' `pathsProblem` and
+      identity's `home`), and `listKnownSeeds` feeds the network step's seed
+      list, which is not a finding and gates nothing. The `fetchSeeds` block
+      also carries an inline "the one call that marks no answer" comment at the
+      site, so a reader tracing the omission finds the reason there rather than
+      reconstructing it.
+
+      The count itself is gone: `preflightAnswers >= 3` became three named
+      booleans conjoined into `allProbesAnswered`, which answers
+      `architecture.md`'s finding on the same lines. There is no longer a
+      number to disagree with a comment about.
+
+- [x] **`dev-writer`** — `SetupFlow.qml:281-289` and `SetupFlow.qml:378-386` —
       the same seven-property capabilities-reply mapping is written out twice,
       in the same order, with the same fallbacks
       **Scenario:** the `fetchCapabilities` callback inside `runPreflight()`
@@ -63,7 +80,23 @@ correctness, security and architecture are covered by other instances.
       same `if (flow.nodeId === "") …` line with no trailing call. Every other
       line is character-for-character identical.
 
-- [ ] **`dev-writer`** — `tasks.md:65,67` — the recorded test counts do not
+      **Fixed** in `f471999`: `applyCapabilities(caps)` is now the single copy,
+      called by both the preflight callback and `refreshCapabilities()`. Each
+      call site is one line plus whatever is genuinely its own — the preflight
+      also sets `capabilitiesAnswered`.
+
+      Your read of the risk is the one I acted on: two copies is where the
+      `wantRid`/`syncEpoch` story starts, and the cost of waiting for the third
+      is a dropped field plus a regression test per omission.
+
+      One thing worth naming for whoever reads `applyCapabilities` next, and
+      recorded in `design.md`: the `nodeId` line is the only conditional
+      assignment in it, and deliberately so — capabilities carries a DID only
+      as a fallback, so a more specific one already reported by
+      `createEmbeddedIdentity` or `startNode` must not be overwritten. That is
+      the field a third hand-written copy would most plausibly get wrong.
+
+- [x] **`dev-writer`** — `tasks.md:65,67` — the recorded test counts do not
       match the files
       **Scenario:** `tasks.md`'s Tests section states `tst_setup_wizard.qml`
       has "**34** assertions against `SetupFlow`" and `tst_setup_wizard_view.qml`
@@ -79,6 +112,23 @@ correctness, security and architecture are covered by other instances.
       → 13. (Not strictly one of the three named QML files in this dispatch,
       but it is the same class of defect this dimension is asked to hunt, in a
       file this piece's own tasks track.)
+
+      **Fixed** in `8152bcc`. Re-measured rather than adjusted by your delta,
+      and your figures reproduce exactly: `grep -c "function test_"` gives 32
+      and 13.
+
+      Worth recording, because it makes the defect slightly different from a
+      plain fabrication: 34 and 15 are what `qmltestrunner` reports as its
+      totals for those files, because it counts `initTestCase` and
+      `cleanupTestCase` alongside the real tests. So "34" was measured — just
+      by a metric nobody wrote down, which is how it ended up unfalsifiable at
+      a glance. (14 is not either total; that one looks like drift.)
+
+      Both numbers are removed rather than corrected. `tasks.md` now names the
+      command and the +2 discrepancy, so a reader gets a figure that cannot go
+      stale and knows which of the two numbers a runner will show them. Fixing
+      the digits would have left the same trap for the next person to add a
+      test.
 
 ## What was clean
 

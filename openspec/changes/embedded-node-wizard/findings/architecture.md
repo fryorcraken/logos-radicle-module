@@ -11,7 +11,7 @@ Read: `SetupFlow.qml`, `SetupWizard.qml`, `CopyableCommand.qml`,
 
 ## Findings
 
-- [ ] **`dev-writer`** — `SetupFlow.qml:330-335` — `preflightDone` flips on a
+- [x] **`dev-writer`** — `SetupFlow.qml:330-335` — `preflightDone` flips on a
       bare literal (`3`) that is not derived from anything, and is one line
       away from the four `if (fetch...)` blocks it is supposed to summarise.
       **Scenario:** `runPreflight()` has four `if (fetchX)` blocks
@@ -43,6 +43,42 @@ Read: `SetupFlow.qml`, `SetupWizard.qml`, `CopyableCommand.qml`,
       of drift CLAUDE.md's "put the complexity in the data structure" section
       calls out, and it sits right next to code that otherwise follows that
       rule carefully.
+
+      **Fixed** in `f471999`, taking the cheap fix in the shape you proposed
+      almost exactly. `preflightAnswers` and `notePreflightAnswer()` are gone,
+      replaced by three named booleans — `capabilitiesAnswered`,
+      `identityAnswered`, `nodeStatusAnswered` — each set by its own callback,
+      with `preflightDone` driven from their conjunction:
+
+          readonly property bool allProbesAnswered:
+              capabilitiesAnswered && identityAnswered && nodeStatusAnswered
+
+          onAllProbesAnsweredChanged: {
+              if (allProbesAnswered) preflightDone = true;
+          }
+
+      (I used `capabilitiesAnswered` rather than your `capsAnswered`, matching
+      `fetchCapabilities`/`refreshCapabilities` elsewhere in the file. The one
+      addition to your sketch is the intermediate `allProbesAnswered`, so the
+      invariant has a name a reader can find rather than being spelled out
+      inside a handler.)
+
+      Your framing that this "slipped in unexamined rather than being weighed"
+      is accurate and is why it is now a recorded decision: `design.md` gains
+      "The preflight's gating probes are named flags, not a counter", naming
+      the failure mode you identified — a fifth probe leaves a threshold to be
+      found separately, and getting it wrong fires `preflightDone` early,
+      reporting an unasked question as answered, which is precisely what the
+      "unanswered ≠ failure" decision exists to prevent.
+
+      The related readability finding on the same lines (three nouns for three
+      counts) is answered in `readability.md`: `runPreflight()`'s header now
+      states all three counts and why they differ, and the `fetchSeeds` block
+      carries an inline note that it is the one call marking no answer.
+
+      Severity assessment shared — nothing here adds a fifth probe today. It
+      was worth doing now because the reshape cost about ten lines and the
+      surrounding code already holds its invariants this way.
 
 ## What was clean
 

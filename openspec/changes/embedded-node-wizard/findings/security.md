@@ -5,7 +5,7 @@ Scope: `radicle-ui/src/qml/SetupFlow.qml`, `SetupWizard.qml`,
 
 ## Findings
 
-- [ ] **`dev-writer`** — `SetupWizard.qml:92-93,382-390` — the plaintext
+- [x] **`dev-writer`** — `SetupWizard.qml:92-93,382-390` — the plaintext
       passphrase outlives every use and nothing ever clears it.
       **Scenario:** a user types a passphrase at the identity step, submits
       identity creation (`submitIdentity`), advances through network and start
@@ -55,6 +55,35 @@ Scope: `radicle-ui/src/qml/SetupFlow.qml`, `SetupWizard.qml`,
       (`submitIdentity` success, `submitStart` success) have completed, or once
       the confirm step is reached — whichever the fix author judges correct —
       and adding a regression test that fails first.
+
+      **Fixed** in `f471999`. Your analysis of why it persists is what decided
+      the fix: because `StackLayout` instantiates every child eagerly, no step
+      change destroys the field, so it has to be cleared explicitly.
+
+      Of the two moments you offered I took the first — on a `started:true`
+      reply, which is when both consumers have run. Reaching confirm would have
+      been later than necessary, and the whole point is minimising the window.
+
+      It is keyed on `setupFlow.nodeStarted` via a `Connections` block rather
+      than done inside the start button's `onClicked`. That matters: the
+      handler runs *before* the reply, so clearing there would destroy the
+      passphrase a retry needs after a refusal — turning a security fix into a
+      usability bug on exactly the path where the user is already stuck.
+
+      `test_the_passphrase_does_not_outlive_the_calls_that_use_it` is the
+      regression test, and it failed first (actual `correct horse battery`,
+      expected empty). It reads the field back at the start step *before*
+      submitting, asserting the passphrase is still there — so it proves the
+      clearing happened rather than that the field was never populated, which
+      is the null-implementation trap for a test of this shape.
+
+      Not done, and worth saying so rather than leaving it implied: I did not
+      touch undo history or `persistentSelection`. `TextField` with
+      `echoMode: TextInput.Password` is the input here, and the residue that
+      finding names — a live `text` property the inspector reads — is what the
+      clearing addresses. A deeper scrub of Qt's internal undo stack is not
+      something this layer can assert, so claiming it would be a checkbox a
+      test cannot back.
 
 ## Clean areas (no findings)
 

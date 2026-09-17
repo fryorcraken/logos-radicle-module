@@ -19,7 +19,7 @@ only" correction recorded in both `design.md` and `docs/PLAN.md`.
 
 One gap found, below.
 
-- [ ] **`dev-writer`** — `docs/PLAN.md:94-100` duplicates `design.md`'s "The
+- [x] **`dev-writer`** — `docs/PLAN.md:94-100` duplicates `design.md`'s "The
       network step has no inbound control, and says so" decision, rather than
       shedding to a one-line pointer
       **Scenario:** a future reader of `PLAN.md` hits a full paragraph of
@@ -55,6 +55,28 @@ One gap found, below.
       it "belongs to the parallel `embedded-node-config` piece." The finding
       here is only about the lines 94-100 paragraph, which duplicates
       `design.md` rather than pointing to it.
+
+      **Fixed** in `8152bcc`: the paragraph is cut to the one-line-plus-pointer
+      shape you specified, matching the passphrase paragraph you identified as
+      the correct precedent. It now reads:
+
+          One scope change worth naming, because the wizard's step list used to
+          carry it: **the inbound opt-in is the panel's, not the wizard's.**
+          The reasoning is in the `embedded-node-wizard` change's `design.md`,
+          under "The network step has no inbound control, and says so".
+
+      The sentence naming the scope change is kept rather than deleted, since
+      PLAN.md's job is to say what moved where; only the restated *reasoning*
+      is shed. `design.md:159-175` is untouched and remains the canonical
+      entry, with its "Where the inbound opt-in went" pointer to
+      `embedded-node-config`.
+
+      Your `listen: []` observation is right and I left `docs/PLAN.md:154-158`
+      alone for the reason you give — it is the panel's own forward-looking
+      requirement, not a duplicate of anything recorded here.
+
+      Confirmed by re-reading rather than assumed: this was the only remaining
+      PLAN.md passage restating this change's reasoning.
 
 No other gaps found. The two-tests-initially-failed detail
 (`test_advancing_walks_the_sequence_without_skipping` and
