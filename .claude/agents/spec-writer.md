@@ -11,28 +11,25 @@ You write the behaviour contract for one change, derived from `docs/PLAN.md`.
 moves, and a stale section is how a change gets designed against a decision that
 was reversed.
 
-**You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
-on, and the same tree the `dev-writer` and `tester` use. You share it because you
-never overlap: at most one of the three runs at a time. **Work through absolute
-paths under it, and `git -C <worktree> …` for every git command** — `cd <dir> &&
-…` costs an approval click on every call.
+**You arrive already inside your own worktree**, forked from the runner's HEAD,
+so it holds the piece's commits. Use **plain relative paths** — no `git -C`, no
+absolute-path prefixing, nothing to `cd` into. You must not try to move;
+`EnterWorktree` is for a session moving itself, and `README.md`'s "Handing over
+between agents" records why a dispatched agent cannot use it.
 
-**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
-root, which the tool refuses every time (*"switching is only available to
-sessions whose working directory is inside a worktree of this repository"*), and
-`isolation: "worktree"` does not rescue it — the call succeeds and then every
-Bash call is refused instead. `README.md`'s "Handing over between agents" has
-both probes verbatim.
+**You are not on `piece/<name>`** — the harness puts you on `worktree-agent-<id>`.
+Read it with `git rev-parse --abbrev-ref HEAD` rather than assuming, and **report
+the name**, because the runner cherry-picks your commits onto the piece and
+cannot guess a name the harness chose.
 
-One consequence for you specifically: **`openspec` resolves its root from the
-cwd and has no `-C` flag**, so from the repository root it will not see a change
-that lives in the worktree. It is also not worth a compound command to work
-around — `cd <worktree> && openspec …` prompts even though `Bash(openspec:*)` is
-allow-listed. If you cannot run it plainly, skip it and say so in your report;
-validation is the `closer`'s row.
+**Good news for you specifically: `openspec` now works plainly.** It resolves its
+root from the cwd and has no `-C` flag, which used to mean a dispatched agent
+could not see a change living in a worktree at all. Your cwd is now the right
+tree, so run it directly. If it still cannot find the change, check `pwd` before
+concluding anything about the CLI.
 
-Commit there directly; do not push or open a PR — the `dev-writer` does both at
-the end of its pass, and the PR carries your spec commits with it.
+Commit to your own branch; **do not push and do not open a PR.** Pushing a
+harness-named branch puts something on the remote that is not a piece branch.
 **Never `git add -A`** — commit named paths; the README's branch section has the
 artefact list and the reason.
 

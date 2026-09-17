@@ -119,28 +119,30 @@ up from the current directory to the first `openspec/` it finds. There is **no
 `--directory`, `-C` or `--root`**. `--store` takes a registered kebab-case store
 id, not a path.
 
-Agents work in worktrees, so this bites immediately: run from the main checkout
-and a change in a worktree is simply not listed. **Check the reported root before
-concluding a change is missing or the CLI is broken.**
+Agents work in worktrees, so this used to bite immediately: an agent's cwd was
+the main checkout while its change lived in a worktree, and the change was simply
+not listed. **That is fixed by where agents now stand rather than by anything in
+`openspec`.** Dispatched with `isolation: "worktree"`, an agent's cwd *is* the
+tree holding its change, so `openspec` resolves the right root and runs plainly —
+no compound command, no approval click, no workaround. A tool that takes its root
+from the cwd is correct exactly when the cwd is.
 
-**For a dispatched agent this is a real constraint with no clean workaround, and
-it should be reported rather than worked around.** The two shapes that look like
-answers both fail:
+**Check the reported root before concluding a change is missing or the CLI is
+broken.** It is one line of `openspec list --json`, and it distinguishes "the
+change does not exist" from "I am standing in the wrong tree" — which otherwise
+look identical.
 
-- **`EnterWorktree(path: …)` cannot be used by a dispatched agent.** It refuses a
-  session at the repository root, which is where every subagent starts, and
-  `isolation: "worktree"` turns the refusal into a *successful* call whose every
-  subsequent Bash command is refused instead. `.claude/agents/README.md`'s
-  "Handing over between agents" has both probes verbatim.
-- **`cd <dir> && openspec …` costs an approval click** *even though*
-  `Bash(openspec:*)` is allow-listed, because the permission checker cannot
-  analyse a compound command.
+Two things not to reach for if it ever does go wrong. **`EnterWorktree` is not
+for a dispatched agent** — it refuses a session at the repository root, and
+crossing between worktrees succeeds while leaving every Bash call refused;
+`.claude/agents/README.md`'s "Handing over between agents" has both probes
+verbatim. And **`cd <dir> && openspec …` costs an approval click** even though
+`Bash(openspec:*)` is allow-listed, because the checker cannot analyse a compound
+command.
 
-So a dispatched agent runs `openspec` only where the cwd already resolves to the
-right root — typically the main checkout, once the change folder is present there
-— and otherwise **says in its report that validation did not run, and why**. An
-unrun gate reported as passed is worse than a skipped one, because the row gets
-ticked either way.
+If validation genuinely cannot run, **say in the report that it did not run, and
+why**. An unrun gate reported as passed is worse than a skipped one, because the
+row gets ticked either way.
 
 ## Reading two capabilities together
 

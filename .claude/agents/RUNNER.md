@@ -13,10 +13,43 @@ first dispatch; [`README.md`](README.md) is the flow itself.
   worktree, tick no row, and be reviewed by nobody.
 - **You do not rebase.** It destroys work and it can conflict, which needs
   someone who has read the change. The `closer` does it.
-- **You stay in the main checkout.** Agents go to worktrees; you do not.
+- **You sit in your piece's worktree, and you run one piece.** This replaces the
+  old "you stay in the main checkout" rule — see below, because the reason is the
+  whole design.
 
 Yours besides dispatching: `git worktree add --no-track` (the flag is
-load-bearing — see "Create worktrees with `--no-track`"), and the reading below.
+load-bearing — see "Create worktrees with `--no-track`"), removing each agent's
+worktree once its work is cherry-picked, and the reading below.
+
+## One runner per piece, sitting in that piece's worktree
+
+**Your HEAD is the fork point for every agent you dispatch.** With
+`worktree.baseRef: "head"` (see README.md — it is required, and it is not in the
+repository), an agent dispatched with `isolation: "worktree"` gets a tree cut
+from wherever your session's HEAD is. Measured: runner HEAD `a949ec6`,
+`origin/main` `cafa02b`, agent reported `a949ec6`.
+
+So **enter your piece's worktree once, with `EnterWorktree(path: <absolute
+path>)`, and stay there.** That works for you — a session moving *itself* is the
+case the tool is built for, verbatim *"Entered worktree at …/probe-baseref on
+branch probe/baseref. The session is now working in the worktree."* It is
+dispatched agents that cannot do it, for reasons README.md keeps.
+
+**Why one runner per piece, and not one runner switching branches.** Two
+alternatives were on the table:
+
+| Shape | Why not |
+|---|---|
+| one runner, checking out each piece before dispatching | the checkouts must be serialised, and **dispatching while HEAD is on the wrong branch silently forks the agent from the wrong piece** — no error, no warning, just an agent confidently working on the wrong code |
+| one runner in the main checkout, as before | every agent forks from `main` and holds none of the piece's commits |
+
+**One runner per piece has no shared HEAD, so the first hazard is structurally
+absent rather than merely avoidable.** That is the reason for the shape: not that
+switching is hard to get right, but that getting it wrong produces no signal. A
+runner that can only see one piece cannot fork an agent from another.
+
+The practical consequence: **do not run two pieces from one session.** Start a
+second session in the second piece's worktree instead.
 
 ### What you read, and what you only point at
 
@@ -101,8 +134,9 @@ piece branch that rides the same PR.
 - **Count before dispatching.** `gh pr list --state open` is one row per piece;
   more rows than pieces means something opened a PR that should not have.
 
-Reviewer branches (`review/<name>/<dimension>`) are **local only** — one on the
-remote is the same failure renamed.
+**Agent branches are local only** — one on the remote is the same failure
+renamed. They are now named by the harness (`worktree-agent-<id>`) rather than by
+you, so you learn each one from the agent's report and cherry-pick from it.
 
 **Do not rename or re-point a branch with an open PR.** A PR's head ref is
 immutable, and every workaround loses something; open a new PR on the correctly
@@ -115,14 +149,36 @@ branch section has the specifics.
 worktree and the file to read. Never paraphrase a finding: a number you carry
 into a brief was measured earlier and the agent cannot tell how stale it is.
 
-Every brief carries the worktree instruction, which is what keeps an agent out
-of the shapes that cost a permission click:
+**Dispatch with `isolation: "worktree"`.** The agent then arrives in its own
+tree, forked from your HEAD, with a working directory it does not have to correct
+— so the brief carries no worktree instructions at all:
 
 > Act on the findings for `dev-writer` in
-> `openspec/changes/<name>/findings/`. Piece branch `piece/<name>`, worktree
-> `/…/.claude/worktrees/piece-<name>`. **Do not call `EnterWorktree`** — work
-> through absolute paths under that worktree, and
-> `git -C /…/.claude/worktrees/piece-<name> …` for every git command.
+> `openspec/changes/<name>/findings/`. Piece branch `piece/<name>`. Commit to
+> your own branch and report its name, so the work can be cherry-picked.
+
+**Take the `git -C` instruction and the `EnterWorktree` prohibition out of your
+briefs.** An agent that is already in the right place needs neither, and a brief
+carrying them sends it hunting for a problem it does not have. The explanation
+stays in README.md, where a reader who meets the refusal can find it.
+
+**What you must still ask for is the branch name.** The agent lands on a
+harness-named `worktree-agent-<id>`, not on `piece/<name>`, so its commits need
+cherry-picking onto the piece — and the name is assigned by the harness rather
+than chosen by you. Have the agent report it rather than guessing it.
+
+**Cherry-pick before you dispatch the next agent, and make sure your HEAD carries
+it.** This is the ordering rule that replaces "one writer at a time because they
+share a tree": every dispatch forks from *your HEAD*, so an agent launched before
+the previous one's work has landed on your branch gets a tree without it. It will
+then rewrite, duplicate or contradict work it cannot see, and nothing fails —
+there is no conflict, because the two agents were never in the same tree. The
+sequence per agent is: hand-back → cherry-pick onto `piece/<name>` → remove the
+agent's tree → dispatch the next.
+
+Reviewers are the exception that proves it: six run concurrently precisely
+because they only *read* the code, so forking them all from the same HEAD is
+correct. It is writers that must be serialised.
 
 **A dispatched agent cannot enter a worktree, and the brief must say so.** This
 is not a contingency to plan for; it is what happens every time. Two probes
@@ -148,20 +204,43 @@ measured it, and both routes fail:
 So there is no supported way to put a dispatched subagent inside a pre-existing
 worktree with full tool access. **Route 2 is the more dangerous**, because it
 looks like it worked: the failure does not surface until the first Bash call,
-by which point the agent believes it is in the right place. Do not reach for
-`isolation: "worktree"` as a rescue — it buys a successful tool call and a
-broken shell.
+by which point the agent believes it is in the right place.
 
-The cost of getting this wrong is measured too: four agents in one session hit
-the refusal, and two burned significant time inventing workarounds (`env -C`,
-`cd &&`) that each cost the user an approval click, because the brief told them
-the shape was supposed to work. **`git -C <worktree> …` is one plain command and
-costs no approval click** — that is the whole fallback, and it is now the only
-instruction.
+**Read that second failure precisely, because it is easy to misread as an
+argument against `isolation: "worktree"` itself.** It is not. What broke was the
+`EnterWorktree` call *crossing out of* the isolated tree; the isolation is what
+the flow now relies on. Dispatch with it and make no such call, and the agent is
+simply in the right place.
 
-`EnterWorktree` is still the right tool for a **session moving itself**, which
-is what it is built for and what `CLAUDE.md` describes. It is dispatched agents
+The cost of getting this wrong was measured: four agents in one session hit the
+refusal, and two burned significant time inventing workarounds (`env -C`, `cd
+&&`) that each cost the user an approval click, because the brief told them the
+shape was supposed to work. That is why the prohibition is worth keeping written
+down even though agents no longer need to act on it.
+
+`EnterWorktree` is still the right tool for a **session moving itself** — which
+is what you are, when you enter your piece's worktree. It is dispatched agents
 that cannot use it.
+
+### The setting this depends on, and how it fails
+
+`worktree.baseRef: "head"` lives in `.claude/settings.json`, which **`.gitignore`
+excludes** (`git check-ignore -v` names `.claude/*`). It therefore does not
+travel with a clone or a fresh checkout.
+
+**Nothing fails when it is missing.** Agents are simply cut from
+`origin/<default-branch>` instead of your HEAD, hold none of the piece's commits,
+and work confidently on the wrong code. No error, no warning. If an agent reports
+a fork point that is not your HEAD, or reports files that should exist as
+missing, check that file before investigating anything else.
+
+It is the user's file. **Do not edit it**; if it is absent, say so rather than
+creating it.
+
+Two things this setting does *not* change, so you do not go looking for them: the
+agent's branch is created with no upstream, so the `--no-track` hazard below does
+not arise on it; and the setting is global, applying to every
+`isolation: "worktree"` dispatch with no per-dispatch override.
 
 **Do not phrase an instruction in a way that invites a chain.** "`cargo test`
 from `radicle/rust-ffi/`" reads as `cd radicle/rust-ffi && cargo test`, which
@@ -176,7 +255,7 @@ carrying none of this repo's traps.
 
 | Stage | How many |
 |---|---|
-| `spec-writer` / `dev-writer` / `tester` | **one in total**, not one each — they share the piece's worktree |
+| `spec-writer` / `dev-writer` / `tester` | **one in total**, not one each — cherry-pick and commit before dispatching the next, or it forks from a HEAD without the previous one's work |
 | reviewers | **six, in parallel** — a tree and a findings file each |
 | `closer` | one, never beside a writer |
 
@@ -259,6 +338,24 @@ whose directories are already gone.
 
 **Check merged-ness with `gh pr list`, not `git branch --merged`** — this repo
 squash-merges, so a squashed branch never looks merged to git.
+
+**Removing each agent's worktree is now yours, and it is not optional
+housekeeping — it is the last step of collecting the work.** An agent cannot
+remove its own tree any more: it is standing in it, and `git worktree remove`
+refuses the directory you are in. So the sequence after an agent hands back is
+cherry-pick its commits off its branch, then remove its tree.
+
+This also settles a failure that previously had no clean fix. A reviewer was once
+told not to remove its tree and removed it anyway; nothing was lost only because
+its findings commit was already cherry-picked. **You keep a tree when something
+may still need reading** — re-checking a finding against the exact tree that
+produced it, comparing two reviewers' citations, recovering a mutation — and
+`--force` destroys all of it. That used to depend on every agent remembering an
+instruction. It now holds because the agent has no way to do it.
+
+Agent trees accumulate faster than piece trees, one per dispatch rather than one
+per piece, so `git worktree list` is worth running at the end of each review
+round rather than at merge time.
 
 ## The `closer`, and what comes back
 

@@ -180,22 +180,25 @@ The ones that catch people repeatedly:
   `git -C <dir>` spread through every git call. Pass `path` and never `name`:
   `name` creates a *new* worktree branched from `origin/main`.
 
-  **This does not work for a dispatched agent, and one must not call it.** A
-  subagent starts with its working directory at the repository root, and the tool
-  refuses exactly that: *"Cannot enter worktree: the current working directory
-  /…/radicle-logos-module is the repository root, not an isolated worktree —
-  switching is only available to sessions whose working directory is inside a
-  worktree of this repository."* The refusal is certain, not occasional.
-  `isolation: "worktree"` is not the way round it — with the working directory
-  pinned inside a throwaway worktree the call *succeeds*, and then Read follows
-  the switch while **every Bash call is refused** for resolving to "the shared
-  checkout". That route is the trap, because it looks like it worked until the
-  first shell command. **A dispatched agent works through absolute paths and
-  `git -C <worktree> …`**, which is one plain command and costs no approval
-  click; that is the shape to put in its brief — see
-  [`.claude/agents/README.md`](.claude/agents/README.md), which has both probes
-  verbatim. The tool moves only the session that calls it, so a runner cannot
-  enter a worktree on a subagent's behalf either.
+  **A dispatched agent must not call it, and does not need to.** A subagent that
+  tries lands on one of two failures: dispatched normally its cwd is the
+  repository root, which the tool refuses outright (*"switching is only available
+  to sessions whose working directory is inside a worktree of this repository"*);
+  and crossing from one worktree into another *succeeds* while leaving **every
+  Bash call refused** for resolving to "the shared checkout" — the worse of the
+  two, because it looks like it worked until the first shell command.
+
+  **Agents get their tree from `isolation: "worktree"` instead**, which places
+  them inside their own worktree with a working cwd, plain relative paths and no
+  approval clicks. That is the route this repo runs on, so the old `git -C
+  <worktree>` instruction is gone from the briefs. It depends on
+  `.claude/settings.json` carrying `{"worktree": {"baseRef": "head"}}`, which
+  forks each agent from the runner's HEAD rather than `origin/main` — **and
+  `.gitignore` excludes that file, so it arrives with no clone and nothing fails
+  when it is missing**; agents are simply cut from the wrong base. See
+  [`.claude/agents/README.md`](.claude/agents/README.md) for the probes and
+  [`.claude/agents/RUNNER.md`](.claude/agents/RUNNER.md) for one-runner-per-piece.
+  **Settings are the user's — do not write that file on your own initiative.**
 - **A long output is not a reason to pipe.** This is the most common way the rule
   above gets broken by someone who already knows it: appending `| tail -30` to
   keep a test run's output manageable turns a call the checker would have
@@ -558,6 +561,12 @@ to your branch and cannot be popped by anyone else. If you must stash, use
 `git stash push -u -m "<unique-tag>"` and recover with `git stash apply <sha>`,
 never `pop`.
 
+**Agent worktrees are the runner's to remove, and they arrive faster than piece
+worktrees** — one per dispatch rather than one per piece. An agent cannot remove
+its own: it is standing in it, and `git worktree remove` refuses the directory
+you are in. So the runner cherry-picks the agent's commits off its branch and
+then removes the tree. See [`.claude/agents/RUNNER.md`](.claude/agents/RUNNER.md).
+
 **Clean up when the branch lands.** Worktrees accumulate silently and nothing
 prunes them: this repo reached **15** at once, most on branches merged
 milestones ago — M1.1's `worktree-agent-a42af4ef65b0dcc3b` was still on disk
@@ -746,6 +755,23 @@ Pick the cheapest layer that can actually see the behaviour you changed.
 The unit-test row is raw `nix` on purpose — `lgs` has no verb for a flake's
 `checks` outputs. Everything *building* the modules goes through `lgs`, in CI
 as well as locally; see "This is a scaffold-managed project" at the top.
+
+**`run-qml-tests.sh`'s output truncates before the run ends** when an agent runs
+it, because the script covers around thirty files. The suite itself is fine and
+CI reads all of it; what truncates is what you get back in a tool result. So a
+local pass is a **green gate you cannot read to the end**, and that has already
+produced a wrong conclusion here — a reviewer recorded a mutation as survived
+when the output had simply stopped before reaching the mutated file.
+
+When you need an unambiguous answer about one file, run the runner against that
+file alone and read the whole thing:
+
+```
+qmltestrunner -input radicle-ui/tests/tst_<name>.qml
+```
+
+**Not `| tail`** — see "a long output is not a reason to pipe" above. The answer
+to output you cannot read is a narrower command, and here there is one.
 
 Logic that does not need a view belongs in the core module, where it is testable
 without Qt at all. A component test is the right layer for anything one QML file

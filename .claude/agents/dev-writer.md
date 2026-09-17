@@ -144,62 +144,76 @@ satisfied-by-construction and say what makes the absence real.
 
 ## Where your commits go
 
-**You work in the piece's worktree, on `piece/<name>`** — the branch its PR is open
-on, and the same tree the `spec-writer` and `tester` use. You share it because you
-never overlap: at most one of the three runs at a time. Reviewers get separate
-trees because they are concurrent; you do not need one.
+**You arrive already inside your own worktree**, forked from the runner's HEAD,
+so it holds the piece's commits. Use **plain relative paths** — no `git -C`, no
+absolute-path prefixing, and nothing to `cd` into. You are in the right place
+before your first tool call.
 
-**Work through absolute paths under it, and `git -C <worktree> …` for every git
-command.** Not `cd <dir> && …`: the permission checker cannot analyse a compound
-command, so that shape costs the user an approval click on every call even when
-the command itself is allow-listed. `git -C` is one plain command and costs
-nothing.
+**You must not try to move.** `EnterWorktree` is for a session moving itself, not
+for a dispatched agent, and the two ways it fails are recorded in `README.md`'s
+"Handing over between agents". You have no reason to reach for it.
 
-**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
-root, and the tool refuses that with *"switching is only available to sessions
-whose working directory is inside a worktree of this repository"* — certain, not
-occasional. Nor does `isolation: "worktree"` rescue it: with the working
-directory pinned inside a throwaway worktree the call succeeds, and then Read
-follows the switch while **every Bash call is refused** for resolving to "the
-shared checkout". That route is the dangerous one, because it looks like it
-worked until the first shell command. `README.md`'s "Handing over between agents"
-has both probes verbatim.
+**You are not on `piece/<name>`.** The harness puts you on its own branch, named
+`worktree-agent-<id>`. Read it rather than assuming it:
 
-**Commit straight to that branch.** Both on the first pass and when you come back
-to act on findings: you are the only agent writing code on the piece at either
-point, so a side branch and a cherry-pick buy nothing and add a step to get wrong.
+```
+git rev-parse --abbrev-ref HEAD
+```
+
+**`lgs basecamp build` acts on the cwd's project root — which is now yours, so
+run it plainly.** `lgs` resolves `scaffold.toml`'s relative module refs
+(`path:./radicle#lgx`) against the root it was invoked from, and there is no flag
+that changes it. Being placed in your own tree is what makes that a non-problem:
+the cwd is right, so the build is right.
+
+**Know the failure it used to cause, because it leaves no trace.** Under the old
+dispatch an agent's cwd was the main checkout, and its first `lgs basecamp build`
+built *that* — succeeding, and reporting a green build of code the agent had not
+written. Measured; it recovered only by falling back to raw `nix build` with a
+hand-written `--override-input`. A wrong-tree build is indistinguishable in the
+output from a right-tree one, which is why this is worth remembering even though
+the cause is fixed: **if you ever find yourself unsure which tree you are in,
+`pwd` before you trust a green build.** And never report a build you did not run.
+
+**Commit to your own branch**, the `worktree-agent-<id>` you are on. The runner
+cherry-picks it onto `piece/<name>` once you hand back, so **report the branch
+name in your report** — it is the one thing that cannot be recovered without you,
+and the runner cannot guess a name the harness chose.
+
 Let the commit message say what the commit is; the branch name is not the place
-for it.
+for it, and here it is not even yours to choose.
 
 Never `git add -A`; commit named paths, because a worktree collects build output
-(`.scaffold/`, `target/`, `result-*` out-links, `./tmp/` scratch), and sweeping
-up a reviewer's findings file makes its commit yours. The README's branch section
-has the artefact list.
+(`.scaffold/`, `target/`, `result-*` out-links, `./tmp/` scratch). The README's
+branch section has the artefact list.
 
-## Open the PR before you hand back
+## The PR, and why you no longer push it
 
-**Push `piece/<name>` and open its PR as your last act on the first pass**, before
-the runner dispatches reviewers. **A push alone gets you no CI at all**: both
-workflows trigger on `pull_request` and on pushes to `main` (`ci.yml` on `v*` tags
-too), never on a push to a piece branch. So opening the PR later means the first
-news of the build arrives after six reviewers have already read the code.
+**You do not push, and you do not open the PR.** Your commits are on a
+harness-named branch that nothing downstream tracks; pushing it would put a
+branch on the remote that is not a piece branch, which `RUNNER.md` names as the
+same failure as a reviewer branch reaching the remote.
 
-On the findings pass the PR is already open: commit, push to it, and never open a
-second. One piece is one PR, so `gh pr list --head piece/<name>` before you
-create.
+So the sequence is: commit, report your branch name, hand back. **The runner
+cherry-picks onto `piece/<name>` and pushes**, and the PR is opened against that.
 
-**Check `git config --get-regexp "^branch\.piece"` first, and expect nothing
-back.** The piece branch is created with `git worktree add --no-track`, which
-leaves it with no upstream — so that command returning nothing is the positive
-signal that it is safe to push. If it returns `merge refs/heads/main`, the branch
-was made without the flag and is configured to push to `main`; stop and say so.
+Two things worth knowing anyway, because they explain the runner's urgency and
+you may be asked about them:
 
-**`git branch -vv` is not the check**, though this file used to say it was: it
-prints `[origin/main]` either way, and an agent has no way to tell an intended
-upstream from a wrong one. That is why a bare `git push` has landed commits on
-`main` here more than once.
+- **A push alone gets no CI**: both workflows trigger on `pull_request` and on
+  pushes to `main` (`ci.yml` on `v*` tags too), never on a push to a piece
+  branch. So the PR must be open early, or the first news of the build arrives
+  after six reviewers have read the code.
+- **One piece is one PR.** If you are ever asked to create one, `gh pr list
+  --head piece/<name>` first.
 
-With no upstream, push the refspec in full:
+**If you are ever pushing a piece branch yourself, check `git config
+--get-regexp "^branch\.piece"` and expect nothing back.** The piece branch is
+created with `git worktree add --no-track`, so no upstream is the positive
+signal. `git branch -vv` is *not* the check — it prints `[origin/main]` either
+way, giving no way to tell an intended upstream from a wrong one, which is how a
+bare `git push` has landed commits on `main` here more than once. With no
+upstream, name the refspec in full:
 
 ```
 git push origin refs/heads/piece/<name>:refs/heads/piece/<name>

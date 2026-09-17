@@ -20,52 +20,34 @@ The one exception to not reading the implementation is the mutation sampling in
 part 2, which necessarily edits code. Change it, run the test, restore it, and
 read no further than the lines you are mutating.
 
-**The runner gives you a worktree of your own** under `.claude/worktrees/`, on a
-branch named `review/<name>/spec-test`, and names its path in your dispatch. If it
-did not, **stop and ask** — do not mutate the tree you were launched in, which is
-the piece's own, and do not make one of your own. A worktree is made with
-`git worktree add`, never a copy of the repo, which into `./tmp/` would copy the
-repo into itself. Mutation runs collide: two reviewers sharing a tree see each
+**You are dispatched with `isolation: "worktree"`, so you arrive inside a worktree
+of your own**, forked from the runner's HEAD and on a harness-named branch. Use
+ordinary relative paths — there is no `git -C` and no absolute-path prefixing to
+do — and do not call `EnterWorktree`: you are already where you belong, and the call
+only moves you somewhere every Bash call is refused, which for you would mean no
+test run ever executes while the files you read look right. `README.md`'s "Handing
+over between agents" records why, with both probes verbatim.
+
+The isolation is what makes mutation safe: two reviewers sharing a tree see each
 other's broken code and cannot tell it from the author's.
 
-**Work through absolute paths under it, and `git -C <the worktree path> …` for
-every git command.** `cd <dir> && cargo test` costs an approval click on every
-call even though `cargo test` is allow-listed, because the permission checker
-cannot analyse a compound command; for a suite in a subdirectory use the tool's
-own path flag, `cargo test --manifest-path <absolute path>/Cargo.toml`.
+**You cannot remove the tree when you finish — you are standing in it, and `git
+worktree remove` refuses the directory you are in.** That refusal reads like a
+permissions problem and is not one. Removal is the **runner's** job now, and for
+your role that is the right owner rather than a workaround: `--force` discards
+uncommitted work irreversibly, and the uncommitted work in your tree is **the
+mutated state your findings cite**. A mutation result nobody can reproduce is the
+evidence for your own review. Only the runner knows whether something still needs to
+read it — re-checking a finding against the exact state that produced it, or
+comparing two reviewers' citations.
 
-**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
-root, which the tool refuses every time: *"switching is only available to
-sessions whose working directory is inside a worktree of this repository"*. And
-`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
-the switch, and **every Bash call is refused** for resolving to "the shared
-checkout", which for you means no test run ever executes while the files you read
-look right. `README.md`'s "Handing over between agents" has both probes verbatim.
-
-**When you finish, step out of the worktree and remove it rather than restoring it.**
-Restoring depends on your having tracked every edit, and one missed restore ships a
-deliberately broken line into the piece; removing the tree needs no bookkeeping and
-cannot half-succeed. Your findings file is already committed and cherry-picked, so
-nothing you want lives there.
-
-**`--force` discards uncommitted work irreversibly, so check three things before you
-run it:** the path is the one your dispatch named and not one you inferred (removing
-the piece's own tree would destroy uncommitted writer work); you are not standing in
-it — `git rev-parse --show-toplevel` must not be that path, because `git worktree
-remove` refuses the directory you are in and that refusal reads like a
-permissions problem; and your findings commit is already cherry-picked onto
-`piece/<name>`. If any does not hold, **stop and report it** rather than forcing.
-Only then:
-
-```
-git worktree remove <the absolute path you were given> --force
-```
-
-One command, and no step-out before it. This file used to prescribe
-`ExitWorktree(action: "keep")` first — but a dispatched agent never entered the
-worktree, so it is standing in the main checkout already and the step guarded
-against a state you cannot reach. Check the condition; there is nothing to
-perform.
+So do not try to restore the tree either. That depends on your having tracked every
+edit, and one missed restore is the kind of thing that ships a deliberately broken
+line; it is also unnecessary, because nothing but your findings commit is ever taken
+out of this tree. Your hand-off is your report: the **branch name**, read with `git
+rev-parse --abbrev-ref HEAD` rather than assumed, so the runner can cherry-pick your
+findings commit; **which mutations you left behind**, so a reader knows what they are
+looking at; and that the tree is ready to prune once the commit is picked.
 
 (The per-mutation restore in part 2 is different and still necessary — that is what
 lets the *next* mutation mean something.)
@@ -150,11 +132,35 @@ test` in `radicle/rust-ffi`, seconds) and the QML suite
 (`sh radicle-ui/tests/run-qml-tests.sh`, fast) over the C++ core tests, which
 need a slow Nix build.
 
+**`run-qml-tests.sh`'s output truncates in this harness before the run ends.**
+The script runs `qmltestrunner` across roughly thirty files, and the result you
+are shown stops part-way. **This makes it a green gate you cannot read to the
+end** — and it has already cost a wrong conclusion here: a reviewer judged a
+mutation as survived when the output simply never reached the file it had
+mutated.
+
+The fix is a narrower command, not a wider one with a filter. Run
+`qmltestrunner` against the single file you mutated and read the whole result:
+
+```
+qmltestrunner -input radicle-ui/tests/tst_<name>.qml
+```
+
+**Do not pipe the full run to `tail`.** A pipe is unanalysable to the permission
+checker and costs the user an approval click on every call — which is the
+opposite of what reaching for it was meant to achieve. CLAUDE.md states this as a
+general rule ("a long output is not a reason to pipe"); the QML suite is the
+place it bites hardest, because the truncation is silent and the run looks
+complete.
+
+If you report a mutation as survived, say which command produced the output you
+read. A conclusion drawn from a truncated full-suite run is not a measurement.
+
 **One capability per agent.** If you were handed more than one, review the first
 properly and say which you did not reach, rather than skimming all of them.
 
 Report every test that survives a mutation of the property it names, and say
-which mutations you ran. Restore the tree and confirm you did.
+which mutations you ran — and which are still in the tree when you hand it back.
 
 ## 3. What did the dev decide that the spec never said?
 
@@ -235,11 +241,14 @@ If you ran mutations, report which ones and what happened — **a mutation that
 survived is the strongest finding you can write**, because it is a measurement
 rather than a judgement.
 
-**Then commit that one file** on `review/<name>/spec-test`, **tick your own row**
-in `tasks.md`'s stage block in the same commit, and **cherry-pick that commit onto
-the local `piece/<name>`**. **Push nothing** — a reviewer is the one role that
-pushes no branch at all; the cherry-pick is your hand-off, and the writers
-(`dev-writer`, `tester`) push the piece. Never `git add -A`.
+**Then commit that one file** on the branch you are already on — the harness named
+it `worktree-agent-<id>`, not `review/<name>/spec-test`, so **read it rather than
+assume it**: `git rev-parse --abbrev-ref HEAD`. **Tick your own row** in `tasks.md`'s
+stage block in the same commit. **Push nothing** — a reviewer is the one role that
+pushes no branch at all. **Name that branch in your report**, because the runner
+cherry-picks your commit onto `piece/<name>` and cannot do so for a branch it has to
+guess. **Never `git add -A`** — commit the findings file by name, or your deliberate
+mutations ride along into the commit the runner picks.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
 each entry is for.

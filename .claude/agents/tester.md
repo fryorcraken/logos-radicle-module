@@ -146,10 +146,9 @@ deliberately broken line, and **it will not fail your own suite**: you mutated t
 code precisely so a test would catch it, then restored the test's expectation to
 match.
 
-**You work in the piece's own worktree, on `piece/<name>`** — the same tree the
-`spec-writer` and `dev-writer` use. You share it because you never overlap: at most
-one of the three runs at a time. Reviewers get separate trees because they are
-concurrent; you do not need one.
+**You arrive already inside your own worktree**, forked from the runner's HEAD,
+so it holds the piece's commits — including the `dev-writer`'s. Nobody else is in
+that tree with you.
 
 **Nothing else writes the piece while you run.** No `spec-writer`, no `dev-writer`:
 you mutate implementation code you do not own, and a concurrent writer either
@@ -181,36 +180,32 @@ rather than writing a test that cannot fail.
 
 ## Where your work lands
 
-**Work through absolute paths under the piece's worktree, and `git -C <the
-worktree path> …` for every git command.** `cd <dir> && cargo test` costs an
-approval click on every call even though `cargo test` is allow-listed, because
-the permission checker cannot analyse a compound command; `git -C` is one plain
-command and costs nothing. For a test run in a subdirectory, prefer the tool's
-own path flag — `cargo test --manifest-path <absolute path>/Cargo.toml` — over
-moving directory.
+**Use plain relative paths.** You are already in the right tree, so there is no
+`git -C`, no absolute-path prefixing and nothing to `cd` into — which also means
+the suites run plainly: `cargo test` and `sh radicle-ui/tests/run-qml-tests.sh`
+work as written. Never a compound command; `cd <dir> && cargo test` costs an
+approval click even though `cargo test` is allow-listed. For a suite in a
+subdirectory, prefer the tool's own path flag (`cargo test --manifest-path
+radicle/rust-ffi/Cargo.toml`) over moving directory.
 
-**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
-root, and the tool refuses that every time: *"switching is only available to
-sessions whose working directory is inside a worktree of this repository"*. And
-`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
-the switch, and **every Bash call is refused** for resolving to "the shared
-checkout", which for you means no test ever runs. `README.md`'s "Handing over
-between agents" has both probes verbatim.
+**You must not try to move.** `EnterWorktree` is for a session moving itself, not
+a dispatched agent; `README.md`'s "Handing over between agents" records why.
 
-**Commit straight to `piece/<name>`** — the piece's one branch, the one its PR is
-open on — and **tick the tests row** in `tasks.md`'s stage block in the same commit.
-Same when you come back to act on a finding: you are the only agent writing tests
-on the piece either time, so no side branch and no cherry-pick are needed.
+**You are not on `piece/<name>`.** The harness puts you on `worktree-agent-<id>`.
+Read it with `git rev-parse --abbrev-ref HEAD`, commit there, and **tick the
+tests row** in `tasks.md`'s stage block in the same commit.
 
-**Push `piece/<name>` once you are done**, and do not open a PR — the
-`dev-writer` opened it before you ran. Check `git config --get-regexp
-"^branch\.piece"` first and expect **nothing** back: the branch is created with
-`git worktree add --no-track` and has no upstream, which is what makes a stray
-push impossible. `merge refs/heads/main` coming back means the branch was made
-without the flag and is configured to push to `main` — stop and say so. `git
-branch -vv` is not the check; it prints `[origin/main]` either way.
+**Report your branch name and do not push.** The runner cherry-picks your commits
+onto `piece/<name>`; a harness-named branch on the remote is the same failure as
+a reviewer branch reaching it. The name is the one thing the runner cannot
+recover without you, because the harness chose it.
 
-With no upstream, push the refspec in full:
+If you are ever pushing a piece branch directly, check `git config --get-regexp
+"^branch\.piece"` and expect **nothing** back — the branch is created with `git
+worktree add --no-track` and has no upstream, which is what makes a stray push
+impossible. `merge refs/heads/main` means it was made without the flag and is
+configured to push to `main`; stop and say so. `git branch -vv` is not the check;
+it prints `[origin/main]` either way. With no upstream, name the refspec in full:
 
 ```
 git push origin refs/heads/piece/<name>:refs/heads/piece/<name>

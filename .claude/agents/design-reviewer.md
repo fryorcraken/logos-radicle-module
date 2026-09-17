@@ -147,55 +147,32 @@ been found here naming the *wrong mechanism*, so it described a smaller hole tha
 the code had. A decision that is only pinned by a test added afterwards was made
 by accident, which is the thing you exist to catch.
 
-**Then commit that one file** on `review/<name>/design-review` — the branch suffix
-matches your findings filename, so neither has to be remembered separately — **tick
-your own row** in `tasks.md`'s stage block in the same commit, and **cherry-pick
-that commit onto the local `piece/<name>`**. **Push nothing** — a reviewer is the
-one role that pushes no branch at all; the cherry-pick is your hand-off, and the
-writers (`dev-writer`, `tester`) push the piece. Never `git add -A`.
+**Then commit that one file** on the branch you are already on — the harness named
+it `worktree-agent-<id>`, not `review/<name>/design-review`, so **read it rather
+than assume it**: `git rev-parse --abbrev-ref HEAD`. **Tick your own row** in
+`tasks.md`'s stage block in the same commit. **Push nothing** — a reviewer is the
+one role that pushes no branch at all. **Name that branch in your report**, because
+the runner cherry-picks your commit onto `piece/<name>` and cannot do so for a
+branch it has to guess. Never `git add -A`.
 
-## Your worktree, and deleting it when you are done
+## Your worktree, and handing it back
 
-**Work through absolute paths under it, and `git -C <the worktree path> …` for
-every git command**, rather than `cd <dir> && …` on every call, which costs an
-approval click each time.
+You arrive inside a worktree of your own, forked from the runner's HEAD, on a
+harness-named branch. Use ordinary relative paths — there is no `git -C` and no
+absolute-path prefixing to do — and do not call `EnterWorktree`: you are already in
+the right tree, and the call only moves you somewhere your Bash calls are refused.
+`README.md`'s "Handing over between agents" records why, with both probes verbatim.
 
-**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
-root, which the tool refuses every time: *"switching is only available to
-sessions whose working directory is inside a worktree of this repository"*. And
-`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
-the switch, and **every Bash call is refused** for resolving to "the shared
-checkout". That is the more dangerous route, because it looks like it worked
-until the first shell command. `README.md`'s "Handing over between agents" has
-both probes verbatim.
+**You cannot remove the tree — you are standing in it, and `git worktree remove`
+refuses the directory you are in.** That refusal reads like a permissions problem
+and is not one. Removal is the **runner's** job, and that is the right owner rather
+than a workaround: `--force` discards uncommitted work irreversibly, including the
+state your findings cite, and only the runner knows whether something still needs to
+read your tree — re-checking a finding against the exact state that produced it, or
+comparing two reviewers' citations.
 
-**If you were given no worktree path, stop and ask for one** rather than mutating
-the tree you were launched in, which is the piece's own — and do not make one
-yourself. A worktree is made with `git worktree add`, never by copying the repo,
-which into `./tmp/` would copy the repo into itself.
-
-**Step out of it and remove it when you finish** rather than restoring it. Your
-findings file is already committed and cherry-picked, so nothing you want lives
-there, and deleting is unconditional where restoring depends on having tracked
-every edit you made.
-
-**`--force` discards uncommitted work irreversibly, so confirm three things
-first:** the path is the one your dispatch named rather than one you inferred
-(removing the piece's own tree would destroy uncommitted writer work); you are not
-standing in it — `git rev-parse --show-toplevel` must not be that path, which
-holds already because a dispatched agent never moves its working directory, and
-`git worktree remove` refuses the directory you are in with a message that reads
-like a permissions problem; and your
-findings commit is already on `piece/<name>`. If any does not hold, **stop and
-report it** rather than forcing. Only then:
-
-```
-git worktree remove <the absolute path you were given> --force
-```
-
-One command, and no step-out before it. This file used to prescribe
-`ExitWorktree(action: "keep")` first — a step that only made sense for an agent
-standing inside the tree, which a dispatched one never is.
+So your hand-off is your report: the **branch name**, so the runner can cherry-pick
+your findings commit, and a line saying the tree is ready to prune once it has.
 
 **Your final report is a pointer, not a copy** — the path, the entry count, and who
 each entry is for.

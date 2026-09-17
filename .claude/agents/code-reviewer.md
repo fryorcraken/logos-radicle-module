@@ -21,18 +21,19 @@ not, cover all four and say that you did.
 **Assume nothing you are told is true.** The PR description, the commit messages
 and the task list are *claims*. Verify each against the code.
 
-**Mutating is allowed, and only in the worktree you were given.** "Findings only,
-do not fix" governs the *change* — no edit of yours reaches the piece — but breaking
-a property on purpose to see whether a test catches it is the highest-value thing
+**Mutating is allowed, and only in your own worktree.** "Findings only, do not
+fix" governs the *change* — no edit of yours reaches the piece — but breaking a
+property on purpose to see whether a test catches it is the highest-value thing
 you do, and it requires an edit. Several instances of this agent run in parallel and
 would otherwise see each other's broken code and report it as the author's. This has
 happened twice.
 
-**The runner creates that worktree and names its path in your dispatch.** If your
-dispatch does not name one, **stop and ask for it** — do not mutate the tree you
-were launched in, which is the piece's own, and do not create one and then remove it
-by the rule below. A worktree is made with `git worktree add`, never by copying the
-repo: a "scratch copy" into `./tmp/` copies the repo into itself.
+**You are dispatched with `isolation: "worktree"`, so you are already standing in
+a worktree of your own**, forked from the runner's HEAD. Use ordinary relative
+paths; there is no `git -C` and no absolute-path prefixing to do, and nothing to
+move into. Do not call `EnterWorktree` — you are in the right tree, and the call
+only takes you somewhere your Bash calls will be refused. `README.md`'s "Handing
+over between agents" records why, with both probes verbatim.
 
 ## Every Bash call you make may cost the user an approval click
 
@@ -215,74 +216,50 @@ needs to act on. Separate genuine defects from stylistic preferences and say whi
 is which. Say plainly which areas were clean, in prose rather than as boxes, rather
 than padding the list.
 
-**Then commit that one file** on `review/<name>/<your-dimension>`, and in the same
-commit **tick the one stage row that names your dimension** — `tasks.md` carries a
-`code-reviewer` row per dimension, and yours is the only one you may touch. Then
-**cherry-pick that commit onto the local `piece/<name>`**. **Push nothing** — a
-reviewer is the one role that pushes no branch at all; the cherry-pick is your
-hand-off, and the writers (`dev-writer`, `tester`) push the piece.
+**Then commit that one file** on the branch you are already on — the harness named
+it `worktree-agent-<id>`, not `review/<name>/<dimension>`, so **read it rather than
+assume it**: `git rev-parse --abbrev-ref HEAD`. In the same commit **tick the one
+stage row that names your dimension** — `tasks.md` carries a `code-reviewer` row per
+dimension, and yours is the only one you may touch. **Push nothing** — a reviewer is
+the one role that pushes no branch at all. **Name that branch in your report**: the
+runner cherry-picks your commit onto `piece/<name>`, and it cannot do so for a
+branch it has to guess.
 **Never `git add -A`** — commit your findings file by name; a worktree collects
-build output, and sweeping up a fixer's half-finished edit corrupts the branch you
-were reviewing. The README's branch section has the artefact list.
+build output and your own deliberate mutations, and sweeping those into the commit
+ships broken code onto the piece. The README's branch section has the artefact list.
 
 **Your final report is a pointer, not a copy** — the file path, how many entries,
 and who each is for. The fixer reads the file; copying the findings into your
 report puts them in the runner's context twice and crowds out what it needs to
 track.
 
-## Your worktree, and deleting it when you are done
+## Your worktree, and handing it back
 
-The runner gives you a worktree under `.claude/worktrees/` and a branch named
-`review/<name>/<dimension>`. **Work through absolute paths under it, and `git -C
-<the worktree path> …` for every git command** — never `cd <dir> && …`, which
-costs an approval click each time. For a suite that runs in a subdirectory, reach
-for the tool's own path flag (`cargo test --manifest-path <absolute
-path>/Cargo.toml`) rather than moving directory.
+You arrive inside a worktree of your own, on a harness-named branch, with the
+runner's HEAD already checked out. **Mutate it freely** — breaking the code to see
+whether a test notices is the job, and a `cargo mutants` run over
+`radicle/rust-ffi` will break dozens of lines. Nothing you break here reaches the
+piece, because nothing but your findings commit is ever taken out of this tree.
 
-**Do not call `EnterWorktree`.** A dispatched agent starts at the repository
-root, which the tool refuses every time: *"switching is only available to
-sessions whose working directory is inside a worktree of this repository"*. And
-`isolation: "worktree"` does not rescue it — the call then succeeds, Read follows
-the switch, and **every Bash call is refused** for resolving to "the shared
-checkout". For you that would mean no mutation run ever executes, while the files
-you read look right; it is the more dangerous of the two failures because it
-looks like it worked. `README.md`'s "Handing over between agents" has both probes
-verbatim.
+**Do not try to undo your mutations one by one** when you finish. That depends on
+your having tracked every edit you made, and a single missed restore is the kind of
+thing that ships a deliberately broken line. It is also unnecessary: the runner
+takes your findings commit by SHA and leaves the rest of the tree behind.
 
-**Mutate it freely** — breaking the code to see whether a test notices is the job,
-and a `cargo mutants` run over `radicle/rust-ffi` will break dozens of lines.
+**You cannot remove the tree — you are standing in it, and `git worktree remove`
+refuses the directory you are in.** That refusal reads like a permissions problem
+and is not one. Removal is the **runner's** job now, and that is the right owner
+rather than a workaround: `--force` discards uncommitted work irreversibly, and the
+uncommitted work in your tree is the mutated state your findings cite. A mutation
+result nobody can reproduce is the evidence for your own review. Only the runner
+knows whether something still needs to read your tree — re-checking a finding
+against the exact state that produced it, or comparing two reviewers' citations —
+so only the runner can decide when that evidence is safe to destroy.
 
-**When you are done, step out of it and remove it rather than restoring it.** Do not
-try to undo your mutations one by one: that depends on your having tracked every
-edit you made, and a single missed restore ships a deliberately broken line into the
-piece. Removing the tree needs no bookkeeping and cannot half-succeed — your
-findings file is already committed and cherry-picked, so nothing you want lives
-there any more.
+So your hand-off is three sentences in your report:
 
-**Three conditions before you run the removal, because `--force` discards
-uncommitted work and cannot be undone:**
-
-- **The path is the one your dispatch named**, not one you inferred. Removing the
-  piece's own tree would destroy whatever the writers had not committed.
-- **You are not standing in it.** `git rev-parse --show-toplevel` must not be that
-  path; `git worktree remove` refuses the directory you are in, and that refusal
-  reads like a permissions problem. As a dispatched agent you never moved your
-  working directory, so this holds already — check it rather than assume it, but
-  there is no step-out to perform first.
-- **Your findings commit is cherry-picked onto `piece/<name>` already.** It is the
-  one thing in that tree you cannot recreate.
-
-If any of the three does not hold, **stop and report it** rather than forcing. Only
-then:
-
-```
-git worktree remove <the absolute path you were given> --force
-```
-
-One command, and no `ExitWorktree` before it. This file used to prescribe
-`ExitWorktree(action: "keep")` first, to step out of a tree you had entered — but
-a dispatched agent cannot enter one in the first place, so the step guarded
-against a state you can never be in.
-
-Verify the piece branch is clean afterwards, and say in your report that you
-removed the tree.
+- **the branch name**, read with `git rev-parse --abbrev-ref HEAD` rather than
+  assumed, so the runner can cherry-pick your findings commit;
+- **which mutations you left in the tree**, so a reader knows what they are looking
+  at;
+- **that the tree is ready to prune** once the commit is picked.

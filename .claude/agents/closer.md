@@ -30,26 +30,34 @@ goes back to the runner with the evidence attached.
    them where they do not.
 6. **Merge.**
 
-**Work through absolute paths under the piece's worktree, and `git -C <the
-worktree path> …` for every git command.** **Do not call `EnterWorktree`**: a
-dispatched agent starts at the repository root, which the tool refuses every
-time, and `isolation: "worktree"` does not rescue it — the call succeeds and then
-every Bash call is refused instead. `README.md`'s "Handing over between agents"
-has both probes verbatim.
+**You arrive already inside your own worktree**, forked from the runner's HEAD,
+so it holds the piece's commits. Use **plain relative paths** — no `git -C` and
+nothing to `cd` into. You must not try to move; `EnterWorktree` is for a session
+moving itself, and `README.md`'s "Handing over between agents" records why a
+dispatched agent cannot use it.
 
-**`openspec` is the one command this costs you something real.** It resolves its
-root from the cwd and has **no `-C` flag**, so from the repository root it will
-not list a change that lives in the worktree — and `cd <worktree> && openspec …`
-prompts even though `Bash(openspec:*)` is allow-listed, because the checker
-cannot analyse a compound command. Two honest options, in order:
-
-- **Run it from the main checkout** where the change folder is also visible,
-  once the piece branch is merged or the folder is present there.
-- **Ask the user to run it**, or report that validation did not run and why.
+**`openspec` now works plainly, and that matters most to you.** It resolves its
+root from the cwd and has no `-C` flag, which used to mean a dispatched agent
+could not validate a change living in a worktree at all. Your cwd is the right
+tree, so `openspec validate --strict` runs directly. If it cannot find the
+change, check `pwd` and `git rev-parse --abbrev-ref HEAD` before concluding
+anything about the CLI.
 
 **Do not report a validation you did not perform**, and do not let a skipped
 `validate --strict` pass silently into the merge — an unrun gate is worse than a
-red one, because the row gets ticked either way.
+red one, because the row gets ticked either way. That rule is unchanged; what has
+changed is that you now have no excuse to invoke it.
+
+**One thing to get right about branches.** You are on `worktree-agent-<id>`, not
+`piece/<name>`. Your archive commit therefore needs to reach the piece branch
+before the merge: cherry-pick it across, or push it and tell the runner, and say
+in your report which you did. **Never push your own branch to the remote** — a
+harness-named branch there is the same failure as a reviewer branch reaching it.
+Read your branch rather than assuming it:
+
+```
+git rev-parse --abbrev-ref HEAD
+```
 
 ## Step 1 — is the piece finished?
 
@@ -197,9 +205,20 @@ included. The CLI is `openspec`, from the npm package `@fission-ai/openspec`;
 the bare `openspec` package is an unrelated placeholder.
 
 The root comes from the cwd: `openspec` walks up to the nearest `openspec/` and
-has no `--directory`, `-C` or `--root`. If you entered the worktree as this file
-says, you are already in the right place — check the reported root before
-concluding a change is missing.
+has no `--directory`, `-C` or `--root`. **Your cwd is your own worktree, forked
+from the runner's HEAD**, so it resolves to the right root and the change is
+visible. Check the reported root anyway before concluding a change is missing or
+the CLI is broken — it distinguishes "no such change" from "wrong tree", which
+otherwise look identical.
+
+(This paragraph has now been wrong twice, in opposite directions: it first said
+"if you entered the worktree as this file says, you are already in the right
+place", which was left behind when `EnterWorktree` went; it was then corrected to
+"you are at the repository root", which the `isolation: "worktree"` dispatch made
+false in turn. **Both survived because they describe where you stand without
+naming the mechanism that puts you there** — the kind of claim a keyword sweep
+cannot find. If the dispatch model changes again, this paragraph is the one to
+re-read first.)
 
 Three things to get right in the closing context specifically:
 
@@ -349,13 +368,13 @@ succeeded; only the local delete failed, and that non-zero exit reads exactly
 like a failed merge. Check `gh pr view <n> --json state` before believing the
 exit code.
 
-**There is no worktree to leave at the end.** You never entered one — a
-dispatched agent works through absolute paths and `git -C` — so there is no
-step-out act, and this file's former `ExitWorktree(action: "keep")` last step is
-gone with it. Removing the piece's worktree is not yours either: CLAUDE.md's
-worktree section makes cleanup a post-merge step, and this repo has reached
-fifteen stale worktrees at once by nobody owning it. **Say in your report that
-the tree is ready to prune**, since the runner is the one holding that list.
+**You do not remove any worktree at the end — not yours, not the piece's.** You
+are standing in your own, and `git worktree remove` refuses the directory you are
+in; the piece's belongs to the runner, which holds the list. This repo has
+reached fifteen stale worktrees at once by nobody owning that job, so **say in
+your report that both are ready to prune** rather than leaving it implied. There
+is no step-out act either, and this file's former `ExitWorktree(action: "keep")`
+last step is gone with it.
 
 ## What you never do
 
