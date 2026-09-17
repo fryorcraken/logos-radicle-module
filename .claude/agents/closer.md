@@ -63,7 +63,8 @@ git rev-parse --abbrev-ref HEAD
 
 Two files answer this, and both are greppable rather than a matter of opinion.
 
-**The findings gate**, from the piece's worktree:
+**The findings gate**, run from your own worktree — it holds the piece's commits,
+so relative paths resolve:
 
 ```
 grep -rn "^- \[ \]" openspec/changes/<name>/findings/
@@ -153,12 +154,16 @@ and querying that name returns a 404 that reads exactly like "no protection is
 configured". It is not — this repo requires thirteen checks, signed commits, and
 `enforce_admins`.
 
-From inside the piece's worktree:
+From your own worktree. **You are on `worktree-agent-<id>`, not `piece/<name>`**
+(line 51), and you cannot check the piece branch out — it is checked out in the
+runner's worktree and git refuses a branch checked out elsewhere. So rebase the
+branch you are on, which carries the piece's commits, and push it to the remote
+piece ref by refspec:
 
 ```
 git fetch origin
 git rebase origin/main
-git push --force-with-lease origin piece/<name>
+git push --force-with-lease origin HEAD:refs/heads/piece/<name>
 ```
 
 **`--force-with-lease`, never `--force`.** It refuses if the remote moved since
@@ -239,8 +244,9 @@ Three things to get right in the closing context specifically:
   the order from `git log --name-status --diff-filter=A -- openspec/changes`;
   do not guess from folder names.
 
-Then `openspec validate --strict`, and commit it to `piece/<name>` with named
-paths. Most of the diff is renames — the change folder is *moved* into
+Then `openspec validate --strict`, and commit it to **your own branch** with named
+paths — you are on `worktree-agent-<id>` and cannot check out `piece/<name>`; the
+push below is what puts it on the piece. Most of the diff is renames — the change folder is *moved* into
 `changes/archive/<date>-<name>/`. The findings tracker you deleted in Step 1 is
 the one real deletion, so say so in the commit message, or the diff reads as
 though it is removing review evidence.
@@ -254,8 +260,12 @@ a bare `git push` has landed commits on `main` here more than once. With no
 upstream, name the refspec in full:
 
 ```
-git push origin refs/heads/piece/<name>:refs/heads/piece/<name>
+git push origin HEAD:refs/heads/piece/<name>
 ```
+
+`HEAD` on the left, because the local `piece/<name>` is the runner's checkout and
+does not carry your archive commit — pushing that ref would push a branch without
+the archive on it and report success.
 
 This is the one push
 you make, and it is an ordinary commit on top of a branch nobody else is on. It

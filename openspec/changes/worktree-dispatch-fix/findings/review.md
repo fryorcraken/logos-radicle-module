@@ -34,7 +34,7 @@ dimension each belongs to.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `.claude/agents/RUNNER.md:373` — "Dispatch into the
+- [x] **`dev-writer`** — `.claude/agents/RUNNER.md:373` — "Dispatch into the
       piece's existing worktree" is the old dispatch model's phrasing, stale
       under this piece's own change.
       **Scenario:** a `closer` reports a red run; the runner, following this
@@ -55,7 +55,18 @@ dimension each belongs to.
       "Tree removal moves to the runner … and all three reviewer files") did not
       catch, because that sweep never targeted this section.
 
-- [ ] **`dev-writer`** — `.claude/agents/README.md:88,194-196,528` and
+      **Fixed.** The line now says a fixer is dispatched the ordinary way —
+      `isolation: "worktree"`, its own tree forked from the runner's HEAD,
+      commits cherry-picked back — and states positively that nothing but the
+      runner goes into the piece's worktree, naming the "Dispatching" section
+      above as where that is measured. The re-sweep for the *shape* rather than
+      the keyword (see the report) found three more of the same residue in
+      `closer.md`, all fixed in the same commit: the findings gate and the
+      rebase block both said "from the piece's worktree", and the rebase and
+      archive pushes both named a local `piece/<name>` the closer is not on.
+      No test can observe any of this; the check is the grep in the report.
+
+- [x] **`dev-writer`** — `.claude/agents/README.md:88,194-196,528` and
       `.claude/agents/RUNNER.md:132` all say **the `dev-writer` opens the PR**,
       directly contradicting `.claude/agents/dev-writer.md:190-198`'s own
       section ("The PR, and why you no longer push it"): *"You do not push, and
@@ -84,7 +95,46 @@ dimension each belongs to.
       longer push" changes); `README.md` and `RUNNER.md` were not updated to
       match on this one point.
 
-- [ ] **readability/architecture** — `.claude/agents/README.md:361-396` and
+      **Fixed, and the finding is right that nobody owned it** — the gap was
+      real, not a wording clash. Resolved the other way round from what this
+      finding assumed, though: **the `dev-writer` keeps the PR** (the user's
+      decision), and `dev-writer.md:190-198` is what changed.
+
+      The mechanical objection in that section had to be answered rather than
+      overruled, because it is half correct. Its claim — commits are on
+      `worktree-agent-<id>`, a PR must be opened against `piece/<name>` —
+      is true; the conclusion "so you cannot" is not, because **a push does not
+      require a checkout**. `git push origin HEAD:refs/heads/piece/<name>` sends
+      the agent's tip to the remote piece ref without touching the local branch.
+      The prohibition that objection actually supports is kept verbatim: never
+      push `worktree-agent-<id>` *as itself*.
+
+      Measured while deciding this, because the alternative fix looked cleaner:
+      an agent **cannot** cherry-pick onto `piece/<name>` locally — it is checked
+      out in the runner's worktree and git refuses it, `fatal:
+      'piece/worktree-dispatch-fix' is already used by worktree at …`. That is
+      why the prescribed form is a refspec. A dry-run push of the refspec form
+      succeeded (`b7ec0ec..3123b5e  piece/worktree-dispatch-fix`), so the route
+      is verified rather than assumed.
+
+      Stated positively once, in `dev-writer.md`'s "The PR is yours" section,
+      with the ordering explicit (push, `gh pr list`, `gh pr create`, then hand
+      back) and the reason the earlier "you cannot" reasoning does not hold
+      written beside it. `README.md:195`, `README.md:533` and `RUNNER.md:132`
+      now point there instead of restating. `RUNNER.md:133`'s `gh pr create`
+      line is kept but rewritten: it now tells the runner to check `gh pr list
+      --head piece/<name>` rather than presuming, which was the part that made
+      the original line a dead end.
+
+      Three consequential edits fell out and are in the same commit:
+      `RUNNER.md`'s "agent branches are local only" (a rule about the ref *name*,
+      which the piece refspec does not violate), `README.md`'s branch table row
+      (work now reaches the piece two ways, not only by cherry-pick), and
+      `README.md`'s "only reviewers get a side branch" (false since writers
+      stopped standing in the piece tree). Rationale in `design.md` under "The
+      `dev-writer` opens the PR, by pushing a refspec rather than a branch".
+
+- [x] **readability/architecture** — `.claude/agents/README.md:361-396` and
       `.claude/agents/RUNNER.md:183-223` duplicate the same probe evidence
       near-verbatim (both refusal-message quotes, in full, ~25-35 lines each) in
       two separately maintained files rather than one file stating it and the
@@ -103,6 +153,23 @@ dimension each belongs to.
       shows the identical clause in both files; comparing the two blocks line by
       line (`README.md:361-396`, `RUNNER.md:183-223`) shows the same two probe
       transcripts, same wording, reproduced rather than referenced.
+
+      **Fixed. `README.md` owns the transcripts; `RUNNER.md` points at them.**
+      The choice is argued in `design.md` under "One file owns the probe
+      transcripts; the other points", not left implicit: the transcripts are
+      evidence for a rule about dispatch, and `README.md` already holds that
+      rule's full treatment (the `Works?` table, the pre-existing-versus-own-tree
+      distinction). Splitting evidence from analysis would leave the analysis
+      unsupported in the file people read to understand the flow.
+
+      The counter-argument — the runner is the party that *acts*, so the evidence
+      should sit where the actor reads — is recorded and rejected there too: the
+      runner does not need the transcripts to act, only the instruction, and
+      evidence and instruction have different readers. `RUNNER.md` keeps the
+      operational consequence as three bullets (dispatch with isolation; never
+      put `EnterWorktree` in a brief; do not read probe 1's message as a hint
+      toward probe 2's failure) plus the measured cost, and drops both quoted
+      refusal messages.
 
 ## Areas checked and clean
 

@@ -187,37 +187,69 @@ Never `git add -A`; commit named paths, because a worktree collects build output
 (`.scaffold/`, `target/`, `result-*` out-links, `./tmp/` scratch). The README's
 branch section has the artefact list.
 
-## The PR, and why you no longer push it
+## The PR is yours, and this is the one thing you push
 
-**You do not push, and you do not open the PR.** Your commits are on a
-harness-named branch that nothing downstream tracks; pushing it would put a
-branch on the remote that is not a piece branch, which `RUNNER.md` names as the
-same failure as a reviewer branch reaching the remote.
+**Open the PR as the last act of your first pass**, before you hand back and
+before the runner dispatches reviewers. This is the single place that owns the
+rule; `README.md` and `RUNNER.md` point here rather than restating it.
 
-So the sequence is: commit, report your branch name, hand back. **The runner
-cherry-picks onto `piece/<name>` and pushes**, and the PR is opened against that.
+**The ordering matters, because you do not wait for the runner.** Your commits
+are on a harness-named `worktree-agent-<id>`, and a PR must be opened against
+`piece/<name>` — but you do not need the runner's cherry-pick to get there. A
+push does not require a checkout: name the refspec in full and push **your tip
+to the remote piece ref**, which never touches the local `piece/<name>` and so
+never trips the checkout refusal described below. So the sequence, in order, is:
 
-Two things worth knowing anyway, because they explain the runner's urgency and
-you may be asked about them:
+```
+git config --get-regexp "^branch\.piece"
+git rev-parse --abbrev-ref HEAD
+git push origin HEAD:refs/heads/piece/<name>
+gh pr list --head piece/<name>
+gh pr create --head piece/<name> --base main
+```
+
+The first line is the upstream check and **expects no output**; the paragraph
+after this section says why, and why `git branch -vv` is not it.
+
+Then report your branch name and hand back. The runner cherry-picks your commits
+onto its own local `piece/<name>` afterwards — that is for *its* HEAD, which is
+the fork point for the next agent, and it is not what puts your work on the
+remote. You already did that.
+
+**Why "you cannot open it" was the wrong conclusion**, since an earlier version
+of this file said so and the argument sounds right: the objection was that your
+commits sit on a harness-named branch nothing downstream tracks. True, and the
+prohibition it supports is kept — **never push `worktree-agent-<id>` itself**, a
+harness-named branch on the remote being the same failure as a reviewer branch
+reaching it. But that is an objection to pushing *that ref*, not to pushing *to*
+`piece/<name>`, and a refspec distinguishes the two. Push the piece ref, never
+your own.
+
+**You cannot check out `piece/<name>`, and must not try.** It is checked out in
+the runner's worktree, and git refuses a branch that is checked out elsewhere —
+measured: `fatal: 'piece/worktree-dispatch-fix' is already used by worktree at
+…`. That is why the sequence above pushes a refspec rather than cherry-picking
+locally. A local cherry-pick is the runner's, and it is not available to you.
+
+Two reasons this cannot wait for review time:
 
 - **A push alone gets no CI**: both workflows trigger on `pull_request` and on
   pushes to `main` (`ci.yml` on `v*` tags too), never on a push to a piece
   branch. So the PR must be open early, or the first news of the build arrives
   after six reviewers have read the code.
-- **One piece is one PR.** If you are ever asked to create one, `gh pr list
-  --head piece/<name>` first.
+- **One piece is one PR.** `gh pr list --head piece/<name>` before you create —
+  a row back means the PR exists and you push to it instead. On the findings
+  pass it always does: commit, push, never open a second.
 
-**If you are ever pushing a piece branch yourself, check `git config
---get-regexp "^branch\.piece"` and expect nothing back.** The piece branch is
+**That `git config --get-regexp "^branch\.piece"` check expects nothing back.**
+The piece branch is
 created with `git worktree add --no-track`, so no upstream is the positive
 signal. `git branch -vv` is *not* the check — it prints `[origin/main]` either
 way, giving no way to tell an intended upstream from a wrong one, which is how a
-bare `git push` has landed commits on `main` here more than once. With no
-upstream, name the refspec in full:
-
-```
-git push origin refs/heads/piece/<name>:refs/heads/piece/<name>
-```
+bare `git push` has landed commits on `main` here more than once. That is also
+why the push above names both sides of the refspec rather than relying on a bare
+`git push`: with no upstream there is nothing for one to resolve to, and `HEAD`
+on the left is what carries your commits.
 
 The title says what the change does, not which stage produced it; the body says
 why it exists and names every `NO SPEC:` you left. Do not narrate your commits —

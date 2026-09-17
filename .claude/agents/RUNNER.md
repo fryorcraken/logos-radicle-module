@@ -129,14 +129,26 @@ piece branch that rides the same PR.
 
 - **One branch per piece: `piece/<name>`.** A branch named for a stage is the
   failure happening.
-- **The `dev-writer` opens the PR**, at the end of its first pass. If you are
-  reaching for `gh pr create`, either it has not run yet or the PR exists.
+- **The `dev-writer` opens the PR**, as the last act of its first pass, having
+  pushed its own commits straight to the remote `piece/<name>` ref. It does not
+  wait for your cherry-pick — [`dev-writer.md`](dev-writer.md) states the
+  sequence and owns it. **If you are reaching for `gh pr create`, either the
+  `dev-writer` has not run yet or the PR already exists**; check with `gh pr list
+  --head piece/<name>` rather than creating a second one.
+- **Your cherry-pick is still yours, and it is not what puts the work on the
+  remote.** The `dev-writer` has already pushed the commits; you cherry-pick so
+  that *your local HEAD* carries them, because that HEAD is the fork point for
+  every agent you dispatch next. Skip it and the next writer forks from a tree
+  missing the previous one's work — pushed or not.
 - **Count before dispatching.** `gh pr list --state open` is one row per piece;
   more rows than pieces means something opened a PR that should not have.
 
-**Agent branches are local only** — one on the remote is the same failure
-renamed. They are now named by the harness (`worktree-agent-<id>`) rather than by
-you, so you learn each one from the agent's report and cherry-pick from it.
+**No `worktree-agent-<id>` ever appears on the remote** — a harness-named branch
+there is the same failure as a reviewer branch reaching it, renamed. That is a
+rule about the *ref name*, not about who may push: the `dev-writer` and `closer`
+both push their tip **to `refs/heads/piece/<name>`**, which creates no agent
+branch on the remote. Agent branches are named by the harness rather than by you,
+so you learn each one from the agent's report and cherry-pick from it.
 
 **Do not rename or re-point a branch with an open PR.** A PR's head ref is
 immutable, and every workaround loses something; open a new PR on the correctly
@@ -180,43 +192,30 @@ Reviewers are the exception that proves it: six run concurrently precisely
 because they only *read* the code, so forking them all from the same HEAD is
 correct. It is writers that must be serialised.
 
-**A dispatched agent cannot enter a worktree, and the brief must say so.** This
-is not a contingency to plan for; it is what happens every time. Two probes
-measured it, and both routes fail:
+**A dispatched agent cannot be put inside a pre-existing worktree.** Not "usually
+fails" — two probes measured both routes and both fail, the second one *silently*
+until the agent's first Bash call. **The transcripts live in
+[`README.md`](README.md)**, under "Why the prohibition is still written down" and
+the `Works?` table beside it; they are quoted verbatim there and in one place
+only, because two copies of a measurement drift and the wrong one gets read.
 
-- **Dispatched normally**, so the working directory is the repository root, with
-  the worktree correctly registered in `git worktree list`. Verbatim: *"Cannot
-  enter worktree: the current working directory /…/radicle-logos-module is the
-  repository root, not an isolated worktree — switching is only available to
-  sessions whose working directory is inside a worktree of this repository."*
-  Since the repository root is where every dispatched agent starts, this refusal
-  is certain.
-- **Dispatched with `isolation: "worktree"`**, which pins the working directory
-  inside a throwaway worktree and so satisfies that precondition. The
-  `EnterWorktree(path:)` call **succeeded** and an environment update reported
-  the directory change — and then the agent was split in half: the Read tool
-  followed the switch and read the piece branch by relative path, while **every
-  Bash call was refused** with *"This agent is isolated in the worktree
-  …/agent-<id>, but this command's working directory resolved to the shared
-  checkout (…). Refusing to run it there — a worktree-isolated agent's commands
-  must run inside its worktree."*
+What you need from them here is the operational consequence, which is short:
 
-So there is no supported way to put a dispatched subagent inside a pre-existing
-worktree with full tool access. **Route 2 is the more dangerous**, because it
-looks like it worked: the failure does not surface until the first Bash call,
-by which point the agent believes it is in the right place.
-
-**Read that second failure precisely, because it is easy to misread as an
-argument against `isolation: "worktree"` itself.** It is not. What broke was the
-`EnterWorktree` call *crossing out of* the isolated tree; the isolation is what
-the flow now relies on. Dispatch with it and make no such call, and the agent is
-simply in the right place.
+- **Dispatch with `isolation: "worktree"` and let the agent be**, which is what
+  the section above already tells you. That route works completely and is what
+  this flow runs on.
+- **Do not reach for `EnterWorktree` on an agent's behalf, and do not put it in a
+  brief.** The tool moves only the session that calls it, so you could not do it
+  for an agent even if it were correct.
+- **Do not read the first probe's refusal as a hint.** Its message names the
+  precondition `isolation: "worktree"` establishes, which invites exactly the
+  combination probe 2 measured failing — isolation *plus* an `EnterWorktree` call
+  across into the piece tree. Isolation alone never crosses, so nothing breaks.
 
 The cost of getting this wrong was measured: four agents in one session hit the
 refusal, and two burned significant time inventing workarounds (`env -C`, `cd
 &&`) that each cost the user an approval click, because the brief told them the
-shape was supposed to work. That is why the prohibition is worth keeping written
-down even though agents no longer need to act on it.
+shape was supposed to work.
 
 `EnterWorktree` is still the right tool for a **session moving itself** — which
 is what you are, when you enter your piece's worktree. It is dispatched agents
@@ -370,7 +369,11 @@ It decides nothing and dispatches nobody. Two things come back:
 **A red run.** This is the most tempting moment to break the first rule in this
 file — the failing lines are in the report and the fix looks like one line. The
 `closer` refused it for the reason you should: it neither read nor wrote the
-change. Dispatch into the piece's existing worktree:
+change. Dispatch a fixer the ordinary way — `isolation: "worktree"`, its own tree
+forked from your HEAD, its commits cherry-picked back. There is no special
+dispatch shape for a fixer, and **nothing goes into the piece's own worktree but
+you**: putting a dispatched agent there is the failure the whole "Dispatching"
+section above measures. Who to send:
 
 | What failed | Who |
 |---|---|

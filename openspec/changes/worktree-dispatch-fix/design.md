@@ -202,6 +202,84 @@ piece branch *before* the next writer is dispatched. Otherwise the second forks
 from a HEAD without the first's commits and silently diverges. Reviewers are
 exempt precisely because they only read.
 
+### The `dev-writer` opens the PR, by pushing a refspec rather than a branch
+
+Review found the flow had lost its PR owner. `README.md` and `RUNNER.md` said the
+`dev-writer` opened it; `dev-writer.md` had been rewritten to say *"You do not
+push, and you do not open the PR"*; and the only `gh pr create` anywhere told the
+runner not to reach for it. Nobody opened the PR, and nothing would have failed —
+commits reach `piece/<name>`, reviewers read the branch happily, and the gap
+surfaces only when someone runs `gh pr list` and finds nothing. That is the
+silent-failure shape this whole piece exists to close, reintroduced by the piece.
+
+**Ownership stays with the `dev-writer`** (the user's call; the runner was the
+other candidate). What had to be solved was the mechanical objection that made
+the "you cannot" version look right.
+
+**The objection, and why it does not hold.** `dev-writer.md`'s argument was: your
+commits are on a harness-named `worktree-agent-<id>`, a PR must be opened against
+`piece/<name>`, and pushing your own branch would put a non-piece branch on the
+remote. Every clause is true, and the conclusion still does not follow, because a
+**push does not require a checkout**. `git push origin HEAD:refs/heads/piece/<name>`
+sends the agent's tip to the remote piece ref without the local `piece/<name>`
+being involved at all. The prohibition the objection actually supports —
+never push `worktree-agent-<id>` *as itself* — is kept verbatim; what is rejected
+is extending it to a refspec whose destination is the piece.
+
+**Considered and rejected: the runner opens it after cherry-picking.** It is the
+tidier ownership story — the runner pushes, so the runner opens — but the
+`dev-writer` has handed back by then, so the PR's existence depends on a separate
+runner action with nothing to prompt it. Worse, it is the same shape as the defect
+above: no error when skipped. Keeping the action attached to the agent whose pass
+it concludes means the PR is opened by whoever is already there.
+
+**Considered and rejected: the `dev-writer` cherry-picks onto `piece/<name>`
+locally and pushes that.** This cannot work, and the measurement is the reason the
+refspec form is prescribed instead: `piece/<name>` is checked out in the runner's
+worktree, and git refuses a branch checked out elsewhere — `fatal:
+'piece/worktree-dispatch-fix' is already used by worktree at …`. An agent told to
+cherry-pick onto the piece would hit that refusal with no fallback written down,
+which is precisely how the `env -C` improvisations started.
+
+**What breaks if the refspec's left side is written as `refs/heads/piece/<name>`
+instead of `HEAD`:** the push silently sends the runner's local piece branch,
+which does not carry the agent's new commits, and reports success. Same trap for
+the `closer`'s archive push, which had exactly that form and is corrected here.
+
+**The runner's cherry-pick survives this change and is not redundant.** It no
+longer puts work on the remote — the `dev-writer` already did — but it is what
+makes the runner's *local HEAD* carry the commits, and that HEAD is the fork point
+for every agent dispatched next. Delete the cherry-pick and the next writer forks
+from a tree missing the previous one's work, pushed or not. `RUNNER.md` says this
+explicitly, because "the work is already pushed" is the obvious reason to skip it.
+
+### One file owns the probe transcripts; the other points
+
+The two `EnterWorktree` probe transcripts were reproduced near-verbatim in both
+`README.md` and `RUNNER.md`. Review flagged it as the failure mode this piece
+itself diagnoses in `closer.md` and that CLAUDE.md names outright: two copies
+drift and the wrong one gets read.
+
+**`README.md` owns them.** The choice is not arbitrary. The transcripts are
+evidence for a *rule about how agents are dispatched*, and `README.md` is where
+that rule's full treatment already lives — the three-row `Works?` table, the
+pre-existing-versus-own-tree distinction, and the `isolation: "worktree"` section
+the whole flow now runs on. Splitting the evidence from the analysis would leave
+the analysis unsupported in the file people read to understand the flow.
+
+The counter-argument, which is real: the runner is the party that *acts* on the
+rule, so the evidence could be said to belong where the actor reads. It loses
+because the runner does not need the transcripts to act — it needs one line
+("dispatch with `isolation: "worktree"`, do not put `EnterWorktree` in a brief"),
+and `RUNNER.md` now carries exactly that plus a pointer. Evidence is for the
+reader deciding whether to believe the rule; instruction is for the reader
+following it. They are different readers.
+
+**What breaks if `RUNNER.md`'s pointer is replaced by a second copy again:** a
+future correction to a refusal message — the harness wording is not ours and can
+change — updates one file, and the other keeps quoting a message the tool no
+longer emits, with nothing forcing the second edit.
+
 ### Write each process trap where it bites, not in a single "traps" section
 
 Three unrelated failures were measured this session, and the temptation was one

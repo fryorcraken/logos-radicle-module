@@ -148,7 +148,7 @@ Every branch rule below follows from that asymmetry.
 
 | Branch | Worktree | Whose | Holds |
 |---|---|---|---|
-| `piece/<name>` | the runner's | the runner, and the PR | **the** task branch, and the only one ever pushed. Every agent's work reaches it by cherry-pick |
+| `piece/<name>` | the runner's | the runner, and the PR | **the** task branch, and the only one ever pushed. Work reaches it two ways: the runner cherry-picks every agent's commits onto its local copy, and the `dev-writer` and `closer` push a refspec to the remote copy |
 | `worktree-agent-<id>` | one per dispatch | one agent | **local only, and named by the harness** — whatever that agent committed, cherry-picked onto the piece and never pushed |
 | `main` | — | nobody | **no agent ever pushes here.** It takes commits through a PR only |
 
@@ -191,9 +191,13 @@ rather than merged shows here even though its content is in, so read the commits
 rather than the count. Say in the closing comment where the work went, and keep
 the branch.
 
-**Each agent pushes its own commits, once its work is done** — `dev-writer` and
-`tester` after theirs. The `dev-writer` pushes at the end of its first pass and
-opens the PR there; see [`dev-writer.md`](dev-writer.md).
+**`piece/<name>` is pushed by two agents only, and never by cherry-pick.** The
+`dev-writer` pushes it at the end of its first pass and opens the PR there; the
+`closer` pushes it again after the archive commit. Both push a **refspec to the
+remote piece ref** rather than checking the branch out — it is checked out in the
+runner's worktree, and git refuses a branch checked out elsewhere. **When and how
+the `dev-writer` does it is [`dev-writer.md`](dev-writer.md)'s**, stated once
+there; this line points rather than restates, because two copies drift.
 
 The `closer` also pushes, after committing the **archive** to the piece branch,
 before the CI check and the merge.
@@ -202,11 +206,12 @@ before the CI check and the merge.
 is on, and a direct push is rejected with `GH006`. This page and `closer.md` both
 used to say the archive was an exception, until a closer tried it.
 
-**Only reviewers get a side branch**, because only reviewers run genuinely in
+**Every agent now gets its own branch**, reviewers included. That used to be a
+reviewer-only arrangement, on the reasoning that only reviewers run genuinely in
 parallel — six at once, while a fixer may still be changing the code they are
-reading. A reviewer's own branch is what stops its commit racing that. Everyone
-else writes the piece one at a time and commits to it directly; a side branch there
-would add a step to get wrong and misname the commits besides.
+reading — and that a writer standing in the piece's tree should just commit to it.
+Writers no longer stand in that tree, so the distinction is gone: the harness
+names a branch per dispatch and every agent lands on one.
 
 Cherry-pick rather than merge, so the task branch reads as a flat sequence rather
 than six merge commits carrying six branches.
@@ -525,8 +530,9 @@ approach impossible has produced a result worth as much as the review, and
 unwritten the next agent spends the same afternoon. It goes in `design.md`, beside
 the decision it rules out.
 
-**The runner owns dispatching; the `dev-writer` opens the PR; the `closer` owns
-the last three stage rows.** `tasks.md`'s stage block is the list — read it to
+**The runner owns dispatching; the `dev-writer` opens the PR at the end of its
+first pass (see [`dev-writer.md`](dev-writer.md) for the sequence); the `closer`
+owns the last three stage rows.** `tasks.md`'s stage block is the list — read it to
 see what is left, because an unticked row with no agent running is a stage nobody
 is doing.
 
