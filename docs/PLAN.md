@@ -87,6 +87,19 @@ steps in a fixed order, what each preflight finding blocks, and the three
 consequences the flow must state at the moment the user decides. It is QML
 only — every slot it drives was already exposed through `radicle_ui.rep`.
 
+~~**What a user sees on picking Embedded.**~~ — **specified** in
+`embedded-state`: seven states derived from the backend's replies, each with its
+own sentence and its own action, plus the guard that stops a list request going
+to a mode with no node to ask. It exists because making Embedded startable
+deleted the dead-end panel and the fetch guard together — they were keyed on the
+same flag — which is the kind of coupling worth recognising elsewhere, not a
+status line. The reasoning is in the `embedded-node-wizard` change's `design.md`.
+
+**Still ahead on that surface:** the header caption (`SourceToggle.note`'s
+Embedded branch still reads "not available in this version yet", which is false)
+and the mode-detail slot that would show the embedded DID. Both are a second
+surface with their own height reservation, deliberately not folded in.
+
 **The configuration panel (Phase 2 step 4).** QML only, and what makes that
 true is now the `node-config` and `node-seeding` capabilities rather than the
 identity pair alone.
