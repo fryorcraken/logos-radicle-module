@@ -110,9 +110,18 @@ four reasons — the last of which is that no reply a later session can obtain
 says whether the key is encrypted — are in the `embedded-node-wizard` change's
 `design.md`, under "Start and restart route nowhere".
 
-**Hosting them is one property.** `Main.qml` reports `embeddedStartHosted`, and
-the panel's enablement is keyed on it, so the panel needs no edit when the
-configuration panel routes a start.
+**Hosting them is one property plus a branch — not one property.** `Main.qml`
+reports `embeddedStartHosted`, and the panel's enablement is keyed on it, so the
+panel genuinely needs no edit. But the flag decides only whether the control
+renders *enabled*; `takeEmbeddedAction` decides whether the resulting request
+reaches anything. `routesEmbeddedAction()` now reads the same two flags, so the
+enablement and the routing cannot disagree — but the branch that actually
+carries a start out still has to be written in the same change that flips the
+flag, or the panel offers an enabled control whose click is dropped. That is the
+dead end `embedded-state`'s spec exists to remove, and an earlier version of this
+paragraph said "one property… the panel needs no edit" in a way that invited
+exactly it. `test_every_hosted_kind_is_one_the_host_routes` is what holds the two
+together.
 
 **The configuration panel (Phase 2 step 4).** QML only, and what makes that
 true is now the `node-config` and `node-seeding` capabilities rather than the

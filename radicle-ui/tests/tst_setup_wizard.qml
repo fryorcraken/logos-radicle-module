@@ -1265,7 +1265,8 @@ Item {
         /// `advance()`: this harness is synchronous, so every gating reply has
         /// already been written by the time the landing runs, and bumping the
         /// epoch afterwards discards nothing. That was verified by mutation, not
-        /// assumed — the loop left all 49 tests green.
+        /// assumed — under the loop it stayed green, and the test below was the
+        /// only one in this file that reddened.
         ///
         /// The reply that IS still in flight at that moment is the seed list,
         /// because it is the one probe that does not gate `preflightDone`. So it

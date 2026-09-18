@@ -267,10 +267,18 @@ QtObject {
     /// test that arms `startHosted` deliberately, because with start unhosted
     /// every start action is disabled anyway and the term is unobservable.
     /// Deleting `actionHosted` turns `test_hosting_an_action_is_what_enables_it`
-    /// red; deleting the `actionKind !== ""` term turns
-    /// `test_a_blocked_home_offers_no_action_that_would_write` red.
-    readonly property bool actionEnabled:
-        actionKind !== "" && actionHosted && !startPending
+    /// red.
+    ///
+    /// There is deliberately **no `actionKind !== ""` term here**, and an
+    /// earlier version of this comment claimed there was one that reddened
+    /// `test_a_blocked_home_offers_no_action_that_would_write`. It did not, and
+    /// could not: `actionHosted` switches on `actionKind` and its `default:`
+    /// branch already returns `false` for `""`, so the extra term could not
+    /// change the result for any input. Review caught the false claim by
+    /// mutation — removing the term reddened nothing. Stating the redundancy is
+    /// worth more than the term was: a reader who adds a fifth `actionKind`
+    /// needs to know the guard lives in `actionHosted`'s `default:`, not here.
+    readonly property bool actionEnabled: actionHosted && !startPending
 
     /// Why the named action cannot be taken, or "" when it can.
     ///
@@ -285,9 +293,27 @@ QtObject {
     /// exists). Naming the surface it will live on is what turns a dead end into
     /// a wait.
     ///
-    /// Silent while a start is outstanding: the action is then withheld because
-    /// this view is waiting for a reply, which the `starting` sentence already
-    /// says, and reporting "not available" over it would be false.
+    /// NO SPEC: the spec requires only that unavailability be stated
+    /// (`embedded-state/spec.md`, "Only an action something can carry out is
+    /// offered as enabled"). It says nothing about **where** the text renders or
+    /// whether it is silent mid-flight, and both were chosen here:
+    ///
+    ///   - **Below the button** rather than beside it (`RepoList.qml`'s
+    ///     `embeddedStateUnavailable`), so the explanation reads as belonging to
+    ///     the disabled control rather than to the state sentence above it.
+    ///   - **Silent while a start is outstanding**: the action is then withheld
+    ///     because this view is waiting for a reply, which the `starting`
+    ///     sentence already says, and reporting "not available" over it would be
+    ///     false — it is not unavailable, it is in progress.
+    ///     `test_no_unavailability_is_claimed_while_a_start_is_outstanding`
+    ///     turns red if the `!startPending` term goes.
+    ///
+    /// The `actionKind !== ""` term IS load-bearing here, unlike in
+    /// `actionEnabled` above: this reads `!actionHosted`, which is `true` when
+    /// no act is named at all, so without the term a blocked home would claim
+    /// "starting is not yet available from here" when the obstacle is that the
+    /// home does not resolve and no act is offered at all.
+    /// `test_a_blocked_home_claims_no_unavailability` covers that.
     readonly property string actionUnavailableNote:
         (actionKind !== "" && !actionHosted && !startPending)
             ? "Starting the node is not yet available from here. It needs the "

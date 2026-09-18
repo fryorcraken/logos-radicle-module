@@ -182,6 +182,34 @@ passphrase a retry needs after a refusal.
 reads the field back at the start step *before* submitting, so it proves the
 clearing happened rather than that the field was never filled.
 
+**That clearing alone is not sufficient, and the gap only opened once this piece
+made the wizard re-openable.** Keying on `nodeStarted` covers the showing that
+runs to completion and nothing else. A user who types a passphrase, creates the
+identity — which consumes it once — and then closes the wizard *without* starting
+the node leaves `nodeStarted` false, so nothing clears. The overlay is a single
+instance whose `visible` the host toggles, never destroyed, and `SetupFlow`'s
+`reset()` cannot reach the field because the field lives in the view. So the next
+showing resumes at the start step holding the abandoned showing's plaintext
+passphrase and would hand it to `startNode()` with no re-entry by the user and
+nothing on screen saying the value is stale. Review demonstrated this against the
+real component, not by reading: show → type → create → abandon → reopen left the
+field holding the literal string.
+
+So the field and the switch are also reset in `SetupWizard.show()`, which makes a
+passphrase's lifetime **exactly one showing**. `show()` is the only place it can
+go: it is the single per-showing entry point, it runs before anything could be
+typed in the new showing, and it is in the view where the field is.
+
+**The constraint that rules out the tempting fix** is the same one that put the
+original clearing on the reply rather than the click: clearing in the start
+button's `onClicked` would destroy the passphrase a retry needs after a refused
+start. Keying on the showing sidesteps that entirely, because a refusal does not
+re-enter `show()`.
+`test_a_refused_start_keeps_the_passphrase_for_the_retry` is the guard that
+stops a future edit from "simplifying" this back into the click handler —
+it fails if the clear moves there. `test_a_passphrase_does_not_outlive_an_
+abandoned_showing` is the one that fails if the `show()` clear is removed.
+
 ### The preflight's gating probes are named flags, not a counter
 
 `preflightDone` flipped on `preflightAnswers >= 3`, a literal several lines
@@ -397,7 +425,7 @@ this repo has paid for before.
 
 **A component rather than seven conditions in `RepoList`.** Same reason
 `NavState` and `SourceState` are components: the behaviour is untestable in a
-view. `tst_embedded_state.qml` asks 15 questions of a `QtObject` with no window,
+view. `tst_embedded_state.qml` asks its questions of a `QtObject` with no window,
 where the alternative was hunting a `Button`'s `enabled` through a scene graph
 seven times over.
 
@@ -529,6 +557,64 @@ make is in the test's log, which makes "rendering the state writes nothing"
 structural rather than a promise (`test_rendering_the_state_writes_nothing`).
 The panel requests; the host decides.
 
+### The routing reads the same flags the enablement does
+
+`takeEmbeddedAction` was a bare `if (kind === "setup") openSetup();`, and the
+panel's enablement was keyed on `embeddedSetupHosted`/`embeddedStartHosted`.
+Those are two readings of one question — *does this act reach anybody?* — and
+nothing tied them together, so they were free to disagree. They disagreed in the
+direction that ships the defect: flipping `embeddedStartHosted` to `true` would
+have rendered an **enabled** "Start the node" control whose click reached the
+`if`, matched nothing, and was dropped silently. That is precisely the dead end
+`embedded-state`'s spec names as the reason the hosting capability exists, and
+review found both this file's own comment and `docs/PLAN.md` asserting "hosting
+them is one property" as settled fact — the half-truth that would have let it
+ship, since the existing suite never armed the flag end to end.
+
+So routing goes through `routesEmbeddedAction(kind)`, a predicate switching on
+kind and returning the *same* two flags `EmbeddedState.actionHosted` derives
+from. `takeEmbeddedAction` refuses anything it says no to before performing
+anything.
+
+**It is a separate function rather than an inlined guard because it is a
+different job**: it decides whether an act reaches anybody, and the caller
+decides what happens when it does. That separation is what makes "is every
+hosted kind routed?" a question a test can ask without performing any of the
+acts — which is why it was previously unasked, and therefore untested.
+`test_every_hosted_kind_is_one_the_host_routes` arms `embeddedStartHosted` and
+asserts the request becomes routable, with an unnamed and an unrecognised kind
+as controls so it is not satisfied by a host that accepts everything. Reverting
+to the bare `if` reddens it.
+
+What this does **not** do is write the branch that carries a start out; it
+cannot, for the four reasons under *Start and restart route nowhere*. The flag
+plus the branch is still two things. The value is that the two can no longer
+disagree *silently*: an enabled control is now either routed or refused, never
+dropped. `PLAN.md` was corrected to say so rather than to keep promising one
+flip.
+
+### "Becomes ready in Embedded" needs a freshly-built list, not a mode change
+
+The spec names two triggers that must not raise the setup: selecting Embedded
+live, and Embedded being restored as the mode already in force when the module
+starts. Only the first was covered. `tst_setup_host.qml`'s single `RepoList` is
+built once, before any test runs, and every test reaches its state by mutating
+the harness and calling `reload()` — which is a live mode change by construction.
+A host that auto-raised the setup from a completion handler reading a restored
+`embedded` mode would pass it, and `local.yaml` cannot help because the app
+always starts in `explore` and reaches `embedded` only by a click. So a null
+implementation that opened the setup on startup whenever the resumed mode was
+`embedded` with no identity passed every test at every layer.
+
+The fix is a `Component` that builds a second `RepoList` against a harness
+already in that state, which is as close to a module start as this layer gets.
+**Proven by mutation rather than assumed**: adding exactly that auto-raising
+`Component.onCompleted` to the fixture reddens
+`test_starting_up_in_embedded_does_not_raise_the_setup` and leaves
+`test_selecting_embedded_does_not_raise_the_setup` green — which is the
+demonstration that the two scenarios are genuinely different and that the
+existing test could not have covered this one.
+
 ### Hosting the setup extended `embedded-setup` rather than adding a capability
 
 The obvious alternative was a capability of its own — "the setup's host" —
@@ -604,6 +690,11 @@ surface routes a start, one property flips and nothing in `RepoList` or
 `EmbeddedState` is edited. A component that hard-coded "setup is enabled, start
 is not" would have to be found and changed by someone who has to notice it.
 
+That is true of the *panel*, and this paragraph originally stopped there and
+said "one property flips" full stop — which review showed was a half-truth that
+covered the enablement and not the routing. See *The routing reads the same flags
+the enablement does* for the other half.
+
 Both flags default to **false**, so a caller that forgets to wire one gets a
 named-but-disabled action — visible — rather than an enabled one reaching
 nobody, which is the defect.
@@ -623,6 +714,25 @@ nobody, which is the defect.
   because no control offers a start today — a click-driven test could not
   express the request, and the rule would hold only by accident of what is
   reachable.
+- Deleting the `actionKind !== ""` term from `actionUnavailableNote` reddens
+  `test_a_blocked_home_claims_no_unavailability`. Before that test existed it
+  reddened **nothing** — every other test that reaches the note has an act
+  named, so a blocked home would have claimed "starting the node is not yet
+  available from here" when the obstacle is an unresolvable home and no act is
+  offered at all. Found by review's mutation sweep, not by reading.
+
+**One guard that turned out not to be one.** `actionEnabled` also carried an
+`actionKind !== ""` term, and this file's comment claimed deleting it reddened
+`test_a_blocked_home_offers_no_action_that_would_write`. Review measured it: the
+deletion reddened nothing, and could not have. `actionHosted` switches on
+`actionKind` and its `default:` branch already returns `false` for `""`, so the
+term could not change the result for any input. It was removed and the
+redundancy written down in its place, because the useful fact for a reader adding
+an eighth state is *where* the guard actually lives — `actionHosted`'s `default:`
+— not that a second copy of it once sat in the conjunction. Note the asymmetry
+with `actionUnavailableNote` above, which reads `!actionHosted` and therefore
+does need the term: the same expression is load-bearing in one place and dead in
+the other.
 
 **One consequence worth stating:** three scenarios in `embedded-state` changed
 from asserting an enabled action to asserting a named one, and one —
@@ -655,7 +765,8 @@ worth recording because I got it wrong first.** The obvious guard is
 scenario above. It **cannot fail** against a looping landing: the harness is
 synchronous, so all three gating replies have been written by the time the
 landing runs, and bumping the epoch afterwards discards nothing. Verified by
-mutation — the loop left all 49 tests in the file green.
+mutation — under the loop that test stayed green, and exactly one test in the
+file reddened: the one named below, not this one.
 
 The reply that *is* still in flight at that moment is the **seed list**, because
 `listKnownSeeds` is the one probe that does not gate `preflightDone`. So
@@ -783,9 +894,9 @@ write for the same reason.
 
 ## Open questions
 
-Two choices were made that the spec does not require. Both are marked `NO SPEC:`
-in the code and both have a test, so they are visible to review rather than
-becoming permanent by accident.
+Choices were made that the spec does not require. Each is marked `NO SPEC:` in
+the code and each has a test, so they are visible to review rather than becoming
+permanent by accident.
 
 - ~~**Where the flow is entered from**, and what closing it does. This change
   wires no entry point into `Main.qml`; the close control emits `closed()`
@@ -806,6 +917,19 @@ becoming permanent by accident.
   on a diagnosis of nothing. This flow names the unanswered state instead.
   Marked on `SetupFlow.qml`'s `preflightDone`, tested by
   `test_an_unanswered_finding_is_not_reported_as_a_failure`.
+- **Where the unavailability note renders, and that it is silent mid-start.** The
+  spec requires only that unavailability be *stated*; it says nothing about
+  placement or about the window while a start is outstanding. Two choices were
+  made: the note renders **below the button** rather than beside it, so the
+  explanation reads as belonging to the disabled control rather than to the state
+  sentence above it; and it is **silent while a start is pending**, because the
+  action is then withheld for a reply the `starting` sentence already reports,
+  and "not available" over that would be false — it is not unavailable, it is in
+  progress. Marked on `EmbeddedState.qml`'s `actionUnavailableNote`, tested by
+  `test_no_unavailability_is_claimed_while_a_start_is_outstanding` for the
+  silence. Review found this one unmarked while two structurally identical
+  choices beside it were marked, which is the asymmetry that makes a deliberate
+  choice read as an incidental one.
 
 A third question the spec settles but the flow surfaces: **advancing past the
 embedded step requires `getCapabilities().mode === "embedded"`, so a flow whose

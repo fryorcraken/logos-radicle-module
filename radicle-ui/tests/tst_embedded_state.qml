@@ -219,6 +219,40 @@ Item {
                    + "not one that holds for every input");
         }
 
+        /// **A blocked home claims no unavailability either.** The note is about
+        /// an act that is named but unreachable; a blocked home names no act at
+        /// all, so the sentence "starting the node is not yet available from
+        /// here" would be answering a question nobody asked — and pointing at a
+        /// passphrase when the real obstacle is that the home does not resolve.
+        ///
+        /// This is the term review found unguarded: dropping `actionKind !== ""`
+        /// from `actionUnavailableNote` reddened nothing before this test
+        /// existed, because every other test that reaches the note has an act
+        /// named. The control leg is what makes it discriminate — the note DOES
+        /// appear for a named-but-unhosted act.
+        function test_a_blocked_home_claims_no_unavailability() {
+            st.pathsProblem = "the embedded home cannot be created";
+            compare(st.actionKind, "", "precondition: no act is named");
+            compare(st.actionUnavailableNote, "",
+                    "a blocked home must not claim that STARTING is what is "
+                    + "unavailable: no act is offered, and the obstacle is the "
+                    + "home rather than the passphrase");
+
+            // Control: a named act that nothing hosts DOES state its
+            // unavailability, so this is not satisfied by a note that is always
+            // empty.
+            st.pathsProblem = "";
+            st.identityExists = true;
+            st.running = false;
+            st.serving = false;
+            st.startHosted = false;
+            compare(st.actionKind, "start",
+                    "control: an act is named");
+            verify(st.actionUnavailableNote !== "",
+                   "control: a named but unhosted act states why it cannot be "
+                   + "taken");
+        }
+
         // ---- starting versus not serving ----------------------------------
 
         /// **The same two reported fields render two different states.** A
