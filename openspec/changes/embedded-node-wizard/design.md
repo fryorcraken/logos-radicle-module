@@ -842,6 +842,172 @@ incoherent — its "and it must actually list" leg collided with the panel's own
 fetch guard, because a startable Embedded with no node correctly issues nothing,
 so the assertion would have failed for a reason the file is not about.
 
+### The identity step has two gates, and collapsing them is the defect
+
+`canCreateIdentity` (`homeResolved && !identityExists`) gates the **creation
+call**. `canAdvanceIdentity` (`identityExists || canCreateIdentity`) gates the
+**forward control**. They are two properties because the spec's two blocks block
+two different things, and that difference is what the user sees:
+
+- an **unresolvable home** blocks the *step*: there is no identity and no way to
+  make one, so the control is withheld and the reason is stated;
+- an **occupied home** blocks only the *call*: the step's work is already done,
+  so the control stays available and advances.
+
+Written as one property, the occupied case strands a user on a step whose only
+act is complete — which is what shipped. The user's screenshot shows the
+consequence: a disabled-looking step, an amber sentence explaining a refusal, and
+a "Next" button that was the only way out, sitting beside a "Create identity"
+button that could do nothing.
+
+Keeping `canCreateIdentity` as the creation gate was a constraint rather than a
+preference. `test_the_resumed_steps_findings_are_populated` and
+`test_a_resumed_step_behaves_as_one_reached_by_advancing` both pivot on it as an
+observable — "creation is not offered for an identity that exists" is what makes
+a resumed step's findings demonstrably populated. Repurposing the name for the
+forward control would have made both tests assert the opposite of what they read
+as asserting, which is worse than a failing test.
+
+**Collapsing `canAdvanceIdentity` into `canCreateIdentity` reddens
+`test_an_occupied_home_blocks_creation_without_blocking_the_step` and
+`test_returning_to_a_step_that_acted_does_not_offer_to_act_again`** — verified
+by mutation, both restored.
+
+### One forward control, and the advance is inside the reply
+
+`submitIdentityStep(alias, passphrase)` is what the button calls. It branches on
+what the backend reported: with an identity it advances and issues nothing, with
+none it creates and — on a reply reporting one created — advances in the same
+act.
+
+**The advance is inside `createIdentity`'s reply handler, not after the call.**
+A reply is the only thing that can say creation succeeded; advancing after
+issuing the call would leave a refused creation sitting on the network step, and
+the spec is explicit that a refusal must not advance. It is guarded on
+`reply.created === true` rather than on the callback having run, which is the
+same "replies are the authority" rule the rest of this flow follows.
+
+`submitIdentity` is kept as its own function under it. Creating the identity and
+leaving the step are two jobs that happen to compose: one owns the call, its
+arguments and its refusal; the other owns which act to perform. It is also the
+entry point the passphrase-lifetime tests drive, because those are about what
+reaches the backend rather than about navigation — folding them together would
+have made those three tests navigate as a side effect of asserting on a
+passphrase.
+
+**The generic `Next` is hidden on the identity step**, not disabled. Two buttons
+that both move forward is the photographed defect; a disabled `Next` beside an
+enabled "Create identity and continue" would still read as two ways out, one of
+them broken. **Making it unconditionally visible reddens
+`test_the_identity_step_offers_exactly_one_forward_control`**, whose second half
+asserts it is back on the following step — so the absence is keyed on the step
+rather than being a deletion.
+
+**Dropping the advance from the reply handler reddens three named tests**:
+`test_one_forward_control_creates_and_advances_together`,
+`test_returning_to_a_step_that_acted_does_not_offer_to_act_again` and
+`test_a_refused_creation_stays_on_the_step_and_can_retry`.
+
+### The three identity states are one derived string, not two booleans
+
+`identityState` is `"none"` | `"created"` | `"present"`, derived from
+`identityExists` and a `identityCreatedHere` flag that only a
+`createEmbeddedIdentity` reply sets.
+
+This is "complexity in the data structure, not the logic" applied to the hardest
+requirement in the reopened spec: **created and already-there must not render the
+same way, and created and refused must never be on screen together.** With one
+value of three cases, rendering two of them at once is unrepresentable — each
+statement's `visible` is an equality against the same string. With two booleans
+the view has four combinations, two of them the exact screen the user
+photographed: a green *"Created: did:key:z6Mkv…"* directly above an amber *"An
+identity already exists in this home … Creating a second one is refused, never
+an overwrite"*.
+
+**`identityCreatedHere` is the one fact in this flow a backend reply cannot
+supply.** `getEmbeddedIdentity()` reports that an identity exists and says
+nothing about who made it — there is no field that could. "This showing made it"
+is a fact about this showing, so it is held here and cleared by `reset()`, which
+makes it per-showing by construction: a resumed flow that finds an identity
+reports it as already there, never as one it made.
+
+It is deliberately **not** folded into `identityExists` as a third value, even
+though that would be one property instead of two. The two answer different
+questions — "is there one" gates the creation call, "did we make it" decides
+what is reported — and folding them would put a display concern inside a gate
+that `canCreateIdentity` and the resume rule both read.
+
+**Making `identityState` return `"created"` for any existing identity reddens
+`test_the_identity_step_renders_its_three_states_apart`** on its
+already-there leg, plus two preconditions in neighbouring tests.
+
+### The already-there state is a success, and the refusal surface is reserved
+
+`createBlockedReason` no longer carries the "an identity already exists …
+creating a second one is refused" sentence. That sentence was *factually
+correct* and it described an attempt nobody made: a user who already holds an
+identity has succeeded at this step, and telling them creation is refused
+explains a failure that did not happen.
+
+Where the step now says why it offers no creation, it says it as a note in the
+ordinary text colour — "Nothing to create — this step is done" — and never on
+`wizardError`, which stays reserved for a refusal the backend returned to *this*
+showing. That reservation is the reason a user can trust the error box at all.
+
+**Restoring the sentence to `createBlockedReason` reddens
+`test_an_identity_already_there_renders_no_refusal` and
+`test_created_and_refused_are_never_on_screen_together`** — the two halves of
+the photographed screen, each with its own test.
+
+### The step names the home, in all three states
+
+A DID names the identity and says nothing about where it lives. The embedded
+home is derived from the Basecamp profile's data directory — a path the user did
+not choose and cannot guess — so a step reporting only a DID leaves them unable
+to find, back up or inspect what was created, or to tell it from their own
+`~/.radicle`. The user's question on seeing the shipped screen was exactly that:
+*"what HOME? where is the embedded identity created?"*.
+
+`identityHome` renders `getEmbeddedIdentity().home`, unconditionally across the
+three states, because "which home is this" is the same question before and after
+creation. Where `home` is empty there is no path to print, so the step *states*
+that none could be resolved and shows the backend's own sentence with it — the
+same verbatim rule the rest of the flow follows, and the one that names the
+limit that was exceeded.
+
+**Blanking the path from the rendered text reddens
+`test_the_reported_home_is_the_path_displayed` and
+`test_the_home_is_stated_in_all_three_states`.** The first is the one that
+matters: it asserts a *second* distinctive path replaces the first, so a
+hardcoded path cannot pass it.
+
+### The passphrase choice belongs to the no-identity state alone
+
+The alias field, the encrypt switch, the trade statement and the passphrase field
+are all visible only where `identityState === "none"`. An existing key was
+sealed, or not, when it was created, and this flow cannot re-key it — so offering
+the control would be a control that records nothing, and stating the trade would
+describe a decision that is not the user's to take. The photographed screen had a
+*filled* passphrase field with the switch off, beside an identity that already
+existed: three statements that could not all be acted on.
+
+What does **not** change is the rule inside that state: both halves of the trade,
+stated at the control, before it is touched, and still stated when the switch is
+turned off. That requirement was never about which state it applies in, and
+scoping it did not weaken it —
+`test_both_halves_of_the_trade_are_stated_before_the_choice` and
+`test_the_trade_stays_stated_when_the_passphrase_is_turned_off` are unchanged and
+still green.
+
+`test_a_passphrase_is_the_arriving_default` was pinned to `identityState ===
+"none"` explicitly rather than left relying on the fixture's default. It passed
+either way, which is the problem: a test that does not say which state it is
+asserting about would silently start asserting about a control that is correctly
+absent. **Making the switch unconditionally visible reddens
+`test_an_existing_identity_offers_no_passphrase_choice`**, whose second half —
+the control present where the choice does exist — is what stops a step that
+never renders it from passing.
+
 ### The alias is not pre-validated in the view
 
 `createEmbeddedIdentity` passes the `radicle` crate's own statement of the alias

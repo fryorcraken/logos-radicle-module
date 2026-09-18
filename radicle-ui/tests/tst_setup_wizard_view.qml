@@ -390,13 +390,281 @@ Item {
 
         /// A passphrase is the ARRIVING default: leaving the control alone must
         /// produce the safer outcome.
+        ///
+        /// **Pinned to the no-identity state explicitly**, rather than relying
+        /// on the fixture's default. The passphrase choice now exists only in
+        /// that state — an existing key's encryption was decided when it was
+        /// created and is not this flow's to change — so a test that did not say
+        /// which state it was asserting about would silently start asserting
+        /// about a control that is correctly absent.
         function test_a_passphrase_is_the_arriving_default() {
+            fake.identityExists = false;
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
             goTo("identity");
+            compare(wizard.flow.identityState, "none", "precondition");
+
             var sw = harness.findByName(wizard, "identityPassphraseSwitch");
             verify(sw !== null, "the passphrase control must be present");
             compare(sw.checked, true,
                     "the control must arrive in the state that sets a "
                     + "passphrase");
+        }
+
+        /// **An identity that already exists offers no passphrase choice.**
+        /// Its key was sealed, or not, when it was created; stating a trade the
+        /// user can no longer make describes a decision that is not theirs.
+        ///
+        /// The second half is what makes the first discriminate: with no
+        /// identity the control must be there. Without it, a step that never
+        /// rendered the switch at all would pass.
+        function test_an_existing_identity_offers_no_passphrase_choice() {
+            fake.identityExists = true;
+            fake.nodeId = "did:key:z6MkWASHERE";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+            goTo("identity");
+            compare(wizard.flow.identityState, "present", "precondition");
+
+            var sw = harness.findByName(wizard, "identityPassphraseSwitch");
+            verify(sw === null || !sw.visible,
+                   "no control choosing whether to set a passphrase must be "
+                   + "present where the choice no longer exists");
+            var trade = harness.findByName(wizard, "passphraseTrade");
+            verify(trade === null || !trade.visible,
+                   "nor the statement of a trade the user cannot make");
+
+            fake.identityExists = false;
+            fake.nodeId = "";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+            goTo("identity");
+            var sw2 = harness.findByName(wizard, "identityPassphraseSwitch");
+            verify(sw2 !== null && sw2.visible,
+                   "and it MUST be present where the choice does exist");
+        }
+
+        // ---- the identity step's one control, three states and home ---------
+
+        /// **One forward control, and only one.** The defect this replaces was
+        /// "Create identity" beside "Next" — two ways out of a step with one
+        /// act, one of which could leave it with the work undone.
+        ///
+        /// Driven through the rendered Button rather than the flow function,
+        /// because the requirement is about what the step OFFERS.
+        function test_the_identity_step_offers_exactly_one_forward_control() {
+            goTo("identity");
+
+            var next = harness.findByName(wizard, "wizardNext");
+            verify(next === null || !next.visible,
+                   "the generic Next must not be a second way forward on a "
+                   + "step whose forward control is its own");
+
+            var btn = harness.findByName(wizard, "identityForward");
+            verify(btn !== null && btn.visible,
+                   "the step must offer its forward control");
+            compare(btn.enabled, true, "enabled, with a resolvable home");
+
+            btn.clicked();
+            compare(wizard.flow.step, "network",
+                    "one click must both create and leave the step");
+            compare(wizard.flow.identityState, "created",
+                    "having created the identity");
+
+            // And the generic Next is back on the step after it — so the
+            // absence above is keyed on the step rather than being a deletion.
+            var nextAgain = harness.findByName(wizard, "wizardNext");
+            verify(nextAgain !== null && nextAgain.visible,
+                   "the generic Next must still serve the other steps");
+        }
+
+        /// **The control's rendered label names the act it will perform.**
+        /// Asserted off the Button's own `text`, not off the flow property it
+        /// binds to: a label read from the input cannot distinguish "rendered"
+        /// from "never rendered", which is this repo's standing lesson.
+        function test_the_rendered_label_names_the_act() {
+            goTo("identity");
+            var btn = harness.findByName(wizard, "identityForward");
+            var withNone = String(btn.text).toLowerCase();
+            verify(withNone.indexOf("create") !== -1,
+                   "with no identity the button must name creating one, got: "
+                   + btn.text);
+
+            fake.identityExists = true;
+            fake.nodeId = "did:key:z6MkWASHERE";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+            goTo("identity");
+            var withOne = String(btn.text).toLowerCase();
+            verify(withOne.indexOf("create") === -1,
+                   "with one already there it must NOT, got: " + btn.text);
+            verify(withOne.indexOf("continue") !== -1,
+                   "and must name continuing, got: " + btn.text);
+        }
+
+        /// **The three states render differently**, and the second and third
+        /// are never the same rendering. A user who already holds an identity
+        /// has succeeded at this step; telling them creation was refused
+        /// describes an attempt nobody made.
+        ///
+        /// Asserted on what is VISIBLE, walked from the scene graph, because
+        /// "these two states look the same" is a statement about the screen.
+        function test_the_identity_step_renders_its_three_states_apart() {
+            goTo("identity");
+            verify(harness.findByName(wizard, "identityCreated") === null
+                   || !harness.findByName(wizard, "identityCreated").visible,
+                   "with no identity, nothing may claim one was created");
+            verify(harness.findByName(wizard, "identityAlreadyThere") === null
+                   || !harness.findByName(wizard,
+                                          "identityAlreadyThere").visible,
+                   "nor that one was already there");
+
+            harness.findByName(wizard, "identityForward").clicked();
+            wizard.flow.back();
+            compare(wizard.flow.step, "identity");
+
+            var made = harness.findByName(wizard, "identityCreated");
+            verify(made !== null && made.visible,
+                   "an identity this showing created must be reported as "
+                   + "created");
+            verify(String(made.text).indexOf("did:key:z6MkMADE") !== -1,
+                   "carrying its node id, got: " + made.text);
+            var there = harness.findByName(wizard, "identityAlreadyThere");
+            verify(there === null || !there.visible,
+                   "and must NOT also be reported as having been already there");
+
+            // A fresh showing over a backend that already holds one.
+            fake.identityExists = true;
+            fake.nodeId = "did:key:z6MkWASHERE";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+            goTo("identity");
+
+            var there2 = harness.findByName(wizard, "identityAlreadyThere");
+            verify(there2 !== null && there2.visible,
+                   "an identity found on arrival must be reported as already "
+                   + "present");
+            verify(String(there2.text).indexOf("did:key:z6MkWASHERE") !== -1,
+                   "carrying its node id, got: " + there2.text);
+            var made2 = harness.findByName(wizard, "identityCreated");
+            verify(made2 === null || !made2.visible,
+                   "and must NOT be reported as created by this showing — the "
+                   + "two states must not render the same way");
+        }
+
+        /// **An identity already there is not rendered as a failure**, and in
+        /// particular the refusal surface stays empty: it is reserved for a
+        /// refusal the backend returned to this showing.
+        function test_an_identity_already_there_renders_no_refusal() {
+            fake.identityExists = true;
+            fake.nodeId = "did:key:z6MkWASHERE";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+            goTo("identity");
+
+            var box = harness.findByName(wizard, "wizardError");
+            verify(box === null || !box.visible,
+                   "no refusal box for an attempt nobody made");
+            var blocked = harness.findByName(wizard, "identityBlocked");
+            verify(blocked === null || !blocked.visible,
+                   "and no statement that creating one is refused");
+
+            var shown = harness.visibleTextUnder(wizard).toLowerCase();
+            verify(shown.indexOf("refused, never an overwrite") === -1,
+                   "the sentence that read as a failure must be gone, got: "
+                   + shown);
+        }
+
+        /// **Created and refused are never on screen together.**
+        function test_created_and_refused_are_never_on_screen_together() {
+            goTo("identity");
+            harness.findByName(wizard, "identityForward").clicked();
+            wizard.flow.back();
+
+            var made = harness.findByName(wizard, "identityCreated");
+            verify(made !== null && made.visible, "precondition: created");
+            var box = harness.findByName(wizard, "wizardError");
+            verify(box === null || !box.visible,
+                   "a created identity must not be shown beside a refusal");
+            var blocked = harness.findByName(wizard, "identityBlocked");
+            verify(blocked === null || !blocked.visible,
+                   "nor beside a statement that creating one is refused");
+        }
+
+        /// **The home the step writes to is displayed**, and it is the one the
+        /// backend reported — so a step told a different home shows a different
+        /// path. A DID says nothing about where the identity lives, and the
+        /// embedded home is derived from the Basecamp profile's data directory,
+        /// so it is not a path a user can guess.
+        function test_the_reported_home_is_the_path_displayed() {
+            var first = "/home/u/.local/share/basecamp/radicle";
+            goTo("identity");
+            var node = harness.findByName(wizard, "identityHome");
+            verify(node !== null && node.visible,
+                   "the home must be on screen");
+            verify(String(node.text).indexOf(first) !== -1,
+                   "showing the reported path, got: " + node.text);
+
+            var second = "/var/lib/other/profile/radicle-home";
+            wizard.flow.reset();
+            wizard.flow.fetchIdentity = function (cb) {
+                cb({ home: second, exists: false, nodeId: "", problem: "" });
+            };
+            wizard.flow.runPreflight();
+            goTo("identity");
+            verify(String(node.text).indexOf(second) !== -1,
+                   "a different reported home must display differently, got: "
+                   + node.text);
+            verify(String(node.text).indexOf(first) === -1,
+                   "and the first must be gone, got: " + node.text);
+        }
+
+        /// **The home is stated in all three states**, because "which home is
+        /// this" is the same question before and after creation.
+        function test_the_home_is_stated_in_all_three_states() {
+            var home = "/home/u/.local/share/basecamp/radicle";
+            goTo("identity");
+            var node = harness.findByName(wizard, "identityHome");
+            compare(wizard.flow.identityState, "none", "precondition");
+            verify(node.visible && String(node.text).indexOf(home) !== -1,
+                   "state 1, got: " + node.text);
+
+            harness.findByName(wizard, "identityForward").clicked();
+            wizard.flow.back();
+            compare(wizard.flow.identityState, "created", "precondition");
+            verify(node.visible && String(node.text).indexOf(home) !== -1,
+                   "state 2, got: " + node.text);
+
+            fake.identityExists = true;
+            fake.nodeId = "did:key:z6MkWASHERE";
+            wizard.flow.reset();
+            wizard.flow.runPreflight();
+            goTo("identity");
+            compare(wizard.flow.identityState, "present", "precondition");
+            verify(node.visible && String(node.text).indexOf(home) !== -1,
+                   "state 3, got: " + node.text);
+        }
+
+        /// **An unresolvable home is STATED rather than rendered as an empty
+        /// path**, with the backend's own sentence — which names what was tried
+        /// — shown with it.
+        function test_an_unresolvable_home_is_stated_not_shown_empty() {
+            var sentence = "the profile data dir exceeds the 108-byte cap";
+            wizard.flow.reset();
+            wizard.flow.fetchIdentity = function (cb) {
+                cb({ home: "", exists: false, nodeId: "", problem: sentence });
+            };
+            wizard.flow.runPreflight();
+            wizard.flow.stepIndex = wizard.flow.steps.indexOf("identity");
+
+            var node = harness.findByName(wizard, "identityHome");
+            verify(node !== null && node.visible,
+                   "the step must still say something about the home");
+            var t = String(node.text);
+            verify(t.toLowerCase().indexOf("no radicle home") !== -1,
+                   "stating that none could be resolved, got: " + t);
+            verify(t.indexOf(sentence) !== -1,
+                   "with the backend's own sentence, got: " + t);
         }
 
         /// **Both halves of the trade, before the control is touched.** One

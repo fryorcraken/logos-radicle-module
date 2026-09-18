@@ -69,6 +69,98 @@ about unavailability — and one comment claiming a mutation reddened a named te
 was measured, found false, and replaced with the reason no test could have
 caught it. The reviewer rows above still refer to the state before this pass.
 
+## Implementation — the respecced identity step (seventh pass)
+
+Acting on the second reopening of the identity step, from the user dogfooding
+the built app. No stage row is ticked or added: `design + code` was already
+ticked and the block is one row per stage, so concurrent cherry-picks do not
+conflict. Two QML files and two test files changed; no change to `radicle/`,
+`radicle_ui.rep` or the Rust staticlib.
+
+### The state
+
+- [x] `canAdvanceIdentity` — the FORWARD-CONTROL gate, kept **distinct** from
+      `canCreateIdentity`, the creation gate. The spec's two blocks block two
+      different things: an unresolvable home blocks the step, an occupied home
+      blocks only the call. `canCreateIdentity` keeps its meaning because two
+      resume tests read it as the observable for "creation is not offered".
+- [x] `submitIdentityStep(alias, passphrase)` — the one forward control. It
+      advances without a call where an identity exists, and creates where none
+      does. `submitIdentity` stays as its own function under it: one owns the
+      call, the other owns which act to perform.
+- [x] The create-and-advance happens **inside the reply handler**, guarded on
+      `reply.created === true` — so a refusal stays on the step, which is what
+      the spec requires and what advancing-after-the-call would break.
+- [x] `identityState` — `"none"` | `"created"` | `"present"`, ONE derived string
+      rather than two booleans, so "created and already-there render the same"
+      and "created and refused on screen together" are unrepresentable rather
+      than merely discouraged.
+- [x] `identityCreatedHere` — the one fact no backend reply can supply. Cleared
+      by `reset()`, so it is per-showing by construction and a resumed flow
+      reports a found identity as already there.
+- [x] `identityActionLabel` — derived, so "the label names the act" is a
+      property of the state the act is decided from rather than of the view.
+- [x] `createBlockedReason` no longer carries the "already exists … refused"
+      sentence. It described an attempt nobody made.
+
+### The view
+
+- [x] One `identityForward` Button, labelled from the flow. The generic
+      `wizardNext` is **hidden on the identity step** — hidden rather than
+      disabled, because a disabled Next beside an enabled forward control still
+      reads as two ways out.
+- [x] Three states rendered apart: `identityCreated`, `identityAlreadyThere`
+      with its plain-text note, and neither in the no-identity state.
+- [x] `identityHome` renders `getEmbeddedIdentity().home` in ALL THREE states,
+      and states that none could be resolved — with the backend's own sentence —
+      rather than rendering an empty path.
+- [x] The alias, switch, trade and passphrase field are scoped to the
+      no-identity state. Both halves of the trade, in both switch positions,
+      are unchanged within it.
+
+### Tests
+
+- [x] `tst_setup_wizard.qml` — the occupied-home test **rewritten** for the new
+      substance (creation refused, step not blocked), plus the unresolvable
+      home, one control creating and advancing, the label in both directions,
+      the three states, an already-there identity not reported as a failure,
+      created-and-refused never together, and a refused creation retried.
+      `test_returning_to_a_step_that_acted…` strengthened to assert the CALL
+      LOG, because the gate going false does not say the control refrains.
+- [x] `tst_setup_wizard_view.qml` — exactly one forward control, the rendered
+      label, the three states walked from the scene graph, no refusal for an
+      already-there identity, the home in all three states, a second distinctive
+      home replacing the first, an unresolvable home stated, and no passphrase
+      choice where an identity exists.
+- [x] `test_a_passphrase_is_the_arriving_default` pinned to the no-identity
+      state rather than relying on the fixture's default.
+- [x] Fakes stay input-dependent: the two homes are different distinctive paths
+      and the first is asserted ABSENT; the created DID and the already-there
+      DID differ, so "already existed" and "just created" cannot be confused —
+      which is precisely the distinction the shipped screen got wrong.
+- [x] **Seven mutations run and reverted, each reddening named tests**: the two
+      gates collapsed (2 red); `identityState` folded to "created" for any
+      identity (1 red on substance, 2 on preconditions); the advance dropped
+      from the reply handler (3 red); `wizardNext` unconditionally visible
+      (1 red); the home path blanked (2 red); the "already exists … refused"
+      sentence restored to `createBlockedReason` (2 red); the passphrase row
+      unconditionally visible (1 red).
+- [x] Full suite green: `sh radicle-ui/tests/run-qml-tests.sh` exits 0. Count
+      the tests with `grep -c "function test_"` rather than reading a number
+      here; the runner's per-file total is two higher, counting
+      `initTestCase`/`cleanupTestCase`.
+- [x] `sh radicle-ui/tests/check-qml-syntax.sh` green.
+- [x] `lgs basecamp build --variant lgx --module radicle_ui` green, run from
+      this worktree's root.
+
+### Not covered
+
+- [ ] **No end-to-end coverage of the identity step**, unchanged from the fifth
+      pass and for the same reason: every step after preflight writes, so a
+      spec that walked this one would leave a provisioned embedded home behind
+      on every CI run. `local.yaml` still raises and lowers the setup without
+      walking a step.
+
 ## Implementation
 
 <!-- The dev-writer owns this section. -->
