@@ -58,6 +58,7 @@
 //! a partially-random seed is worse than no key at all.
 
 use radicle::crypto::ssh::keystore::Passphrase;
+use radicle::crypto::ssh::Keystore;
 use radicle::crypto::Seed;
 use radicle::node::Alias;
 use radicle::profile::{Home, Profile};
@@ -168,6 +169,69 @@ pub fn home_state(home: &str) -> HomeState {
 /// into it is the recovery, not a destructive act.
 pub fn profile_exists(home: &str) -> bool {
     home_state(home) == HomeState::Complete
+}
+
+/// Whether the identity at `home` is sealed with a passphrase.
+///
+/// -> `{"encrypted":bool,"problem":""}`
+///
+/// ## Why this is a reply object and not a `bool`
+///
+/// There are **three** answers, not two: sealed, not sealed, and *could not
+/// tell*. A `bool` forces the third into one of the first two, and the honest
+/// direction — `false` — is the dangerous one: a caller reading `false` starts
+/// the node with an empty passphrase, which is exactly wrong for a key that is
+/// encrypted and merely unreadable at this moment. So the failure travels
+/// beside the answer, and `encrypted:false` with a non-empty `problem` is
+/// distinguishable from `encrypted:false` with an empty one.
+///
+/// Not an `{"error":…}` object, for the same reason `getEmbeddedIdentity()` is
+/// not one: the question was asked and answered, and the caller has to render a
+/// state rather than retry a failed call.
+///
+/// ## Why this is asked at all, when `init_profile` already reports `encrypted`
+///
+/// `init_profile`'s field is computed from its passphrase argument — it says
+/// what was asked for, not what landed on disk — and, decisively, it is carried
+/// on a reply **no later session has**. The node is handed an already-decrypted
+/// signing key when it is built, so whether a passphrase is needed must be known
+/// *before* a start is attempted; this is the only way to learn it without
+/// attempting one, which would be a destructive probe rather than a question.
+///
+/// ## What this reads, and the invariant it deliberately breaks
+///
+/// `Keystore::is_encrypted` opens the **secret** key file
+/// (`radicle-crypto-0.19.0/src/ssh/keystore.rs:229`), where every other read on
+/// this path touches only `keys/radicle.pub` — see `env::node_id` and
+/// `radicle_impl.h`'s note that reads never need the passphrase. Opening it is
+/// still not *unlocking* it: `ssh_key::PrivateKey::read_openssh_file` parses the
+/// envelope, and `is_encrypted()` reports which kind of envelope it is. No
+/// passphrase, no `RAD_PASSPHRASE`, no ssh-agent, and nothing written back.
+///
+/// The consequence worth knowing is the failure mode rather than the risk: a
+/// home holding `radicle.pub` without its secret half — which `home_state`
+/// classifies by the public key alone — reaches an `Err` here rather than a
+/// `false`. That is the `problem` case above, and it is why the error is not
+/// flattened.
+pub fn key_encrypted(home: &str) -> String {
+    let keys_dir = std::path::Path::new(home).join("keys");
+    match Keystore::new(&keys_dir).is_encrypted() {
+        Ok(encrypted) => json!({ "encrypted": encrypted, "problem": "" }).to_string(),
+        // `encrypted` is false here because there is no observation behind it,
+        // and `problem` is what says so. A caller that reads the boolean alone
+        // gets the same answer it would for a plaintext key — which is why the
+        // spec requires the two be told apart, and why this pair travels
+        // together.
+        Err(e) => json!({
+            "encrypted": false,
+            "problem": format!(
+                "could not read the Radicle key at {} to tell whether it is \
+                 encrypted: {e}",
+                keys_dir.display()
+            ),
+        })
+        .to_string(),
+    }
 }
 
 /// Create a Radicle identity at `home`, the way `rad auth` does.

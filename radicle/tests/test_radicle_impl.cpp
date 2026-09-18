@@ -879,6 +879,7 @@ LOGOS_TEST(the_embedded_identity_methods_refuse_when_no_home_can_be_resolved)
     const auto probe = parse(impl.getEmbeddedIdentity());
     LOGOS_ASSERT_TRUE(probe["home"].get<std::string>().empty());
     LOGOS_ASSERT_FALSE(probe["exists"].get<bool>());
+    LOGOS_ASSERT_FALSE(probe["encrypted"].get<bool>());
     LOGOS_ASSERT_FALSE(probe["problem"].get<std::string>().empty());
 
     // The write refuses outright, and creates nothing anywhere — least of all
@@ -972,7 +973,57 @@ LOGOS_TEST(the_embedded_identity_reports_the_home_and_that_nothing_is_there_yet)
     LOGOS_ASSERT_TRUE(out["home"].get<std::string>() != home.dir);
     LOGOS_ASSERT_FALSE(out["exists"].get<bool>());
     LOGOS_ASSERT_TRUE(out["nodeId"].get<std::string>().empty());
+    // False because there is no key to describe, and with no `problem` — the
+    // home resolved and every question was answered. An `encrypted:false`
+    // carrying a problem would be a key that could not be read, which is a
+    // different state and must not be reachable from an empty home.
+    LOGOS_ASSERT_FALSE(out["encrypted"].get<bool>());
     LOGOS_ASSERT_TRUE(out["problem"].get<std::string>().empty());
+}
+
+LOGOS_TEST(the_reported_encryption_is_observed_from_the_key_not_echoed_from_a_call)
+{
+    // The field a LATER session reads. Both directions, against two separate
+    // homes, each read back through a FRESH `RadicleImpl` that never saw the
+    // creating reply — so a module echoing what it was told has nothing to echo
+    // and an implementation hardcoding either answer fails one leg.
+    ScopedRadHome home("embedded-encrypted-probe");
+
+    ScopedXdgDataHome plain("embedded-enc-plain");
+    {
+        auto creating = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                        SettingsStore{scratchSettingsPath("emb-enc-plain-a")});
+        LOGOS_ASSERT_TRUE(parse(creating.createEmbeddedIdentity("tester", ""))["created"]
+                              .get<bool>());
+    }
+    {
+        auto reading = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                       SettingsStore{scratchSettingsPath("emb-enc-plain-b")});
+        const auto out = parse(reading.getEmbeddedIdentity());
+        LOGOS_ASSERT_TRUE(out["exists"].get<bool>());
+        LOGOS_ASSERT_FALSE(out["encrypted"].get<bool>());
+        LOGOS_ASSERT_TRUE(out["problem"].get<std::string>().empty());
+    }
+
+    ScopedXdgDataHome sealed("embedded-enc-sealed");
+    {
+        auto creating = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                        SettingsStore{scratchSettingsPath("emb-enc-sealed-a")});
+        LOGOS_ASSERT_TRUE(
+            parse(creating.createEmbeddedIdentity("tester", "correct horse battery"))["created"]
+                .get<bool>());
+    }
+    {
+        auto reading = makeRadicleImpl(SeedClient{}, LocalStore{},
+                                       SettingsStore{scratchSettingsPath("emb-enc-sealed-b")});
+        const auto out = parse(reading.getEmbeddedIdentity());
+        LOGOS_ASSERT_TRUE(out["exists"].get<bool>());
+        LOGOS_ASSERT_TRUE(out["encrypted"].get<bool>());
+        // No passphrase was supplied to this instance and no agent holds the
+        // key, so a `problem` here would mean the probe needed a secret it does
+        // not have — which is the property that makes the field askable at all.
+        LOGOS_ASSERT_TRUE(out["problem"].get<std::string>().empty());
+    }
 }
 
 LOGOS_TEST(creating_the_embedded_identity_makes_one_the_module_can_then_report)

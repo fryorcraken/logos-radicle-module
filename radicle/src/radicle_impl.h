@@ -253,13 +253,34 @@ public:
      * -> {"home":"<path>",     // where the embedded home is, "" if unresolvable
      *     "exists":bool,       // a COMPLETE identity is already there
      *     "nodeId":"did:key:z6Mk...", // that identity, "" when exists is false
-     *     "problem":"..."}     // "" when the home could be resolved at all
+     *     "encrypted":bool,    // that identity's key is sealed, OBSERVED
+     *     "problem":"..."}     // "" when every question above was answered
      *
      * `exists:false` is the ordinary state before the wizard runs, not an
      * error. **It is also false for a half-created home** — key material with no
      * finished profile, which a crashed `Profile::init` leaves behind — because
      * such a home is recoverable rather than occupied; `createEmbeddedIdentity`
      * reports that case distinctly and says what to remove.
+     *
+     * **`encrypted` is why a later session can offer to start this node.** The
+     * node is handed an already-decrypted signing key when it is built, so a
+     * passphrase must be supplied at start or not at all — and a surface
+     * offering to start an existing node has to know which. Without this field
+     * it must either prompt always, which is wrong for an unencrypted key, or
+     * attempt a start and read the failure, which is a destructive probe rather
+     * than a question. `createEmbeddedIdentity`'s `encrypted` cannot serve: it
+     * is echoed from an argument and rides a reply no later session holds.
+     *
+     * It is **observed from the key on disk**, needs no passphrase, no
+     * `RAD_PASSPHRASE` and no ssh-agent, and unseals nothing. It is false
+     * whenever `exists` is false, because there is then no key to describe.
+     *
+     * **An unreadable key reports `encrypted:false` with a non-empty
+     * `problem`**, and that pair is the whole point: `false` alone would be
+     * indistinguishable from a plaintext key, and a caller would start the node
+     * with an empty passphrase against a key it cannot read. `problem` is
+     * therefore not only about an unresolvable home any more — it carries any
+     * question this reply could not answer.
      */
     std::string getEmbeddedIdentity();
 
@@ -291,14 +312,24 @@ public:
      * **computed from the passphrase argument rather than observed from the key
      * written** — so it says what was asked for, not what landed on disk. A
      * caller that must know the key is really sealed reads
-     * `getCapabilities().canWriteLocal`, which probes the key rather than
-     * echoing an argument: false with a reason means the key would not load,
-     * which is what "encrypted" has to mean to be worth anything. The
-     * `embedded-identity` spec names the regression this field would not
-     * catch.
+     * **`getEmbeddedIdentity().encrypted`**, which opens the key and reports
+     * which kind of envelope it has. The `embedded-identity` spec names the
+     * regression this field would not catch.
+     *
+     * That reply is the right one to ask because it always describes the
+     * embedded home, whatever mode is in force, and answers this one question.
+     * `getCapabilities().canWriteLocal` is NOT the substitute it was once
+     * documented as: it probes the home of the **mode in force**, so it is
+     * silent about the embedded home from any other mode, and it conflates an
+     * encrypted key with a missing one, an unreadable one and an agent that is
+     * simply not running — a caller cannot recover "encrypted" from it without
+     * matching on prose.
+     *
      * Reads never need the passphrase — only `keys/radicle.pub` is read — but
      * writes do, which is why `getCapabilities().canWriteLocal` is false for an
      * encrypted key with no agent holding it.
+     * `getEmbeddedIdentity().encrypted` is the one read that opens the secret
+     * half, and it parses the envelope rather than unlocking it.
      *
      * **An existing identity is refused, never overwritten**, and there is no
      * force. The signing key IS the identity; replacing it is unrecoverable and

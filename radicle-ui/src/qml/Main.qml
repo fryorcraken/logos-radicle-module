@@ -94,7 +94,19 @@ Item {
     readonly property Timer sourceReload: Timer {
         interval: 0
         repeat: false
-        onTriggered: repoList.reload()
+        onTriggered: {
+            // Ask what Embedded's home and node are doing BEFORE reloading, so
+            // the replies are on their way while the reload runs. The reload
+            // itself declines to fetch until one of them says there is a node —
+            // see `embeddedSettled` for the ordering that closes.
+            //
+            // Both run from the deferred timer rather than from `onSettled`
+            // itself, because `root.mode` is a binding to `sourceState.mode` and
+            // inside that handler it has not been re-evaluated: the same trap
+            // that made branch switching a dead feature for a whole milestone.
+            root.refreshEmbedded();
+            repoList.reload();
+        }
     }
 
     /// Convenience aliases. Views read these rather than reaching through
@@ -106,6 +118,12 @@ Item {
     readonly property string source: sourceState.current
     readonly property string mode: sourceState.mode
     readonly property bool localAvailable: sourceState.localAvailable
+
+    /// Whether the mode in force is one the user operates as an identity in —
+    /// what gates the header's DID. Derived there rather than here, from one
+    /// rule covering every mode; see `SourceState.modeHasIdentity` for why it
+    /// is not a list of mode names.
+    readonly property bool modeHasIdentity: sourceState.modeHasIdentity
 
     /// Whether this build can start the mode in force. Read by RepoList to
     /// decide whether to fetch at all — see SourceState.modeStartable for why
@@ -125,6 +143,192 @@ Item {
     /// button explains neither.
     readonly property bool canWrite: caps.canWriteLocal === true
     readonly property string writeUnavailableReason: caps.writeUnavailableReason || ""
+
+    // ---- what Embedded's state panel reads --------------------------------
+    //
+    // Seven states, derived in `EmbeddedState.qml` from three backend replies.
+    // `getCapabilities()` pushes itself, so `pathsProblem` needs no call;
+    // `getEmbeddedIdentity()` and `getNodeStatus()` are slots, so they are asked.
+    //
+    // **These are reply FIELDS, not a state.** Nothing here decides which state
+    // is in force — that derivation lives in one place, and holding a decided
+    // state here would be a second opinion that is wrong the moment a node dies
+    // or a passphrase is refused.
+
+    /// `getCapabilities().pathsProblem` — the socket path problem, verbatim.
+    readonly property string embeddedPathsProblem: caps.pathsProblem || ""
+
+    /// The last `getEmbeddedIdentity()` reply's fields.
+    ///
+    /// `embeddedEncrypted` defaults TRUE, unlike its neighbours, and the
+    /// asymmetry is the point: before any reply has landed, `true` means the
+    /// surface asks for a passphrase nobody needs — visible, one dismissal —
+    /// while `false` means it starts a node unasked on a reply nobody supplied.
+    property string embeddedHome: ""
+    property bool embeddedIdentityExists: false
+    property bool embeddedEncrypted: true
+
+    /// The last `getNodeStatus()` reply's fields.
+    property bool embeddedRunning: false
+    property bool embeddedServing: false
+
+    /// Whether a `startNode` this view issued is outstanding, the last refusal,
+    /// and whether one of this view's own starts has ever succeeded.
+    ///
+    /// None of the three is in any reply — the node cannot tell you whether you
+    /// are waiting for it, nor who started it — so all three are the view's.
+    /// `startPending` is cleared by the REPLY rather than by the call having
+    /// been made, or a node that never answers would settle into "not serving"
+    /// while its start is genuinely still in flight.
+    ///
+    /// `embeddedStartSucceeded` is what keeps a node THIS MODULE started from
+    /// being reported as one in the way. `getNodeStatus()` reports the same two
+    /// fields either way, so without it the surface would warn about socket
+    /// contention over its own success — which is exactly what the setup flow's
+    /// step 5 shipped.
+    property bool embeddedStartPending: false
+    property string embeddedStartError: ""
+    property bool embeddedStartSucceeded: false
+
+    // ---- which Embedded requests this host routes -------------------------
+    //
+    // The state panel names an action per state; these say which of those
+    // requests actually reach something able to carry them out. A panel keyed on
+    // these renders an unhosted act as named-but-disabled with a sentence, which
+    // is the whole point: an enabled control that does nothing reads as a broken
+    // module rather than an unbuilt feature.
+
+    /// "setup" is routed: `onEmbeddedActionTaken` raises the setup overlay.
+    readonly property bool embeddedSetupHosted: true
+
+    /// "start" is routed now, and what unblocked it was a core change.
+    ///
+    /// It was unhosted because nothing could determine whether a passphrase was
+    /// needed: only `createEmbeddedIdentity`'s reply carried an `encrypted`
+    /// field, and that is a reply no later session holds. `getEmbeddedIdentity()`
+    /// reports one now, observed from the key on disk — so the surface knows
+    /// whether to ask, asks where it must, and starts by itself where it need
+    /// not.
+    ///
+    /// **The flag alone was never the whole change**, and the routing below
+    /// reads this same property so the two cannot disagree. Arming it without
+    /// writing the branch would have shipped an enabled control whose click was
+    /// dropped on the floor.
+    ///
+    /// Note `RepoList` does not route a start through
+    /// `embeddedActionTaken`/`takeEmbeddedAction` at all: the passphrase field
+    /// is on that surface, and handing the value out through a signal would put
+    /// a plaintext secret in a host with no other use for it. This flag governs
+    /// the panel's ENABLEMENT, and `routesEmbeddedAction` keeps the table
+    /// honest for any caller that does route one.
+    readonly property bool embeddedStartHosted: true
+
+    /// "restart" is NOT routed, and this is structural rather than unfinished
+    /// wiring.
+    ///
+    /// A restart is a stop followed by a start, whose two refusals are different
+    /// sentences a user should see separately, and nothing here sequences the
+    /// pair. It belongs to the node's configuration panel.
+    ///
+    /// **Split from `embeddedStartHosted`, which it shared until this change.**
+    /// One flag was right while both acts were unhosted for one shared reason;
+    /// with start hosted, one flag would have enabled a restart that reaches
+    /// nobody — the dead end `embedded-state` exists to remove, re-created one
+    /// state along.
+    readonly property bool embeddedRestartHosted: false
+
+    /// Re-read what Embedded's home and node are doing.
+    ///
+    /// Only in Embedded: in the other two modes the answers describe a node
+    /// nothing is showing, and `getNodeStatus` probes a control socket. Called
+    /// on mode settle and on backend ready rather than polled — the panel is a
+    /// state a user acts on, not a live monitor, and polling belongs with node
+    /// control in Settings › Node.
+    function refreshEmbedded() {
+        if (!backend || mode !== "embedded") return;
+        callPlain("getEmbeddedIdentity", [], function (reply) {
+            root.embeddedHome = reply.home || "";
+            root.embeddedIdentityExists = reply.exists === true;
+            // Read as `!== false` rather than `=== true`, so a reply from a
+            // build that predates this field does not read as an unencrypted
+            // key and start a node unasked. An absent answer means "assume one
+            // is needed", which is the direction that costs a dismissal rather
+            // than a start nobody asked for.
+            root.embeddedEncrypted = reply.encrypted !== false;
+        });
+        callPlain("getNodeStatus", [], function (reply) {
+            root.embeddedRunning = reply.running === true;
+            root.embeddedServing = reply.serving === true;
+        });
+    }
+
+    /// Start the embedded node, with `passphrase` — empty for an unencrypted
+    /// key.
+    ///
+    /// **The one act this host performs on the Embedded surface's behalf rather
+    /// than routing.** `RepoList` calls it directly, both for the start it
+    /// issues by itself and for the one a typed passphrase submits, because the
+    /// passphrase lives on that surface: handing it out through
+    /// `embeddedActionTaken(kind)` would either widen that signal to carry a
+    /// plaintext secret or make this host hold one it has no other use for.
+    ///
+    /// `callSettings`, not `callPlain`: a refused start is the useful result —
+    /// it names the passphrase that did not unlock the key, the socket in use
+    /// or the home in the way — and the panel displays it verbatim.
+    ///
+    /// `startPending` is cleared by the REPLY, never by the call having been
+    /// made, so a node that never answers stays `starting` rather than settling
+    /// into "not serving" with its start still in flight.
+    ///
+    /// `startSucceeded` latches on the first success and is never cleared here.
+    /// It answers "did this module put a node on that socket", and stopping or
+    /// crashing afterwards does not make the answer no — while clearing it would
+    /// make this surface warn about contention with a node it started itself,
+    /// which is the defect the field exists to prevent.
+    function startEmbeddedNode(passphrase) {
+        if (!backend || embeddedStartPending) return;
+        embeddedStartPending = true;
+        embeddedStartError = "";
+        callSettings("startNode", [passphrase], function (reply) {
+            root.embeddedStartPending = false;
+            if (reply && reply.error) {
+                root.embeddedStartError = reply.error;
+                return;
+            }
+            // Only a `started:true` reply counts. A reply that merely arrived is
+            // not a started node.
+            if (reply && reply.started === true) {
+                root.embeddedStartSucceeded = true;
+            } else {
+                root.embeddedStartError = "the node did not report itself started";
+            }
+            // The node's own report is the authority on what happened; this
+            // asks rather than assuming the start moved `running` and `serving`.
+            root.refreshEmbedded();
+        });
+    }
+
+    /// Reload once Embedded gains a node worth asking.
+    ///
+    /// **The ordering this closes.** `sourceReload` fires one event-loop turn
+    /// after the mode settles, while the identity and status replies are a
+    /// backend round trip away — so a reload issued there runs against defaults.
+    /// The defaults derive to `blocked`, which declines to fetch, and that is the
+    /// safe direction: no request goes out against a home nothing has described.
+    /// But it means a serving node would never be listed at all, because nothing
+    /// else asks again.
+    ///
+    /// So the trigger is the derived answer moving, not a reply landing: whatever
+    /// combination of the two replies first makes a node askable is what reloads.
+    /// This is the same rule as `SourceState.settled()` — fetch on the value that
+    /// decides WHETHER to fetch, not on an input to it.
+    readonly property Connections embeddedSettled: Connections {
+        target: repoList
+        function onHasNodeToAskChanged() {
+            if (root.mode === "embedded" && repoList.hasNodeToAsk)
+                repoList.reload();
+        }
+    }
 
     /// Switch mode, and PERSIST it.
     ///
@@ -158,6 +362,110 @@ Item {
     /// app. `SettingsPanel.closed()` is that way out; see its Back control.
     property bool settingsOpen: false
 
+    /// Whether the guided setup is RAISED over the view.
+    ///
+    /// The same shape as `settingsOpen`, and for the same reason stated one
+    /// level harder by `embedded-setup`: hosted as a navigation destination,
+    /// going back from the setup would have to choose between the step the user
+    /// was on and the screen they came from, and `NavState` knows nothing about
+    /// steps — while the setup's own Back already moves between them, so there
+    /// would be two controls for one word. Raised over the view, lowering it
+    /// restores exactly the screen underneath with no decision to make.
+    property bool setupOpen: false
+
+    /// Raise the setup, lowering the settings surface if it is up.
+    ///
+    /// **The exclusion is enforced at the raise, not by a binding**, so lowering
+    /// one raises nothing: a user who closes the setup is returned to the screen
+    /// underneath, not handed a surface they did not ask for. Two opaque
+    /// surfaces raised at once leaves one unreachable behind the other with no
+    /// control to lower it, which is the one-way door this module has already
+    /// shipped once.
+    ///
+    /// `show()` restarts the flow: the landing step is derived from the
+    /// preflight this raise is about to run, never from what a previous showing
+    /// left behind. The wizard is not destroyed when it is lowered, so its
+    /// `Component.onCompleted` fires for the first showing only — which is why
+    /// the host says "begin" explicitly rather than relying on construction.
+    function openSetup() {
+        settingsOpen = false;
+        setupOpen = true;
+        setupWizard.show();
+    }
+
+    /// Act on the Embedded state panel's request.
+    ///
+    /// **Routes on the KIND, not on the state**, which is what makes "a start
+    /// request does not raise the setup" a property of this function rather than
+    /// of which states happen to be reachable today. A host that raised the
+    /// setup for every request alike would satisfy every scenario a module in
+    /// the no-identity state can produce, and be wrong on the day a start
+    /// request becomes routable.
+    ///
+    /// `restart` reaches nothing, deliberately — see `embeddedRestartHosted`.
+    /// The panel renders it not-enabled and says so, so this is belt and braces
+    /// rather than the only guard.
+    ///
+    /// `start` is hosted and has a branch here, although the panel does not use
+    /// it: `RepoList` calls `startEmbeddedNode` directly, because the passphrase
+    /// a start may need lives on that surface and this signal carries only a
+    /// kind. The branch exists because the flag says the kind is routed, and a
+    /// hosted kind with no branch is the disagreement `routesEmbeddedAction`
+    /// was written to make impossible. It starts with an empty passphrase,
+    /// which is the only value a caller carrying no secret can mean.
+    ///
+    /// **Routed via `routesEmbeddedAction()` rather than by an `if` per kind**,
+    /// because the enablement the panel renders and the routing this performs
+    /// are two readings of the same question and were free to disagree. They
+    /// disagreed by construction: `embeddedStartHosted` gated the control while
+    /// a bare `if (kind === "setup")` gated the act, so arming the flag alone
+    /// would have shipped an enabled control whose click was dropped on the
+    /// floor — the dead end `embedded-state`'s spec names as the reason this
+    /// capability exists. Both now read the same table.
+    function takeEmbeddedAction(kind) {
+        if (!routesEmbeddedAction(kind)) return;
+        if (kind === "setup") openSetup();
+        else if (kind === "start") startEmbeddedNode("");
+    }
+
+    /// Whether this host routes a request of this kind — the same question the
+    /// panel's `actionHosted` asks, answered from the same flags.
+    ///
+    /// Kept as its own function rather than folded into `takeEmbeddedAction`
+    /// because it is a different job: this decides *whether* an act reaches
+    /// anybody, and the caller decides *what happens* when it does. Separating
+    /// them is what lets a test ask "is every hosted kind routed?" without
+    /// performing any of the acts — which is the question that was previously
+    /// unaskable, and therefore untested.
+    ///
+    /// A kind absent from this table routes nowhere whatever a control does, so
+    /// a programmatic `.clicked()` past a disabled control still cannot provoke
+    /// an unhosted act.
+    function routesEmbeddedAction(kind) {
+        switch (kind) {
+        case "setup":              return embeddedSetupHosted;
+        case "start":              return embeddedStartHosted;
+        case "restart":            return embeddedRestartHosted;
+        default:                   return false;
+        }
+    }
+
+    /// The Settings chip's act: raise the settings surface, lowering the setup
+    /// if it is up; or lower settings, raising nothing.
+    ///
+    /// A function rather than `settingsOpen = !settingsOpen` at the chip,
+    /// because the exclusion has to hold for BOTH raises and a second inline
+    /// copy of it is the shape this repo keeps paying for — four hand-written
+    /// staleness guards, each dropping a different term.
+    function toggleSettings() {
+        if (settingsOpen) {
+            settingsOpen = false;
+            return;
+        }
+        setupOpen = false;
+        settingsOpen = true;
+    }
+
     onCapsJsonChanged: {
         var r = R.parse(capsJson);
         if (r.ok) caps = r.data;
@@ -189,6 +497,7 @@ Item {
         seedPicker.loaded = false;
         seedPicker.reload();
         nav.reset();
+        refreshEmbedded();
         repoList.reload();
     }
 
@@ -339,7 +648,20 @@ Item {
     readonly property string nodeIdentity:  caps.nodeId || ""
     readonly property string nodeHome:      caps.radHome || ""
     readonly property bool   gitFound:      caps.gitFound === true
-    readonly property bool   settingsShown: settingsOpen
+    /// Whether each opaque surface is RAISED, read off the pane's own `visible`
+    /// rather than off the flag it is keyed on.
+    ///
+    /// `settingsShown` was the flag, and is moved onto the item for the reason
+    /// `reposEmbeddedPanel` documents: a copy of a condition agrees with the
+    /// item whether or not the item draws, so an assertion on it cannot see a
+    /// surface that was raised and never rendered — which is the defect worth
+    /// catching, and the one a screenshot cannot distinguish either.
+    ///
+    /// Both are asserted together in `tests/ui/local.yaml`, because the
+    /// requirement they carry is a RELATION: raising one lowers the other, and
+    /// lowering one raises nothing. Neither observable alone can see that.
+    readonly property bool   settingsShown: settingsPane.visible
+    readonly property bool   setupShown:    setupPane.visible
 
     // ---- state only the end-to-end layer can assert on --------------------
     //
@@ -347,13 +669,31 @@ Item {
     // shipped was invisible to every other assertion. They are read by
     // tests/ui/local.yaml; see that spec for what each one catches.
 
-    /// Whether the repository screen is showing the not-implemented state.
+    /// Whether the Embedded state panel is ACTUALLY on screen, and which state
+    /// it is rendering.
     ///
-    /// The pair with `repoCount` is the assertion that matters: Embedded must
-    /// show this AND no rows. Either alone is satisfied by a bug — a stale
-    /// `localListRepos` reply repopulates the list while this stays true, and
-    /// an empty list is equally true of a node with nothing in it.
-    readonly property bool reposNotImplemented: repoList.notImplemented
+    /// These replace `reposNotImplemented`, which named the panel this one
+    /// supersedes. That flag could not be kept: with all three modes startable it
+    /// was false everywhere, so `local.yaml`'s assertion on it was one nothing
+    /// could fail — and CLAUDE.md's rule is that a check which cannot fail is
+    /// worth no more than one that cannot pass. Deleting it without a
+    /// replacement would have been worse still, leaving the one state a user
+    /// actually lands in with nothing asserting anything about it.
+    ///
+    /// `reposEmbeddedPanel` is read off the rendered item's own `visible`, not
+    /// recomputed from the conditions it is keyed on, for the same reason
+    /// `reposSayingNothing` is: a recomputed copy agrees with the item whether or
+    /// not the item draws.
+    readonly property bool reposEmbeddedPanel: repoList.embeddedPanelShown
+
+    /// Which of the seven states is in force: "blocked" | "noIdentity" |
+    /// "stopped" | "starting" | "startFailed" | "notServing" | "runningEmpty".
+    ///
+    /// Asserted alongside the flag above rather than instead of it: the panel
+    /// rendering and the panel rendering the RIGHT state are different facts,
+    /// and a spec running against a real embedded home with no identity can
+    /// check both.
+    readonly property string reposEmbeddedState: repoList.embedded.current
 
     /// Whether the repository screen is blank with no explanation at all.
     ///
@@ -682,21 +1022,34 @@ Item {
                         }
                     }
 
-                    // Local's detail. Absent — not blank, not a placeholder —
-                    // in any other mode, because in Explore you are not
-                    // operating as an identity at all and showing one there
-                    // would be noise. Same reasoning as the Local segment being
-                    // absent rather than disabled when there is no profile.
+                    // The detail of any mode that HAS an identity — Local and
+                    // Embedded both. Absent, not blank and not a placeholder,
+                    // in a mode that has none: in Explore you are not operating
+                    // as anyone, so an empty slot there is noise and a
+                    // placeholder is worse, because it suggests a value that is
+                    // loading. Same reasoning as the Local segment being absent
+                    // rather than disabled when there is no profile.
                     NodeIdentity {
                         id: nodeIdentity
                         objectName: "nodeIdentity"
                         // Two conditions, and they are different questions:
-                        // this mode is the one the identity describes, AND
-                        // there is an identity to describe. The component
-                        // already hides itself for the second (it must, or a
-                        // caller could render an empty slot); this adds the
-                        // first.
-                        visible: root.mode === "local" && nodeIdentity.nodeId !== ""
+                        // this MODE is one that has an identity, AND there is
+                        // an identity to describe. The component already hides
+                        // itself for the second (it must, or a caller could
+                        // render an empty slot); this adds the first.
+                        //
+                        // **`modeHasIdentity`, never a list of modes**, and
+                        // that is the fix rather than a tidy-up. This read
+                        // `root.mode === "local"`, so Embedded showed nothing —
+                        // in the mode where the confusion is most likely,
+                        // because its identity is one this module created
+                        // rather than one the user made, and where
+                        // `radicle_impl.h` most needs a view to say which DID it
+                        // is acting as. A list is one somebody has to notice and
+                        // extend; the rule is right for a mode added later
+                        // without anyone editing this line. See
+                        // `SourceState.modeHasIdentity`.
+                        visible: root.modeHasIdentity && nodeIdentity.nodeId !== ""
                         nodeId: root.caps.nodeId || ""
                         // The WHOLE DID, at every width. This element used to be
                         // the one that yielded — `ElideMiddle` down to a 120px
@@ -800,7 +1153,7 @@ Item {
                             objectName: "settingsToggle"
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.settingsOpen = !root.settingsOpen
+                            onClicked: root.toggleSettings()
                         }
                     }
                 }
@@ -830,6 +1183,12 @@ Item {
                     app: root
                     query: searchField.text
                     onRepoActivated: function (r) { nav.openRepo(r); }
+                    // The Embedded panel's action. It requests; this decides.
+                    // `takeEmbeddedAction` routes on the kind, so a start
+                    // request cannot raise a setup that could not perform it.
+                    onEmbeddedActionTaken: function (kind) {
+                        root.takeEmbeddedAction(kind);
+                    }
                 }
 
                 RepoView {
@@ -848,6 +1207,7 @@ Item {
         // and putting them in the stack would mean "back" from settings had to
         // decide which screen to restore.
         Rectangle {
+            id: settingsPane
             objectName: "settingsPane"
             visible: root.settingsOpen
             anchors.fill: parent
@@ -874,6 +1234,84 @@ Item {
                 // is why closing needs no decision about which screen to
                 // restore.
                 onClosed: root.settingsOpen = false
+            }
+        }
+
+        // The guided setup, raised over the view exactly as settings are, and a
+        // SIBLING of that pane rather than a section inside it.
+        //
+        // Three things follow from being an overlay rather than a navigation
+        // destination, and all three are requirements rather than styling:
+        //
+        //  - lowering it restores whatever screen was underneath, with no
+        //    decision to make. A `nav.view` destination would have to choose
+        //    between the step the user was on and the screen they came from, and
+        //    NavState knows nothing about steps.
+        //  - it adds no navigation history, so `nav.back()` keeps one meaning.
+        //  - it is mutually exclusive with `settingsPane`: both are opaque and
+        //    cover the same screen, so two raised at once leaves one unreachable
+        //    behind the other. `openSetup()` and `toggleSettings()` enforce that
+        //    at the raise — never by a binding, because lowering one must raise
+        //    nothing.
+        Rectangle {
+            id: setupPane
+            objectName: "setupPane"
+            visible: root.setupOpen
+            anchors.fill: parent
+            color: Theme.bg
+
+            SetupWizard {
+                id: setupWizard
+                objectName: "setupWizard"
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width - Theme.gapLg * 2, 640)
+                height: Math.min(parent.height, implicitHeight)
+
+                // The same injection SettingsPanel uses. Every call the flow
+                // makes goes through this file's own helpers, so the wizard
+                // reaches the backend without knowing there is one.
+                //
+                // `callPlain` for the reads (a failed probe must not paint the
+                // status strip red) and `callSettings` for the writes, whose
+                // refusal IS the useful result — it names the home in the way,
+                // the `keys` path to remove, or the alias rule that was broken.
+                flow.fetchCapabilities: function (cb) {
+                    root.callPlain("getCapabilities", [], cb);
+                }
+                flow.fetchIdentity: function (cb) {
+                    root.callPlain("getEmbeddedIdentity", [], cb);
+                }
+                flow.fetchNodeStatus: function (cb) {
+                    root.callPlain("getNodeStatus", [], cb);
+                }
+                flow.fetchSeeds: function (cb) {
+                    root.callPlain("listKnownSeeds", [], cb);
+                }
+                flow.createIdentity: function (alias, passphrase, cb) {
+                    root.callSettings("createEmbeddedIdentity",
+                                      [alias, passphrase], cb);
+                }
+                flow.saveSetting: function (key, value, cb) {
+                    root.callSettings("setSetting", [key, value], cb);
+                }
+
+                // The surface REPORTS; this module lowers it. A surface that
+                // closed itself would leave whatever raised it still believing
+                // it is up.
+                //
+                // Lowering changes nothing underneath — not the view in force,
+                // not the repository, not the tab — for the same reason closing
+                // settings does not: neither was ever pushed onto the stack.
+                //
+                // It re-reads what Embedded's home and node are doing, because
+                // the flow may have created an identity or started a node and
+                // the panel behind this is derived from those replies. That is a
+                // refresh of the screen underneath, not a change to it.
+                onClosed: {
+                    root.setupOpen = false;
+                    root.refreshEmbedded();
+                }
             }
         }
 
