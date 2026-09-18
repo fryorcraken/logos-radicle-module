@@ -93,7 +93,30 @@ Item {
     ///
     /// `restart()` rather than `runPreflight()`: the landing step is derived
     /// from the replies this preflight is about to collect.
+    ///
+    /// **The passphrase field is cleared here, and this is the only place it
+    /// can be.** `setupFlow.restart()` resets every flow property, but the
+    /// field lives in the view, so `reset()` cannot reach it. Without this, a
+    /// passphrase typed into a showing the user abandoned before starting the
+    /// node outlives that showing — the overlay is never destroyed — and the
+    /// next showing resumes at the start step holding it, handing a stale
+    /// secret to `startNode()` with no re-entry by the user.
+    ///
+    /// **Here rather than in the start button's `onClicked`**: that handler
+    /// runs before the reply, so clearing there would destroy the passphrase a
+    /// retry needs after a refusal
+    /// (`test_a_refused_start_keeps_the_passphrase_for_the_retry`). Keying on
+    /// the showing instead makes the lifetime exactly one showing, which covers
+    /// the abandoned case the `nodeStarted` clearing below cannot see.
+    ///
+    /// The switch goes back to its default with it: leaving it checked over a
+    /// cleared field would offer a start whose passphrase is silently empty.
+    ///
+    /// Deleting either line turns
+    /// `test_a_passphrase_does_not_outlive_an_abandoned_showing` red.
     function show() {
+        passphraseField.text = "";
+        passphraseSwitch.checked = true;
         setupFlow.restart();
     }
 

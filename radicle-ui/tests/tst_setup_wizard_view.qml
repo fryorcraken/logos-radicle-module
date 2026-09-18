@@ -468,6 +468,81 @@ Item {
                     + "calls that need it have been made");
         }
 
+        /// **A passphrase does not outlive the showing it was typed into.**
+        ///
+        /// The clearing above is keyed on `nodeStarted`, which covers only the
+        /// showing that runs to completion. This is the abandoned one: the user
+        /// types a passphrase, creates the identity — which consumes it once —
+        /// and then closes the wizard WITHOUT starting the node. `SetupWizard`
+        /// is a single instance the host toggles `visible` on, never destroyed,
+        /// and `SetupFlow.reset()` cannot reach a `TextField` that lives in the
+        /// view. So without a clear at `show()`, the next showing resumes at the
+        /// start step holding the earlier session's plaintext passphrase and
+        /// hands it to `startNode()` with no re-entry by the user.
+        ///
+        /// Asserted on the field rather than on `wizard.passphrase`, because
+        /// the property is a live binding through `passphraseSwitch.checked` —
+        /// reading "" from it would also be true of a switch merely toggled off,
+        /// while the secret stayed resident in `text` for the inspector to read.
+        function test_a_passphrase_does_not_outlive_an_abandoned_showing() {
+            wizard.show();
+            goTo("identity");
+            var field = harness.findByName(wizard, "identityPassphrase");
+            verify(field !== null, "the passphrase control must be present");
+
+            field.text = "correct horse battery";
+            wizard.flow.submitIdentity("tester", wizard.passphrase);
+            compare(wizard.flow.identityExists, true,
+                    "precondition: the identity was created");
+            compare(String(field.text), "correct horse battery",
+                    "precondition: creating an identity does not itself clear "
+                    + "the field — the start step still needs it");
+
+            // The abandonment: the host lowers the wizard without a start
+            // having been made. `nodeStarted` is still false, so the existing
+            // clearing has not run.
+            compare(wizard.flow.nodeStarted, false,
+                    "precondition: this showing is abandoned before any start");
+
+            // A later showing. `identityExists` is now true, so the flow
+            // resumes past identity — at the very step whose control would
+            // hand the passphrase to startNode().
+            fake.identityExists = true;
+            wizard.show();
+            compare(wizard.flow.step, "start",
+                    "precondition: the reopened flow resumes at the start step");
+
+            compare(String(field.text), "",
+                    "a passphrase typed in an abandoned showing must not be "
+                    + "carried into a later one and resubmitted as if freshly "
+                    + "entered");
+        }
+
+        /// The other half of the same rule: clearing per showing must NOT break
+        /// the retry a refused start depends on. `submitStart` failing leaves
+        /// the user on the start step within ONE showing, and the passphrase
+        /// they typed has to survive that — which is why the clear is at
+        /// `show()` and not in the start button's `onClicked`.
+        function test_a_refused_start_keeps_the_passphrase_for_the_retry() {
+            wizard.show();
+            goTo("identity");
+            var field = harness.findByName(wizard, "identityPassphrase");
+            field.text = "correct horse battery";
+            wizard.flow.submitIdentity("tester", wizard.passphrase);
+
+            goTo("start");
+            wizard.flow.startNode = function (p, cb) {
+                cb({ error: "the key could not be unlocked" });
+            };
+            wizard.flow.submitStart(wizard.passphrase);
+            compare(wizard.flow.nodeStarted, false,
+                    "precondition: the start was refused");
+
+            compare(String(field.text), "correct horse battery",
+                    "a refusal must leave the passphrase in place, so the retry "
+                    + "does not make the user retype it");
+        }
+
         // ---- the network step -----------------------------------------------
 
         /// The default AND its consequence. "No listen address" alone does not

@@ -84,16 +84,15 @@ admits, before there is anywhere for a setup entry point to live.
 
 Not covered, deliberately:
 
-- **Starting or restarting an already-created node.** Both need a passphrase, and
-  nothing in this change can ask for one: the setup's start step is gated on no
-  node answering the socket — which a restart's node is — it offers no stop to
-  sequence a restart from, and it starts with the passphrase its own identity step
-  took, which a later showing does not have. `getEmbeddedIdentity()` carries no
-  field saying whether an existing key is encrypted, so the module cannot even
-  tell whether a passphrase is needed. Those requests therefore belong to the
-  configuration panel, and until it exists the state surface names their actions
-  while leaving them not enabled and saying so — rather than offering a control
-  that reaches nobody, which is the dead end this change exists to remove.
+- **Starting or restarting an already-created node.** Both need a passphrase that
+  nothing in this change can ask for, so both belong to the configuration panel.
+  Until it exists the state surface names their actions while leaving them not
+  enabled and saying so — rather than offering a control that reaches nobody,
+  which is the dead end this change exists to remove. The four structural
+  reasons, the decisive one being that no reply a later session can obtain says
+  whether the key is encrypted, are in `design.md` under "Start and restart route
+  nowhere" — written once there rather than restated here, so the two cannot
+  drift.
 - **The header caption and the mode-detail slot.** `SourceToggle.note`'s
   Embedded branch still says "not available in this version yet", which is now
   false and on screen — but it is a second surface with its own height

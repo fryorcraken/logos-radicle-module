@@ -236,14 +236,17 @@ exposed.
 
 ### Tests
 
-- [x] `tst_embedded_state.qml` — 15 tests against the derivation: the ordering
+- [x] `tst_embedded_state.qml` — tests against the derivation: the ordering
       in both directions, each state's own sentence and action, starting versus
-      not serving, two refusals, the success that clears one, and which states
-      have a node to ask. Count with `grep -c "function test_"`; the runner's
-      total is two higher, counting `initTestCase`/`cleanupTestCase`.
-- [x] `tst_embedded_panel.qml` — 17 tests against the rendered screen and the
+      not serving, two refusals, the success that clears one, which states
+      have a node to ask, and that a blocked home claims no unavailability.
+      Count with `grep -c "function test_"` rather than reading a number here;
+      the runner's total is two higher, counting
+      `initTestCase`/`cleanupTestCase`.
+- [x] `tst_embedded_panel.qml` — tests against the rendered screen and the
       fetch guard, including the blank-pane observable in all six panel states
-      and the "panel prevented from rendering" case.
+      and the "panel prevented from rendering" case. Count with
+      `grep -c "function test_"`.
 - [x] Fakes answer from the MODE the request was issued for, so "listed the
       embedded node" is distinguishable from "listed the user's node under an
       Embedded badge" — the two share a method prefix. Replies are held, so "did
@@ -333,15 +336,20 @@ was already exposed.
 - [x] `RepoList` renders the note and guards `onClicked` on `actionEnabled`, so a
       programmatic emit cannot request an unhosted act either.
 - [x] `Main.qml` reports `embeddedSetupHosted: true`, `embeddedStartHosted:
-      false`. Hosting a start later is that one property.
+      false`, and `routesEmbeddedAction()` reads those same two flags so the
+      panel's enablement and the host's routing cannot disagree. Hosting a start
+      later is that one property **plus the branch that carries the act out** —
+      the flag alone would otherwise enable a control whose click is dropped.
 
 ### Tests
 
-- [x] `tst_setup_host.qml` — 8 tests against the host's shape: the panel's action
-      raises the setup, selecting Embedded does not, a start request does not, the
-      two surfaces exclude each other, lowering one raises nothing, the flow's
-      report lowers it, lowering refreshes, and raising restarts the flow.
-      Count with `grep -c "function test_"`; the runner's total is two higher.
+- [x] `tst_setup_host.qml` — tests against the host's shape: the panel's action
+      raises the setup, selecting Embedded does not, starting up already in
+      Embedded does not, a start request does not, every hosted kind is one the
+      host routes, the two surfaces exclude each other, lowering one raises
+      nothing, the flow's report lowers it, lowering refreshes, and raising
+      restarts the flow. Count with `grep -c "function test_"` rather than
+      reading a number here; the runner's total is two higher.
 - [x] `tst_setup_wizard.qml` — six re-entry tests, including one that holds the
       seed reply across the landing.
 - [x] `tst_embedded_state.qml` / `tst_embedded_panel.qml` — the hosted-ness

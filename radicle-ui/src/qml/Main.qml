@@ -194,9 +194,17 @@ Item {
     /// so a later session cannot even determine whether a passphrase is needed.
     ///
     /// So these belong to the durable settings surface, which is where a
-    /// passphrase can be asked for. **Flipping this to `true` once that surface
-    /// routes them is the whole change** — nothing in `RepoList` or
-    /// `EmbeddedState` hard-codes which acts are available.
+    /// passphrase can be asked for. Nothing in `RepoList` or `EmbeddedState`
+    /// hard-codes which acts are available, so the panel needs no edit.
+    ///
+    /// **But flipping this is not by itself the whole change**, and an earlier
+    /// version of this comment said it was. The flag decides whether the panel
+    /// renders an ENABLED control; `takeEmbeddedAction` decides whether the
+    /// resulting request reaches anything. `routesEmbeddedAction()` below ties
+    /// the two together so they cannot disagree — a hosted kind with no branch
+    /// is a case that function refuses rather than drops — but the branch that
+    /// carries the act out still has to be written. See
+    /// `test_every_hosted_kind_is_one_the_host_routes`.
     readonly property bool embeddedStartHosted: false
 
     /// Re-read what Embedded's home and node are doing.
@@ -317,8 +325,40 @@ Item {
     /// is that `getEmbeddedIdentity()` carries no field saying whether the key
     /// is encrypted. The panel renders them not-enabled and says so, so this is
     /// belt and braces rather than the only guard.
+    ///
+    /// **Routed via `routesEmbeddedAction()` rather than by an `if` per kind**,
+    /// because the enablement the panel renders and the routing this performs
+    /// are two readings of the same question and were free to disagree. They
+    /// disagreed by construction: `embeddedStartHosted` gated the control while
+    /// a bare `if (kind === "setup")` gated the act, so arming the flag alone
+    /// would have shipped an enabled control whose click was dropped on the
+    /// floor — the dead end `embedded-state`'s spec names as the reason this
+    /// capability exists. Both now read the same table.
     function takeEmbeddedAction(kind) {
+        if (!routesEmbeddedAction(kind)) return;
         if (kind === "setup") openSetup();
+    }
+
+    /// Whether this host routes a request of this kind — the same question the
+    /// panel's `actionHosted` asks, answered from the same flags.
+    ///
+    /// Kept as its own function rather than folded into `takeEmbeddedAction`
+    /// because it is a different job: this decides *whether* an act reaches
+    /// anybody, and the caller decides *what happens* when it does. Separating
+    /// them is what lets a test ask "is every hosted kind routed?" without
+    /// performing any of the acts — which is the question that was previously
+    /// unaskable, and therefore untested.
+    ///
+    /// A kind absent from this table routes nowhere whatever a control does, so
+    /// a programmatic `.clicked()` past a disabled control still cannot provoke
+    /// an unhosted act.
+    function routesEmbeddedAction(kind) {
+        switch (kind) {
+        case "setup":              return embeddedSetupHosted;
+        case "start":
+        case "restart":            return embeddedStartHosted;
+        default:                   return false;
+        }
     }
 
     /// The Settings chip's act: raise the settings surface, lowering the setup

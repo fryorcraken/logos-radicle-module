@@ -144,7 +144,17 @@ Item {
     }
 
     function takeEmbeddedAction(kind) {
+        if (!routesEmbeddedAction(kind)) return;
         if (kind === "setup") openSetup();
+    }
+
+    function routesEmbeddedAction(kind) {
+        switch (kind) {
+        case "setup":              return embeddedSetupHosted;
+        case "start":
+        case "restart":            return embeddedStartHosted;
+        default:                   return false;
+        }
     }
 
     function toggleSettings() {
@@ -166,6 +176,29 @@ Item {
         app: harness
         onEmbeddedActionTaken: function (kind) {
             harness.takeEmbeddedAction(kind);
+        }
+    }
+
+    /// A second, freshly-built `RepoList` — the only way to model "the module
+    /// becomes ready ALREADY in Embedded" at this layer.
+    ///
+    /// `repoList` above is constructed once, before any test runs, and every
+    /// test reaches its state by mutating the harness and calling `reload()`.
+    /// That is a live mode change, not a startup: a host that raised the setup
+    /// from a `Component.onCompleted` reading a restored `embedded` mode would
+    /// never be caught by it, because the completion already happened while the
+    /// fixture was in whatever state the previous test left. Building one
+    /// against a harness that is already in the state under test is what makes
+    /// the startup path observable.
+    Component {
+        id: freshRepoList
+
+        Ui.RepoList {
+            anchors.fill: parent
+            app: harness
+            onEmbeddedActionTaken: function (kind) {
+                harness.takeEmbeddedAction(kind);
+            }
         }
     }
 
@@ -291,6 +324,50 @@ Item {
             verify(harness.setupShown, "control: the setup action raises it");
         }
 
+        /// **Starting up ALREADY in Embedded with no identity does not raise the
+        /// setup either.** The spec names two distinct triggers that must not
+        /// raise it, and the test above covers only one: selecting Embedded
+        /// live. This is the other — Embedded restored as the mode already in
+        /// force when the module becomes ready.
+        ///
+        /// The distinction is not pedantic. The test above reaches `embedded` by
+        /// mutating a `RepoList` that completed construction long before, so a
+        /// host that auto-raised the setup from a completion handler reading a
+        /// restored mode would sail through it. Before this test existed, a null
+        /// implementation that opened the setup unconditionally on startup
+        /// whenever the resumed mode was `embedded` with no identity passed
+        /// every test in this suite and in `local.yaml`, which always starts in
+        /// `explore` and reaches `embedded` only by a click.
+        ///
+        /// So this builds a fresh `RepoList` against a harness already in that
+        /// state, which is the closest this layer gets to a module start.
+        function test_starting_up_in_embedded_does_not_raise_the_setup() {
+            harness.mode = "embedded";
+            harness.embeddedIdentityExists = false;
+            harness.setupOpen = false;
+            verify(!harness.setupShown, "precondition: nothing is raised");
+
+            var fresh = freshRepoList.createObject(harness);
+            verify(fresh !== null, "precondition: the fresh list was built");
+            fresh.reload();
+
+            compare(fresh.embedded.current, "noIdentity",
+                    "precondition: it came up in exactly the state that most "
+                    + "obviously calls for a setup");
+            verify(!harness.setupShown,
+                   "becoming ready already in Embedded with no identity must "
+                   + "not raise the setup: the user asked for a mode to be "
+                   + "restored, not for a modal");
+
+            // Control: the fresh list's own action still reaches the host, so
+            // this is not satisfied by a list wired to nothing.
+            harness.findByName(fresh, "embeddedStateAction").clicked();
+            verify(harness.setupShown,
+                   "control: the fresh list's setup action does raise it");
+
+            fresh.destroy();
+        }
+
         /// **A start request does not raise the setup**, and a setup request
         /// does — the pair is the requirement.
         ///
@@ -313,6 +390,51 @@ Item {
             verify(harness.setupShown,
                    "control: the request to SET UP the node does raise it, so "
                    + "this is not a host that raises nothing");
+        }
+
+        /// **Every kind the host declares hosted is a kind it actually routes.**
+        ///
+        /// This is the gap that made "hosting a start is one property" a
+        /// half-truth. `embeddedStartHosted` alone decides whether the panel
+        /// renders an ENABLED control, but the routing was a bare
+        /// `if (kind === "setup")` — so flipping the flag on its own would ship
+        /// an enabled button that silently does nothing when clicked, which is
+        /// the exact dead end `embedded-state`'s spec says this capability
+        /// exists to remove.
+        ///
+        /// Asserted as a relationship rather than per-kind, so it holds for the
+        /// kinds that exist today AND for the day a start becomes routable: the
+        /// host is asked which kinds it hosts, and every one of them must be
+        /// accepted by the router. Reverting `takeEmbeddedAction` to the bare
+        /// `if (kind === "setup")` turns this red on the `start`/`restart` leg
+        /// as soon as `embeddedStartHosted` is armed.
+        function test_every_hosted_kind_is_one_the_host_routes() {
+            // Today's configuration: only setup is hosted, and only setup routes.
+            compare(harness.routesEmbeddedAction("setup"), true,
+                    "setup is hosted, so it must route");
+            compare(harness.routesEmbeddedAction("start"), false,
+                    "start is not hosted, so it must not route");
+            compare(harness.routesEmbeddedAction("restart"), false,
+                    "nor restart");
+
+            // The day the configuration panel routes a start. Arming the one
+            // flag the panel's enablement reads must be enough to make the
+            // request routable — if it is not, the panel offers an enabled
+            // control the host drops on the floor.
+            harness.embeddedStartHosted = true;
+            compare(harness.routesEmbeddedAction("start"), true,
+                    "a hosted start must be routed, not silently dropped: an "
+                    + "enabled control that does nothing is the defect this "
+                    + "capability exists to remove");
+            compare(harness.routesEmbeddedAction("restart"), true,
+                    "and likewise a hosted restart");
+
+            // And an unnamed kind still routes nowhere, so this is not
+            // satisfied by a host that accepts everything.
+            compare(harness.routesEmbeddedAction(""), false,
+                    "control: an unnamed act routes nowhere");
+            compare(harness.routesEmbeddedAction("explode"), false,
+                    "control: nor does an unrecognised one");
         }
 
         // ---- the two surfaces are never raised together -------------------
