@@ -1328,6 +1328,77 @@ node's state through the step it chose, which is `embedded-state`'s job and not 
 step's. `test_the_node_state_does_not_change_where_a_reopened_flow_lands` moves
 only the node status between its two legs.
 
+**The removal was incomplete, and the half that was missed broke the whole app.**
+Deleting the property from `SetupFlow` and from both fakes left the *injection*
+behind: `Main.qml` still carried `flow.startNode: function (passphrase, cb) …`,
+assigning to a property that no longer existed. QML rejects an assignment to an
+undeclared property at load time and refuses the entire file, so `Main.qml` did
+not compile and the module opened to nothing. Every one of the six e2e specs
+failed at their first step.
+
+This is worth stating as a general shape rather than as one slip: **making an
+absence the requirement only works if every writer of the property goes with
+it.** The object-level guarantee ("there is nothing to call") is real, but it is
+enforced at the point of *declaration*, and an assignment elsewhere is a separate
+site that no test of `SetupFlow` can see. The component tests were green
+throughout — they construct `SetupFlow` directly and never load `Main.qml`, so
+they are structurally incapable of catching this. So is `check-qml-syntax.sh`:
+`flow.startNode:` is perfectly valid QML syntax, and only type resolution knows
+the property is not there.
+
+### The qmllint gate fails on a non-existent property, and on nothing else new
+
+The step that should have caught the above had been a no-op since it was
+written. It ran `out=$(qmllint6 … || qmllint … || true)` against a runner where
+neither name resolves, so `$out` held two "command not found" lines, the grep
+for `error` matched nothing, and the step reported green having linted zero
+files. Two guards now stop it returning to that state, and each is load-bearing:
+
+- **The binary is resolved from a candidate list**, the same shape
+  `check-qml-syntax.sh` already uses for `qmlformat`, because `qmllint` is not on
+  `PATH` on either distro this runs on — `/usr/lib64/qt6/bin` on Fedora,
+  `/usr/lib/qt6/bin` on Debian/Ubuntu. Hard-coding either silently disables the
+  gate on the other. **No apt package had to be added**: the `qmllint` is in
+  `qt6-declarative-dev-tools`, which `ci.yml` already installs and which is the
+  same package supplying the `qmlformat` the syntax gate uses. Worth recording
+  because the opposite was believed — that the package shipped `qmlformat`
+  *without* `qmllint`, which would have made the missing binary a packaging gap
+  rather than a lookup bug. It ships both, side by side.
+  **There is deliberately no `/usr/lib/x86_64-linux-gnu/qt6/bin` candidate.**
+  The multiarch-triplet layout is Qt5-only (`qtdeclarative5-dev-tools`); for Qt6
+  it does not exist, so listing it adds a candidate that can never match while
+  implying the Qt5 binary would do — and a Qt5 `qmllint` against Qt6 QML fails
+  the same way the Qt5 `qmltestrunner` does.
+- **`REQUIRE_QML_LINT=1` makes "no linter found" a failure**, mirroring
+  `REQUIRE_QML_TESTS`. Without it the script skips, which is precisely how the
+  old step died. Removing this env var from `ci.yml` turns the gate back into a
+  green tick that measures nothing — and nothing else would go red to tell you.
+
+**The category is not the discriminator; the message is.** Failing the build on
+the whole `[missing-property]` category was the obvious move and is wrong: it
+would be red on arrival. That category carries two different messages, and at
+the commit that added the script the counts were 34 and 1:
+
+- `Member "X" not found on type "QQuickItem"` — 34 of these, every one a
+  delegate reaching `modelData` / `selected` / `hovered` inside an untyped
+  `delegate:` or `contentItem:`. qmllint cannot infer a delegate's real type, so
+  these are false positives that would require retyping every delegate in the
+  tree to silence.
+- `Could not find property "X".` — 1, the defect above. qmllint emits this only
+  when it *did* resolve the target type and the name genuinely is not on it, so
+  it does not have the false-positive mode the other message has.
+
+So the gate greps for `Could not find property`, plus any line starting
+`Error:`. `unqualified` (187 of them, mostly Basecamp's injected `logos` global,
+which qmllint cannot know about) and `unused-imports` stay non-fatal for the
+same reason: they are noise this repo does not intend to act on, and a gate that
+cries wolf gets deleted.
+
+Verified rather than assumed, on the same tree with all 34 delegate warnings
+present: the script exits 1 with the `flow.startNode` line restored and 0 with
+it removed. That is the check that it discriminates at all — a lint gate that
+cannot be made to fail is the same no-op in a new costume.
+
 ## Risks / Trade-offs
 
 - **Four steps is still a lot of screen for a one-time task.** Accepted because

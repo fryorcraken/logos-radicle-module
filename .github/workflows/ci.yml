@@ -132,17 +132,25 @@ jobs:
       - name: QML parses
         run: sh radicle-ui/tests/check-qml-syntax.sh
 
+      # This step was a no-op for its whole life. It ran
+      #   out=$(qmllint6 … || qmllint … || true)
+      # and neither binary is on the runner's PATH, so `$out` held two "command
+      # not found" lines, the grep for "error" matched nothing, and the step
+      # reported green while linting zero files. It passed over
+      # `flow.startNode:` in Main.qml — an assignment to a property that had
+      # been deliberately deleted — and the whole app then failed to compile,
+      # which cost all six e2e specs ten minutes each to discover.
+      #
+      # The logic moved into a script so the binary lookup, the
+      # fail-when-absent rule and the category policy are testable and
+      # commented in one place, the way check-qml-syntax.sh already is.
       - name: qmllint
-        run: |
-          set -eu
-          cd radicle-ui/src/qml
-          # qmllint exits non-zero on warnings too; only errors should fail CI.
-          out=$(qmllint6 -I . *.qml 2>&1 || qmllint -I . *.qml 2>&1 || true)
-          echo "$out"
-          if echo "$out" | grep -qiE '^.*:[0-9]+:[0-9]+: (error|Error)'; then
-            echo "::error::qmllint reported errors"
-            exit 1
-          fi
+        env:
+          # Fail rather than skip when no qmllint is found. Without this the
+          # step is free to go back to passing while measuring nothing, which
+          # is the exact defect above.
+          REQUIRE_QML_LINT: "1"
+        run: sh radicle-ui/tests/lint-qml.sh
 
       - name: Component tests
         env:
