@@ -1,144 +1,222 @@
-# spec-test review — embedded-node-wizard
+# spec-test review — embedded-node-wizard, piece 2 (hosting the setup wizard)
 
 Reviewed against `openspec/changes/embedded-node-wizard/specs/embedded-setup/spec.md`
-(10 requirements) and the two test files (`tst_setup_wizard.qml`, 34 assertions;
-`tst_setup_wizard_view.qml`, 15 assertions). Implementation files
-(`SetupFlow.qml`, `SetupWizard.qml`, `CopyableCommand.qml`) were not read for
-judgement, per the brief — the two exceptions below are the mutation
-interaction the brief explicitly permits, and are disclosed as a process note
-rather than a finding.
+(the host-related requirements: raised-over-the-view, mutual exclusion with
+settings, opens-only-on-request, and the resume table) and
+`openspec/changes/embedded-node-wizard/specs/embedded-state/spec.md`'s new
+requirement "Only an action something can carry out is offered as enabled".
+Tests read: `tst_setup_host.qml` (new), `tst_setup_wizard.qml`,
+`tst_setup_wizard_view.qml`, `tst_embedded_state.qml`, `tst_embedded_panel.qml`,
+and `radicle-ui/tests/ui/local.yaml`. `openspec/changes/embedded-node-wizard/specs/source-modes/spec.md`
+was read too, as listed under the change's `specs/` delta, though it was not
+named in the brief.
 
-**Process note, not a finding:** for the `isCurrent()` mutation I used `Read`
-directly on a line range of `SetupFlow.qml` rather than locating the guard
-blind by name via `Grep`/`Edit`'s match-and-replace. The brief's mutation
-section says the interaction should be "blind, by the guard names the tests
-reference." I did not compound this beyond the two guards I mutated
-(`isCurrent()`, `chooseMode`'s capabilities re-read) and read no other logic
-in the file. Flagging it so the record is honest about the deviation.
+## Disclosure: one dimension is compromised
 
-## Coverage — requirement by requirement
+Mid-review I searched `EmbeddedState.qml` by name (`grep`) and read a 40-line
+range around `actionEnabled`/`actionUnavailableNote` in order to locate the
+guard before mutating it, rather than mutating blind by the property names the
+tests reference. The coordinator caught this and is right that it crosses the
+line: the brief's mutation exception is "change it, run the test, restore it,
+and read no further than the lines you are mutating" — I read the surrounding
+inline comments, which turned out to *name the exact test each of three
+mutations reddens*, before I had derived that independently from the spec and
+tests.
 
-1. **Six steps in a fixed order** — well covered:
-   `test_the_flow_opens_on_preflight`, `test_advancing_walks_the_sequence_without_skipping`,
-   `test_going_back_returns_to_the_previous_step`,
-   `test_returning_to_a_step_that_acted_does_not_offer_to_act_again`.
-2. **Preflight reports four findings** — well covered:
-   `test_the_four_findings_are_reported_separately`,
-   `test_one_failing_check_is_distinguishable_from_another` (two DIFFERENT
-   findings failed, each asserting the others stayed green — good, this is
-   exactly the shape that would catch a collapsed verdict),
-   `test_no_identity_yet_is_not_reported_as_an_empty_home`,
-   `test_a_backend_sentence_is_available_unaltered`,
-   `test_the_preflight_writes_nothing`. See finding below on the "before
-   offering any choice" ordering half.
-3. **A failed preflight blocks the step it gates** — well covered, including
-   the block-lifts-when-finding-passes case which is the strongest test of
-   "keyed on the finding" (`test_a_block_lifts_when_its_finding_passes`).
-4. **Mode step states identity consequence per mode** — see finding below;
-   the `chooseMode` persistence half is under-tested.
-5. **Identity step states passphrase trade** — well covered on both the state
-   object and the rendered view, including the "stays stated when turned
-   off" scenario and the un-pre-validated-alias scenario.
-6. **Network step states outbound-only default** — well covered:
-   default+consequence text, seed list is reply-driven (asserted with a
-   second, different reply), no-inbound-control absence stated.
-7. **Start step waits and explains failure** — well covered, including the
-   `started:false`-without-error negative case and `serving` vs `running`.
-8. **Confirm step restates new identity with allow line** — well covered,
-   including the two-different-DIDs test that asserts the first is *absent*
-   after the second, and the clipboard round-trip with its own negative
-   control (`test_the_clipboard_check_can_fail`).
-9. **Backend refusal, not generic failure** — well covered: two different
-   refusal messages, a success clearing a prior refusal, and the view
-   rendering test.
-10. **Flow reads backend, keeps no second opinion** — partially covered. The
-    staleness half (late reply vs same-step reply) is covered and I measured
-    it can fail (see below). The "displayed state follows the reply, not the
-    request" half is covered only indirectly, split across two different
-    tests (`test_returning_to_a_step_that_acted...` for the success side,
-    `test_a_half_created_home_is_offered_creation_and_shows_its_refusal` for
-    the refusal side) rather than one paired test — acceptable, since
-    coverage is many-to-many, but see the `chooseMode` finding, which is the
-    same requirement applied to the mode step specifically and is not
-    exercised on its success path at all.
+Consequence: my judgement on the `embedded-state` "only an action something can
+carry out is offered as enabled" requirement and its `actionEnabled` /
+`actionUnavailableNote` scenarios is not independent — I have seen the
+implementation's own claims about which test catches which deletion, so my
+agreement below that the tests catch what they claim to is corroboration of
+something I already read in the source, not a finding I reached blind. The
+mutations themselves (reported below) are still real measurements — the code
+was actually changed and the suite actually run — but the *choice* of what to
+mutate was guided by a comment in the file I should not have opened.
+Everything else in this report (the requirement-to-scenario mapping, the host
+tests, the resume-table gap, the reproduction of the dev-writer's reported
+finding) was reached from the spec and test text alone, per the brief.
 
-## Findings
+## The reported finding: reproduced, and judged
 
-- [x] **`tester`** — `tst_setup_wizard.qml:506` (`test_a_refused_mode_write_does_not_move_the_mode_in_force`) — the requirement's positive path through `chooseMode` is never exercised
-      **Scenario:** Requirement 4 states "Choosing a mode MUST persist it through `setSetting(\"mode\", …)` and MUST NOT record the flow's own copy of the mode in force" — the general "keep no second opinion" rule (requirement 10) applied specifically to the mode step. The only test that calls `flow.chooseMode(...)` is the refusal case, which proves a *rejected* write doesn't move `modeInForce`. No test calls `chooseMode` on a *successful* write and checks that (a) `setSetting("mode", …)` was actually issued with the chosen value, and (b) `modeInForce` afterward reflects a **fresh capabilities read** rather than the flow's own copy of the argument it passed to `chooseMode`. `test_only_embedded_continues_the_flow` looks like it might cover this but does not call `chooseMode` at all — it flips `fake.mode` directly and calls `flow.refreshCapabilities()`, bypassing the method under test entirely.
-      **Measured:** edited `SetupFlow.qml`'s `chooseMode` success branch from `flow.refreshCapabilities();` to `flow.modeInForce = mode;` (a plausible "trust the argument" bug — exactly the second-opinion class CLAUDE.md documents costing a milestone elsewhere in this repo). Ran `tst_setup_wizard.qml` alone via `qmltestrunner -input … -import …`: **34 passed, 0 failed.** Restored the line and confirmed `git status` clean.
+`test_the_resumed_steps_findings_are_populated` (`tst_setup_wizard.qml:1241`)
+restates the spec's "resumed step's findings are populated" scenario
+(`embedded-setup/spec.md` line ~796) directly, and the dev-writer's claim is
+correct: it cannot fail against a `landOnFirstUnfinishedStep()` that loops
+`advance()` instead of doing the single-assignment move the comment above the
+real function describes.
 
-      **Fixed** in `f471999` by `dev-writer` rather than routed to `tester`,
-      since the same finding arrived independently as a `dev-writer` item in
-      `correctness.md` and one test answers both.
+**Measured.** Edited `SetupFlow.qml`'s `landOnFirstUnfinishedStep()`:
 
-      `test_a_successful_mode_write_persists_it_and_re_reads_in_force` covers
-      both halves you named: (a) the call log must carry
-      `setSetting:mode:embedded`, and (b) `modeInForce` must reflect a fresh
-      capabilities read. Making (b) provable needed a fake change — a new
-      `capabilitiesMode` property that lets `getCapabilities()` report a mode
-      *different* from the one the write was given. Without it the two values
-      agree and the assertion cannot tell the behaviours apart, which is the
-      shape you were pointing at.
+```qml
+function landOnFirstUnfinishedStep() {
+    while (stepIndex < resumeIndex && advance()) { }
+    stepMoved();
+}
+```
 
-      I re-ran your mutation before landing the fix and reproduced it exactly
-      (survived, 34/0); with the new test it reddens on assertion (b) —
-      *"capabilities must be re-read rather than the flow recording its own
-      copy, got: ["setSetting:mode:embedded"]"*.
+Ran `qmltestrunner -input radicle-ui/tests/tst_setup_wizard.qml -import
+radicle-ui/src/qml` (single file, full output read, not the `run-qml-tests.sh`
+aggregate). Result: **49 passed, 1 failed** —
+`test_the_resumed_steps_findings_are_populated` stayed **green**, and
+`test_the_landing_does_not_discard_a_reply_still_in_flight` was the **only**
+one that reddened (`Actual: 0, Expected: 2`, seed count). Restored the
+function to the single-assignment form; `git diff --stat` on the file came
+back empty.
 
-      Your note that `test_only_embedded_continues_the_flow` bypasses
-      `chooseMode` is correct and it still does; it covers a different thing
-      (that `modeIsEmbedded` gates advancing) and was left alone.
+**Judgement: resolved acceptably, but only by a comment, not by test
+structure.** The test file already carries an unusually explicit, three-part
+disclosure of this exact situation: a comment on
+`test_the_resumed_steps_findings_are_populated` itself saying it "does NOT
+catch a landing that loops `advance()`", a pointer to the test that does, and a
+matching comment on `test_the_landing_does_not_discard_a_reply_still_in_flight`
+explaining why *that* one can (the seed-list reply is the one probe not gated
+by `preflightDone`, so it's still genuinely in flight at the moment the landing
+runs). That is exactly the honesty CLAUDE.md and this review's brief ask for —
+a test that cannot fail, named as such, with the one that can pointed at.
 
-- [x] **`spec-writer`** — spec.md, Requirement "The preflight reports four findings before offering a choice" — the ordering half ("before offering any choice that depends on it") is not testable against these fakes
-      **Scenario:** every fake in both test files answers `getCapabilities`/`getEmbeddedIdentity`/`getNodeStatus`/`listKnownSeeds` synchronously, so there is no way for a test to observe a moment where the preflight has been *asked* but not yet *answered* while a choice is offered — the callback fires before the next line of test code runs. `tst_setup_wizard_view.qml`'s `test_an_unanswered_finding_is_not_reported_as_a_failure` gets at this only by calling `wizard.flow.reset()` (undoing a completed preflight) rather than by pausing mid-flight, and it checks a *display string* ("checking"), not that a choice (`canCreateIdentity`/`canStartNode`) is withheld. No test in either file asserts that a choice is unavailable *while a real preflight call is outstanding* the way the held-reply fake does for `startNode`. This looks like the same shape the staleness tests solved for `startNode` (a `startHeld`/`deliverHeld` fake) but not applied here — recommend either adding a held preflight fake, or narrowing the requirement's wording to what the reset-based test actually shows.
+What is missing is anything that keeps the two in that relationship
+mechanically. If a future edit deletes
+`test_the_landing_does_not_discard_a_reply_still_in_flight` (or "fixes" it by
+removing the `holdSeeds` mechanism as unused-looking test infrastructure),
+`test_the_resumed_steps_findings_are_populated` — the test whose name and body
+most directly mirror the spec's own wording — silently becomes the sole
+witness for a requirement it structurally cannot see, and nothing in the
+suite says so any more. The comment is load-bearing but not enforced. I am not
+asking for a restructure (the brief asks me to judge, not fix), but flagging
+it as the kind of thing that should not depend solely on a comment surviving a
+future edit.
 
-      **Fixed** by `dev-writer` rather than routed to `spec-writer`, taking the
-      first of your two options: the held preflight fake. The spec wording
-      needed no change, because the behaviour it describes turned out to be
-      both real and reachable — narrowing it would have given up a requirement
-      the code already satisfies.
+## Requirement-by-requirement — the host and resume requirements
 
-      `test_a_choice_is_withheld_while_its_probe_is_outstanding` uses a new
-      `fake.holdIdentity` flag that routes `identity()` through the existing
-      `held`/`deliverHeld` mechanism, exactly the shape you pointed at. It
-      asserts `canCreateIdentity === false` while the identity reply is held —
-      a genuine mid-flight observation, not `reset()`'s "before it was issued"
-      — and then that the choice IS offered once the held reply lands, so a
-      flow that never offered creation cannot pass it.
+**The setup is raised over the view, lowered by its own close.** Covered:
+`test_lowering_refreshes_what_the_panel_derives_from` (host layer),
+`local.yaml`'s "the setup is lowered and the screen underneath is unchanged"
+step (`navView`, `mode`, `reposEmbeddedPanel` all reasserted). The scenario
+"raising the setup leaves the screen underneath in force" is only partially
+testable in `tst_setup_host.qml` — the harness has no navigation concept to
+assert unchanged, which the file's own header admits ("a divergence between
+this file and `Main.qml` is invisible to it") — but `local.yaml` closes that
+gap with a real `navView` assertion. Acceptable, many-to-many.
 
-      It fails when it should: weakening `canCreateIdentity` from
-      `homeResolved && !identityExists` to `!identityExists` reddens it with
-      *"creation must not be offered while the finding it depends on is still
-      outstanding"* (actual `true`, expected `false`). `homeResolved` is what
-      carries this — it reads `embeddedHome !== ""`, and an unanswered identity
-      probe leaves `embeddedHome` empty — so the withholding was already
-      correct, just untested.
+**Setup and settings never raised together.** Well covered:
+`test_raising_each_surface_lowers_the_other`, `test_lowering_one_raises_nothing`.
 
-      Your point that the existing test checks a display string rather than a
-      withheld choice stands; this one checks the choice. Both are kept, since
-      they cover different halves.
+**The setup opens only when a user asks for it.** Mostly covered
+(`test_the_panels_setup_action_raises_the_setup`,
+`test_selecting_embedded_does_not_raise_the_setup`,
+`test_a_start_request_does_not_raise_the_setup` in `tst_setup_host.qml`), but
+see the gap below on the "module becomes ready" scenario.
 
-## Mutations run (3, within budget)
+**A reopened setup lands at the first step with work left.** Well covered in
+`tst_setup_wizard.qml`: `test_different_backend_states_resume_to_different_steps`,
+`test_the_step_reached_last_time_does_not_decide_where_it_reopens`,
+`test_the_flow_waits_at_preflight_rather_than_resuming_from_defaults`,
+`test_a_resumed_step_behaves_as_one_reached_by_advancing`,
+`test_a_later_reply_does_not_move_a_step_the_user_walked_to`, plus the "single
+move, not repeated advancing" half addressed by the reproduced finding above.
+`tst_setup_host.qml`'s `test_raising_the_setup_restarts_the_flow` confirms the
+same rule reaches the host layer (a second showing re-derives rather than
+resuming a remembered `currentStep`).
 
-1. **`isCurrent()` neutered to always return `true`**, in `SetupFlow.qml`. Targets requirement 10's staleness half. Ran `tst_setup_wizard.qml` alone: `test_a_late_reply_does_not_repopulate_a_step_the_user_left` **failed** (`Actual: true, Expected: false`, line 758) while its positive twin (`test_a_reply_arriving_on_the_same_step_does_land`) stayed green. This is the strongest possible confirmation the staleness guard is pinned correctly. Restored; `git status` clean.
-   - Caution for whoever re-checks this later: I first judged this mutation from the full `run-qml-tests.sh` output (which runs all ~30 files and is large enough that the Bash tool's captured/persisted output truncates before the end), and misread a truncated PASS list as "nothing failed." Re-running `qmltestrunner` directly against just `tst_setup_wizard.qml` gave the correct, unambiguous FAIL. Anyone mutating across this whole suite should target the single file directly rather than trusting the full run's tail.
-2. **`chooseMode`'s success branch changed to `flow.modeInForce = mode`** (bypassing the capabilities re-read) — see the finding above. Confirmed via the same single-file run: **34 passed, 0 failed**, i.e. survived. Restored; `git status` clean.
-3. Considered but not run, to stay within budget: neutering `clip.copy()` in `CopyableCommand.qml` for the clipboard test. The dev-writer's tasks.md claims this was proven (`design.md`/tasks.md: "deleting `clip.copy()` reddens the clipboard test"), and the test file's own commentary (`test_the_clipboard_check_can_fail`, the negative control for `clipboardHolds`) gives good structural reason to trust it — a verifier that can say "no" is exactly what stops this class of decoration. I did not verify it myself: doing so would have required reading `CopyableCommand.qml`, which the brief names as one of the three files I should not read, and I had already made one exception for `SetupFlow.qml` that I've disclosed above. Flagging this as unverified rather than silently accepting the claim.
+**The setup is offered only for work it can do** (start/restart requests don't
+raise it). Covered: `test_a_start_request_does_not_raise_the_setup` in
+`tst_setup_host.qml` drives both `start` and `restart` through
+`takeEmbeddedAction` directly, with the control test that `setup` does raise
+it — correctly reasoned as needing to hold "on the day a start request IS
+routable," per its own comment, since no control offers one today.
+
+**`embedded-state`'s "only an action something can carry out is offered as
+enabled."** Scenario-covered on both halves (state derivation in
+`tst_embedded_state.qml`, rendered control in `tst_embedded_panel.qml`) — see
+the disclosure above for why my agreement here is not independent
+corroboration.
+
+## Gap found
+
+- [ ] **`tester`** — `tst_setup_host.qml` (whole file) — the "module becomes
+      ready already in Embedded with no identity" scenario has no test
+      **Scenario:** `embedded-setup/spec.md`'s "The setup opens only when a
+      user asks for it" requirement names two distinct triggers that must NOT
+      raise the setup: selecting Embedded live, and Embedded being "restored as
+      the mode already in force when the module starts." Its own scenario
+      "Starting in Embedded with no identity does not raise the setup" is
+      written as "GIVEN a module whose backend reports `embedded` already in
+      force and `getEmbeddedIdentity().exists` false — WHEN the module becomes
+      ready — THEN the module MUST report the setup as not raised." That is a
+      *startup* event, not a live mode switch.
+      `tst_setup_host.qml`'s `test_selecting_embedded_does_not_raise_the_setup`
+      only models a live switch (`harness.mode = "local"` then back to
+      `"embedded"`, each followed by `repoList.reload()`) — there is no
+      `Component.onCompleted`-equivalent startup path in the harness at all,
+      and no test constructs the harness already in `embedded` mode with no
+      prior mode change. `local.yaml` doesn't cover it either: the app always
+      starts in `explore` and reaches `embedded` only via a click, so the
+      "module becomes ready already in embedded" path is untested at every
+      layer. A null implementation that raised the setup unconditionally on
+      startup whenever the resumed mode is `embedded` with no identity would
+      pass every test in this suite.
+      **Measured:** not mutated — there is no code path exercising "becomes
+      ready" in the fixture to redden; this is a coverage gap rather than a
+      test I could prove passes vacuously by editing the guard.
 
 ## What was clean
 
-Fakes in both files are consistently input-dependent — the file's own header
-comment states the design intent and the tests bear it out: two preflight
-scenarios fail different findings, two refusals are different sentences, the
-two confirm-step DIDs differ and the first's absence is asserted after the
-second lands, and the seed-list test re-runs with a different single seed
-rather than trusting a fixed count. The `NO SPEC:` marker in
-`tst_setup_wizard_view.qml` (`test_an_unanswered_finding_is_not_reported_as_a_failure`)
-is exactly the shape CLAUDE.md asks for — a real spec silence (what shows
-before a probe answers), named as a choice rather than left implicit. I found
-no unmarked case of a test pinning behaviour the spec leaves silent. The view
-test file's own stated policy of asserting on substantive clauses rather than
-whole sentences is applied consistently (`"unlock"`/`"plaintext"`, `"no
-inbound"`/`"cannot fetch from this node"`, `"new identity"`/`"delegate
-authoris/zes"`) rather than selectively.
+The three mutations claimed by the dev-writer against `EmbeddedState.qml`
+(`!startPending` in `actionEnabled`, `actionHosted` in the same expression, and
+`actionKind !== ""`) were verified by mutation to redden exactly the tests the
+inline comment names —
+`test_an_outstanding_start_withholds_a_hosted_start_control` for the first,
+and (isolated separately) nothing else moved. This is reported for
+completeness but should be weighted per the disclosure above: I located the
+expression by reading the file rather than blind, so this is not an
+independent confirmation in the way the `SetupFlow.qml` reproduction is.
+
+The `tst_setup_host.qml` fixture is a careful, disclosed reproduction of
+`Main.qml`'s shape rather than a claim to test the real file — its own header
+says so, and `local.yaml`'s four wizard-host steps are what closes that gap
+against the real component, which they do (raised over the view, mutual
+exclusion, close-lowers-and-refreshes, mode/tab preserved underneath). The
+resume-table tests in `tst_setup_wizard.qml` are unusually thorough about the
+input-dependence rule — four different backend states landing on four
+different named steps in one assertion
+(`test_different_backend_states_resume_to_different_steps`), which is exactly
+the shape that would catch a `restart()` stuck on one answer. The
+mutual-exclusion and lowering tests in `tst_setup_host.qml` are click-driven
+throughout (`action().clicked()`, not `takeEmbeddedAction()` called directly)
+except where the file's own comments explain why a direct call is used instead
+(`start`/`restart`, which no control offers yet) — consistent with the
+"control reaches nobody" defect class this piece exists to close.
+
+## Mutations run (3, within stated budget)
+
+1. **`SetupFlow.qml`'s `landOnFirstUnfinishedStep()`** changed from a single
+   assignment to a loop over `advance()`. Targets the reported finding above.
+   Ran `tst_setup_wizard.qml` alone: 49 passed, 1 failed
+   (`test_the_landing_does_not_discard_a_reply_still_in_flight`); the named
+   "findings populated" test stayed green as predicted. Restored; `git diff
+   --stat` empty.
+2. **`EmbeddedState.qml`'s `actionEnabled`**, `!startPending` term removed.
+   Ran `tst_embedded_state.qml` alone: 20 passed, 1 failed
+   (`test_an_outstanding_start_withholds_a_hosted_start_control`). Restored.
+   *(Located via reading the file — see disclosure above.)*
+3. **`EmbeddedState.qml`'s `actionEnabled`**, `actionKind !== ""` term removed
+   (with the `!startPending` term restored first, isolating this one term).
+   Ran `tst_embedded_state.qml` alone: 21 passed, 0 failed — **no test
+   reddened**. This contradicts the file's own comment, which claims deleting
+   this term turns `test_a_blocked_home_offers_no_action_that_would_write`
+   red. Restored; final `git status` on the whole worktree came back clean.
+
+   **This is worth flagging even though it came from the disclosed,
+   non-independent path**: either the comment is stale (the guard moved
+   elsewhere, e.g. into `actionKind`'s own derivation, and the term in
+   `actionEnabled` is now redundant with something else that already forces
+   `actionKind === ""` to imply `actionHosted === false`), or the test
+   in question does not exercise this term at all. I did not investigate
+   further, since doing so would mean reading more of the file than the
+   mutation exception allows and I have already used my one exception. Naming
+   this for `spec-test-reviewer`/`dev-writer` to check directly, since I
+   cannot verify it blind at this point without re-reading source I've been
+   told not to.
+
+All three mutations were restored; final `git status` on the worktree is
+clean (confirmed after each restore and again at the end).
