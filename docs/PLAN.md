@@ -82,12 +82,16 @@ node's threads are outside `guarded()`'s reach — are in
 [`rust-ffi.md`](rust-ffi.md) and
 [`M3-embedded-node-plan.md`](M3-embedded-node-plan.md).
 
-~~**The wizard (Phase 2 step 4).**~~ — **specified** in `embedded-setup`: six
-steps in a fixed order, what each preflight finding blocks, the three consequences
-the flow must state at the moment the user decides, and — since the flow first
+~~**The wizard (Phase 2 step 4).**~~ — **specified** in `embedded-setup`: four
+steps in a fixed order, what each preflight finding blocks, the consequences the
+flow must state at the moment the user decides, and — since the flow first
 shipped with no host at all — where it is reached from, what raising it does to
-the surfaces around it, and where a reopened flow lands. It is QML only — every
-slot it drives was already exposed through `radicle_ui.rep`.
+the surfaces around it, where a reopened flow lands, and what ends it.
+
+**It does setup only**, which is the scope correction dogfooding forced: it does
+not start the node and does not show the DID. Those recur and are wanted at
+arbitrary later moments respectively, so neither is a thing done once at setup
+time, and a flow was the wrong shape for both.
 
 ~~**What a user sees on picking Embedded.**~~ — **specified** in
 `embedded-state`: seven states derived from the backend's replies, each with its
@@ -97,31 +101,46 @@ deleted the dead-end panel and the fetch guard together — they were keyed on t
 same flag — which is the kind of coupling worth recognising elsewhere, not a
 status line. The reasoning is in the `embedded-node-wizard` change's `design.md`.
 
-**Still ahead on that surface:** the header caption (`SourceToggle.note`'s
-Embedded branch still reads "not available in this version yet", which is false)
-and the mode-detail slot that would show the embedded DID. Both are a second
-surface with their own height reservation, deliberately not folded in.
+~~**The mode-detail slot that would show the embedded DID.**~~ — **specified**
+in `embedded-header`: every mode with an identity shows it, in full and
+copyable, by one rule rather than a list of modes. `NodeIdentity.qml` already
+renders exactly that and already sits in the slot, so this is one condition, not
+a component.
 
-**Starting and restarting an existing node are still ahead too**, and belong to
-the configuration panel rather than to the wizard. The state surface names those
-actions without enabling them and says starting is not yet available from here;
-the rule is `embedded-state`'s, what rules it out is `embedded-setup`'s, and the
-four reasons — the last of which is that no reply a later session can obtain
-says whether the key is encrypted — are in the `embedded-node-wizard` change's
-`design.md`, under "Start and restart route nowhere".
+**Still ahead on that surface:** the header caption. `SourceToggle.note`'s
+Embedded branch still reads "not available in this version yet", which is false.
+It is a different item from the DID slot — it carries its own height reservation
+through a caption sizer — and was deliberately not folded in.
 
-**Hosting them is one property plus a branch — not one property.** `Main.qml`
-reports `embeddedStartHosted`, and the panel's enablement is keyed on it, so the
-panel genuinely needs no edit. But the flag decides only whether the control
-renders *enabled*; `takeEmbeddedAction` decides whether the resulting request
-reaches anything. `routesEmbeddedAction()` now reads the same two flags, so the
-enablement and the routing cannot disagree — but the branch that actually
-carries a start out still has to be written in the same change that flips the
-flag, or the panel offers an enabled control whose click is dropped. That is the
-dead end `embedded-state`'s spec exists to remove, and an earlier version of this
+~~**Starting an existing node.**~~ — **specified** in `embedded-state`, and it
+is where the wizard's start step went. An unencrypted key starts its node when
+Embedded is opened; an encrypted one gets a passphrase field on that surface.
+This **overturned** a decision recorded during the change that the node never
+starts automatically — the reasoning that fell, and why, is in the
+`embedded-node-wizard` change's `design.md`.
+
+What unblocked it is a core change: `getEmbeddedIdentity()` now reports
+`encrypted`, observed from the key rather than echoed from an argument. Without
+it a surface could neither know to prompt nor know it may skip prompting.
+`getCapabilities().canWriteLocal` does not substitute — it probes the home of
+the *mode in force*, so it says nothing about the embedded home from another
+mode, and it conflates encryption with a missing or unreadable key.
+
+**Restarting is still ahead**, and belongs to the configuration panel: it is a
+stop followed by a start whose two refusals are different sentences, and nothing
+sequences the pair. The state surface names it without enabling it.
+
+**Hosting an action is one property plus a branch — not one property.** The flag
+(`embeddedStartHosted` and its siblings) decides only whether the control renders
+*enabled*; the host's routing decides whether the resulting request reaches
+anything. `routesEmbeddedAction()` reads the same flags, so the enablement and
+the routing cannot disagree — but the branch that actually carries an act out
+still has to be written in the same change that flips the flag, or the panel
+offers an enabled control whose click is dropped. That is the dead end
+`embedded-state`'s spec exists to remove, and an earlier version of this
 paragraph said "one property… the panel needs no edit" in a way that invited
 exactly it. `test_every_hosted_kind_is_one_the_host_routes` is what holds the two
-together.
+together. **This now applies to restart**, start having been hosted.
 
 **The configuration panel (Phase 2 step 4).** QML only, and what makes that
 true is now the `node-config` and `node-seeding` capabilities rather than the

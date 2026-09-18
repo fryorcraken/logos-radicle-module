@@ -50,7 +50,8 @@ Seven user-visible states in Embedded. State is **derived, never stored**, from
                           ▼
           ┌──────────────────────────────────────┐
      ┌───▶│  E2  IDENTITY, NODE STOPPED          │  exists:true
-     │    │                                      │  running:false serving:false
+     │    │  encrypted:false → starts itself     │  running:false serving:false
+     │    │  encrypted:true  → passphrase field  │
      │    └───────────────┬──────────────────────┘
      │                    │ startNode(passphrase)
      │                    ▼
@@ -101,10 +102,15 @@ naming the `keys` path to remove — is what the user sees.
 
 | Surface | Serves | Lives in |
 |---|---|---|
-| **A. Embedded empty state** | E0, E1, E2, E5, E6 | `RepoList.qml`, replacing `notImplementedState` |
-| **B. Setup wizard** | the E1 → E2 → E4 walk, once | a modal over the view, hosted by `Main.qml` |
-| **C. Settings › Node** | E2–E6 durably | a section in `SettingsPanel.qml` |
-| **D. The header** | every state, at a glance | `SourceToggle` caption + mode-detail slot |
+| **A. Embedded empty state** | E0, E1, E2, E3, E5, E6 — **and starting the node** | `RepoList.qml`, replacing `notImplementedState` |
+| **B. Setup wizard** | the E1 → E2 walk, once. **Not E4** — it no longer starts anything | a modal over the view, hosted by `Main.qml` |
+| **C. Settings › Node** | E2–E6 durably, and the restart | a section in `SettingsPanel.qml` |
+| **D. The header** | every state, at a glance, **and the DID in Embedded** | `SourceToggle` caption + mode-detail slot |
+
+**A gained the start** because starting recurs for the life of the mode and B
+runs once; **D gained the DID** because it is wanted at arbitrary later moments
+and B's terminal screen showed it once and closed. Both moved out of B in the
+same pass, for the same reason: neither was setup.
 
 ### Why B is an overlay, not a page or a Settings section
 
@@ -184,7 +190,8 @@ repositories matched" — that string claims a node exists and holds nothing.
 |---|---|---|
 | E0 | the `pathsProblem` sentence verbatim | "Open Settings" |
 | E1 | "Basecamp can run a Radicle node of its own. It will have **its own identity**, separate from any node you already run." | **"Set up the embedded node"** |
-| E2 | "Set up but not running. Repositories are not being fetched." | "Start the node", "Settings › Node" |
+| E2, unencrypted | "Starting the node…" — it starts by itself, so this is passed through rather than waited in | nothing |
+| E2, encrypted | "The node needs its passphrase to start." | a passphrase field and "Start the node" |
 | E3 | "Starting the node…" | nothing |
 | E5 | the `startNode` error verbatim | "Try again", "Settings › Node" |
 | E6 | "The node has stopped answering. Still loaded but no longer serving." | "Restart the node" |
@@ -195,23 +202,32 @@ is what produces the red banner, and there is nothing to ask. The guard is
 currently keyed on `notImplemented`, now permanently false; it becomes a guard
 on whether this mode has a node to ask.
 
-### B. The wizard — six steps, almost intact
+### B. The wizard — four steps, setup only
 
-1. **Preflight** — unchanged. Reports, asks nothing.
-2. **Embedded** — unchanged in substance. **One change:** arriving via the empty
-   state means `mode` is already `embedded`, so this is a statement with a Next.
-   That is already specified behaviour; it now describes the *common* path.
-3. **Identity** — unchanged. Alias, passphrase, both halves of the trade.
-4. **Network** — **one change:** "not available in this flow" becomes "not
+> Was six. Steps 5 and 6 are gone; see §6 and §8 for why, and
+> `embedded-setup`'s Purpose for the rule that puts each where it now lives.
+
+1. **Preflight** — unchanged in substance. Reports, asks nothing. **One change:**
+   the git and socket findings now block nothing, because no step of this flow
+   spawns `git` or starts a node. They are still reported.
+2. **Embedded** — **one addition:** it carries the allow-is-not-enough sentence,
+   which used to be at confirm. A delegate allow-listing this DID is **not**
+   sufficient — every other node must also seed the RID with scope `all` — and
+   with no confirm step this is the only place the flow says so.
+3. **Identity** — alias, passphrase, both halves of the trade. **One addition:**
+   the trade now also states what happens on every later opening of Embedded,
+   because that is what the passphrase choice decides.
+4. **Network** — the last step. Its forward control ends the setup rather than
+   advancing. **One change:** "not available in this flow" becomes "not
    available here — you can turn it on in Settings › Node after setup", true
-   once #47 lands. Today's wording implies the capability does not exist.
-5. **Start** — unchanged.
-6. **Confirm** — **three additions:** the restart consequence (§6), the
-   allow-is-not-enough sentence, and a control into Settings › Node.
+   once #47 lands.
 
-The allow-is-not-enough rule belongs at confirm because that is where the user
-is about to go and try to clone something: a delegate allow-listing this DID is
-**not** sufficient — every other node must also seed the RID with scope `all`.
+~~5. **Start**~~ — moved to the Embedded surface, where it happens by itself for
+an unencrypted key and behind one passphrase field for an encrypted one.
+
+~~6. **Confirm**~~ — deleted. Its DID is in the header; its allow line goes with
+it; its restart consequence is now stated at the identity step where the choice
+is made; and what remained was a screen whose only act was to be dismissed.
 
 ### C. Settings › Node
 
@@ -250,12 +266,17 @@ Each placed where the decision it affects is made. The repetition is the point.
 
 ## 6. Restart of Basecamp
 
-**The node does not start automatically, in any configuration.** On restart from
-E4 the user is in E2.
+> ~~**The node does not start automatically, in any configuration.**~~
+> **Overturned.** The rule below was written before the flow was dogfooded, and
+> it is now the opposite: an unencrypted key starts its node when Embedded is
+> opened, and an encrypted one gets a passphrase prompt on the Embedded surface.
+> The requirements are `embedded-state`'s. What follows is kept as the record of
+> what was decided and why it did not survive contact with the built app; the
+> reasoning for the new rule belongs in `design.md`, not here.
 
-`Runtime::init` takes an already-decrypted key, so an encrypted profile *cannot*
-start unattended. Whether an **unencrypted** one should is the real choice, and
-the answer is no:
+The original argument was that `Runtime::init` takes an already-decrypted key, so
+an encrypted profile *cannot* start unattended — which is still true — and that
+an **unencrypted** one should not either, on three grounds:
 
 1. It makes the passphrase choice silently change startup behaviour along an
    axis never stated at the control.
@@ -263,26 +284,36 @@ the answer is no:
    up, and Basecamp swallows QML errors.
 3. It splits E2 into two indistinguishable states.
 
-**So: the node starts when a user asks it to, always.** In exchange E2 must be
-loud and one click from fixed.
+**Why each of those fell.** (1) is answered by stating it: the identity step now
+has to say that an unencrypted key starts the node without a prompt and an
+encrypted one is asked for each time, which is the axis, said at the control
+where the choice is made. (2) describes an autostart at *module init*, and this
+is not one — the start is issued from the Embedded surface once it is rendering,
+so it has exactly the place to report that E3 and E5 already are. (3) is
+answered by the new field: `encrypted` distinguishes the two E2s, which is what
+made them indistinguishable in the first place.
 
-**Stated at confirm**, worded by the passphrase choice:
+What the argument never weighed is the cost of the rule, which dogfooding made
+plain: a user who has set up a node is told, every time they open the mode, to
+press a button the module could have pressed itself, with one possible answer.
 
-- encrypted: *"It will not start on its own when Basecamp restarts — an
-  encrypted key has to be unlocked, so you will start it from Settings › Node."*
-- unencrypted: *"It will not start on its own when Basecamp restarts; start it
-  from Settings › Node."*
-
-**Rejected: a "start automatically" setting** — a sixth module setting whose
-only legal value for the secure default is off. Revisit when a passphrase store
-exists. **Rejected: prompting at Basecamp startup** — an unasked-for modal on
-launch, in a module the user may not be looking at.
+**Still rejected: a "start automatically" setting** — a module setting whose
+only legal value for the secure default is off, and whose question is now
+answered by whether the key is encrypted. **Still rejected: prompting at Basecamp
+startup** — an unasked-for modal on launch, in a module the user may not be
+looking at. The passphrase prompt is a field on the Embedded surface, shown when
+the user is looking at Embedded.
 
 ## 7. Components
 
-**Survives unchanged:** `SetupFlow.qml` (gains only a resume rule),
-`CopyableCommand.qml` (the panel is its second consumer), `ModePicker.qml`,
-`NodeIdentity.qml`, `SourceState.qml`, `NavState.qml`.
+**Survives unchanged:** `ModePicker.qml`, `SourceState.qml`, `NavState.qml`, and
+**`NodeIdentity.qml`** — which is the point about the header DID: the component
+already renders a full, copyable, clipboard-verified DID and already sits in the
+header's mode-detail slot. What changes is the one condition gating it, in
+`Main.qml`. This is reuse, not construction.
+
+`CopyableCommand.qml` keeps its consumer in the configuration panel; with the
+confirm step gone it has none in this flow.
 
 **Changes:**
 
@@ -313,9 +344,22 @@ now false); `SetupWizard.qml`'s `NO SPEC:` marker on `closed()`.
 1. **A restart that reports what happened.** `stopNode` + `startNode` compose
    but nothing reports the pair. Prefer sequencing in QML — no transport change,
    and the two refusals are different sentences the user should see separately.
-2. **Nothing distinguishes "started by this session" from "a node is answering
-   the socket".** The panel's Start must handle `startNode` refusing because the
-   socket is in use; today that surfaces only as an error string.
+   This is the one still open, and it is why restart stays named-but-disabled
+   while start becomes hosted.
+2. ~~**Nothing distinguishes "started by this session" from "a node is answering
+   the socket".**~~ **Acted on, and it was not merely a diagnostic gap.** The
+   built flow rendered the two identically, which put an amber "a node is already
+   answering on the resolved socket" above a green "Running as did:key:…" —
+   a warning about the node the flow had just started. `embedded-state` now
+   requires the distinction, keyed on whether a `startNode` this surface issued
+   was answered with a success, because the node status reports the same fields
+   for both.
+3. ~~**Nothing says whether an existing identity's key is encrypted.**~~
+   **Closed by adding `encrypted` to `getEmbeddedIdentity()`** — a core change,
+   specified in `embedded-identity`. `getCapabilities().canWriteLocal` was
+   considered and rejected as a substitute: it probes the home of the mode in
+   force, so it is silent about the embedded home from any other mode, and it
+   conflates encryption with a missing or unreadable key.
 
 **Depends on #47 merging** (already built there): `getNodeConfig` /
 `setNodeConfig`, `listSeeded` / `seedRepo` / `unseedRepo`, and `node.rs`
