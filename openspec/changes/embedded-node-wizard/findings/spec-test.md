@@ -1,299 +1,201 @@
-# spec-test review — embedded-node-wizard, piece 2 (hosting the setup wizard)
+# spec-test review — embedded-node-wizard, final pass before merge
 
-Reviewed against `openspec/changes/embedded-node-wizard/specs/embedded-setup/spec.md`
-(the host-related requirements: raised-over-the-view, mutual exclusion with
-settings, opens-only-on-request, and the resume table) and
-`openspec/changes/embedded-node-wizard/specs/embedded-state/spec.md`'s new
-requirement "Only an action something can carry out is offered as enabled".
-Tests read: `tst_setup_host.qml` (new), `tst_setup_wizard.qml`,
-`tst_setup_wizard_view.qml`, `tst_embedded_state.qml`, `tst_embedded_panel.qml`,
-and `radicle-ui/tests/ui/local.yaml`. `openspec/changes/embedded-node-wizard/specs/source-modes/spec.md`
-was read too, as listed under the change's `specs/` delta, though it was not
-named in the brief.
+Reviewed against all four specs under `openspec/changes/embedded-node-wizard/specs/`
+(`embedded-setup`, `embedded-state`, `embedded-header`, `embedded-identity`) plus
+`source-modes` (read because it is in the change's `specs/` delta). Tests read:
+`tst_setup_wizard.qml`, `tst_setup_wizard_view.qml`, `tst_embedded_state.qml`,
+`tst_embedded_panel.qml`, `tst_setup_host.qml`, `tst_embedded_wiring.qml`,
+`tst_embedded.qml`, `tst_embedded_real.qml`, `radicle-ui/tests/ui/local.yaml`, and
+the Rust tests under `radicle/rust-ffi/tests/` (`profile_init.rs` for the
+`encrypted`/`key_encrypted` half of `embedded-identity`). `tst_source.qml` was also
+read, though not in the assigned list, because it is where `embedded-header`'s
+core requirement ("every mode with an identity shows it, one rule not a list") is
+actually pinned — see below.
 
-## Disclosure: one dimension is compromised
+Implementation files were not read for comprehension, per the brief. The one
+exception is the mutation sampling below, which touched `RepoList.qml`'s
+`Component.onCompleted` line and `EmbeddedState.qml`'s `foundForeignNode` and
+`wantsPassphrase` properties — each read only far enough to locate the property
+being mutated, and each restored immediately after the run.
 
-Mid-review I searched `EmbeddedState.qml` by name (`grep`) and read a 40-line
-range around `actionEnabled`/`actionUnavailableNote` in order to locate the
-guard before mutating it, rather than mutating blind by the property names the
-tests reference. The coordinator caught this and is right that it crosses the
-line: the brief's mutation exception is "change it, run the test, restore it,
-and read no further than the lines you are mutating" — I read the surrounding
-inline comments, which turned out to *name the exact test each of three
-mutations reddens*, before I had derived that independently from the spec and
-tests.
+## Requirement-to-scenario coverage — clean
 
-Consequence: my judgement on the `embedded-state` "only an action something can
-carry out is offered as enabled" requirement and its `actionEnabled` /
-`actionUnavailableNote` scenarios is not independent — I have seen the
-implementation's own claims about which test catches which deletion, so my
-agreement below that the tests catch what they claim to is corroboration of
-something I already read in the source, not a finding I reached blind. The
-mutations themselves (reported below) are still real measurements — the code
-was actually changed and the suite actually run — but the *choice* of what to
-mutate was guided by a comment in the file I should not have opened.
-Everything else in this report (the requirement-to-scenario mapping, the host
-tests, the resume-table gap, the reproduction of the dev-writer's reported
-finding) was reached from the spec and test text alone, per the brief.
+Walked every requirement in the four specs plus `source-modes` scenario by
+scenario. Every scenario has a test that pins it, and coverage is thorough rather
+than one-to-one in most places (several requirements are pinned at both the state
+layer, `tst_embedded_state.qml`, and the rendered-panel layer,
+`tst_embedded_panel.qml`, which is the right shape given the "a derivation that is
+correct and never rendered is the blank pane this capability exists to remove"
+reasoning both files state).
 
-## The reported finding: reproduced, and judged
+Specific areas checked against the "new this round" list in the brief, all found
+covered by tests that can fail (see Mutations below for three that were verified
+rather than assumed):
 
-`test_the_resumed_steps_findings_are_populated` (`tst_setup_wizard.qml:1241`)
-restates the spec's "resumed step's findings are populated" scenario
-(`embedded-setup/spec.md` line ~796) directly, and the dev-writer's claim is
-correct: it cannot fail against a `landOnFirstUnfinishedStep()` that loops
-`advance()` instead of doing the single-assignment move the comment above the
-real function describes.
+- **Autostart** (once per arrival, only when `encrypted:false`, only in Embedded):
+  `test_an_unencrypted_stopped_node_wants_a_start` /
+  `test_no_autostart_outside_the_stopped_state` (state layer),
+  `test_an_unencrypted_stopped_node_is_started_without_being_asked` /
+  `test_a_list_built_already_stopped_starts_its_node` /
+  `test_the_automatic_start_is_issued_once_not_on_every_reading` (panel layer, the
+  last two covering both "on a live change" and "already stopped on construction").
+- **Passphrase field on `stopped` and `startFailed`**:
+  `test_an_encrypted_stopped_node_asks_for_its_passphrase` and
+  `test_the_passphrase_prompt_does_not_follow_a_failed_start` at the state layer;
+  `test_an_encrypted_identity_is_offered_a_passphrase_field` and
+  `test_a_refused_passphrase_can_be_corrected` at the panel layer. Mutated (see
+  below) — both halves are load-bearing.
+- **Foreign-node distinction**: `test_a_node_this_surface_started_is_not_reported_as_contention`
+  / `test_a_node_the_surface_did_not_start_is_still_reported` (state),
+  `test_a_node_this_surface_started_is_not_rendered_as_contention` (panel).
+  Mutated (see below) — all three named tests reddened exactly as the code
+  comment claims.
+- **`encrypted` in `getEmbeddedIdentity()`**, including the unreadable-key case:
+  `profile_init.rs`'s `the_reported_encryption_follows_the_key_that_was_written`,
+  `reporting_encryption_needs_no_passphrase_and_no_agent`,
+  `reporting_encryption_leaves_the_key_untouched`,
+  `an_unreadable_key_reports_a_problem_rather_than_unencrypted` (this is the exact
+  scenario the brief named — an unreadable key reports `encrypted:false` with a
+  non-empty `problem`, distinct from a plaintext key), and
+  `a_home_with_no_key_reports_a_problem_rather_than_unencrypted`.
+- **The DID in the header for Embedded**: `tst_source.qml`'s
+  `test_embedded_shows_its_identity_as_local_does`, driven through the real
+  `SourceState.modeHasIdentity` (a rule, not a per-mode list — matching the spec's
+  explicit "MUST NOT be a list of modes" requirement), with two distinct DIDs and
+  the first asserted absent. `local.yaml`'s "the local identity reached the view"
+  / "and carries no identity from it" steps close the same requirement end to end
+  for both `local` and `embedded`. Solid coverage; not flagged as a gap even
+  though this file was not in the assigned list, because it is where the
+  requirement actually lives.
+- **The identity step's three states and single forward control**: covered at
+  both the flow layer (`tst_setup_wizard.qml`'s
+  `test_the_three_identity_states_are_told_apart`,
+  `test_one_forward_control_creates_and_advances_together`,
+  `test_the_label_names_the_act_the_control_will_perform`) and the rendered view
+  (`tst_setup_wizard_view.qml`'s `test_the_identity_step_renders_its_three_states_apart`,
+  `test_the_identity_step_offers_exactly_one_forward_control`).
 
-**Measured.** Edited `SetupFlow.qml`'s `landOnFirstUnfinishedStep()`:
+## Mutations run (3, within the stated budget)
 
-```qml
-function landOnFirstUnfinishedStep() {
-    while (stepIndex < resumeIndex && advance()) { }
-    stepMoved();
-}
-```
+All three targeted properties I could not convict by reading alone — two carried
+an existing code comment naming which tests should redden, which I verified
+rather than trusted, and one had no such comment. All three mutations were
+restored immediately after their run; `git status` on the whole worktree is
+clean, confirmed after the last one.
 
-Ran `qmltestrunner -input radicle-ui/tests/tst_setup_wizard.qml -import
-radicle-ui/src/qml` (single file, full output read, not the `run-qml-tests.sh`
-aggregate). Result: **49 passed, 1 failed** —
-`test_the_resumed_steps_findings_are_populated` stayed **green**, and
-`test_the_landing_does_not_discard_a_reply_still_in_flight` was the **only**
-one that reddened (`Actual: 0, Expected: 2`, seed count). Restored the
-function to the single-assignment form; `git diff --stat` on the file came
-back empty.
+1. **`RepoList.qml`'s `Component.onCompleted: autoStartIfWanted()`**, commented
+   out. This is the guard `test_a_list_built_already_stopped_starts_its_node`
+   exists for — the "module becomes ready already stopped" case the brief flagged
+   as a known prior defect shape. Ran `tst_embedded_panel.qml` alone
+   (`qmltestrunner -input tst_embedded_panel.qml -import radicle-ui/src/qml`,
+   single-file run, full output read): **27 passed, 4 failed**. The targeted test
+   reddened as expected (`Actual: 0, Expected: 1`), plus three others
+   (`test_a_refused_automatic_start_is_reported_and_not_retried`,
+   `test_an_unencrypted_stopped_node_is_started_without_being_asked`,
+   `test_the_automatic_start_is_issued_once_not_on_every_reading`) that also
+   depend on the same construction-time start firing before their own
+   `list.reload()` calls run their assertions — a real and correct interaction,
+   not an artifact. Restored; `git diff --stat` on the file came back empty.
 
-**Judgement: resolved acceptably, but only by a comment, not by test
-structure.** The test file already carries an unusually explicit, three-part
-disclosure of this exact situation: a comment on
-`test_the_resumed_steps_findings_are_populated` itself saying it "does NOT
-catch a landing that loops `advance()`", a pointer to the test that does, and a
-matching comment on `test_the_landing_does_not_discard_a_reply_still_in_flight`
-explaining why *that* one can (the seed-list reply is the one probe not gated
-by `preflightDone`, so it's still genuinely in flight at the moment the landing
-runs). That is exactly the honesty CLAUDE.md and this review's brief ask for —
-a test that cannot fail, named as such, with the one that can pointed at.
+2. **`EmbeddedState.qml`'s `foundForeignNode`**, changed from
+   `serving && !startSucceeded` to `serving`. The code carries a comment naming
+   three tests this should redden; verified rather than trusted. Ran
+   `tst_embedded_state.qml` alone: **28 passed, 2 failed** —
+   `test_a_node_the_surface_did_not_start_is_still_reported` and
+   `test_a_node_this_surface_started_is_not_reported_as_contention`, both named.
+   Ran `tst_embedded_panel.qml` alone: **30 passed, 1 failed** —
+   `test_a_node_this_surface_started_is_not_rendered_as_contention`, also named,
+   with the failure message showing the exact contention sentence rendered over
+   the surface's own success (the defect the spec's requirement exists to
+   prevent). All three of the comment's claimed tests reddened; none survived.
+   Restored; clean.
 
-What is missing is anything that keeps the two in that relationship
-mechanically. If a future edit deletes
-`test_the_landing_does_not_discard_a_reply_still_in_flight` (or "fixes" it by
-removing the `holdSeeds` mechanism as unused-looking test infrastructure),
-`test_the_resumed_steps_findings_are_populated` — the test whose name and body
-most directly mirror the spec's own wording — silently becomes the sole
-witness for a requirement it structurally cannot see, and nothing in the
-suite says so any more. The comment is load-bearing but not enforced. I am not
-asking for a restructure (the brief asks me to judge, not fix), but flagging
-it as the kind of thing that should not depend solely on a comment surviving a
-future edit.
+3. **`EmbeddedState.qml`'s `wantsPassphrase`**, narrowed from
+   `encrypted && (current === "stopped" || current === "startFailed")` to drop
+   the `startFailed` disjunct — checking the brief's explicit ask that the
+   passphrase field cover both states. No code comment named a test here, so this
+   was blind. Ran `tst_embedded_state.qml` alone: **29 passed, 1 failed** —
+   `test_the_passphrase_prompt_does_not_follow_a_failed_start`. Ran
+   `tst_embedded_panel.qml` alone: **30 passed, 1 failed** —
+   `test_a_refused_passphrase_can_be_corrected`. Both halves of the requirement
+   ("covering both `stopped` and `startFailed`") are independently load-bearing at
+   both layers. Restored; clean.
 
-## Requirement-by-requirement — the host and resume requirements
+No mutation in this round surfaced a survivor. All three properties tested are
+genuinely guarded by tests that redden on the specific failure they claim to
+catch.
 
-**The setup is raised over the view, lowered by its own close.** Covered:
-`test_lowering_refreshes_what_the_panel_derives_from` (host layer),
-`local.yaml`'s "the setup is lowered and the screen underneath is unchanged"
-step (`navView`, `mode`, `reposEmbeddedPanel` all reasserted). The scenario
-"raising the setup leaves the screen underneath in force" is only partially
-testable in `tst_setup_host.qml` — the harness has no navigation concept to
-assert unchanged, which the file's own header admits ("a divergence between
-this file and `Main.qml` is invisible to it") — but `local.yaml` closes that
-gap with a real `navView` assertion. Acceptable, many-to-many.
+## Previously reported issue, re-checked rather than re-litigated
 
-**Setup and settings never raised together.** Well covered:
-`test_raising_each_surface_lowers_the_other`, `test_lowering_one_raises_nothing`.
+`SetupFlow.qml`'s `landOnFirstUnfinishedStep()` is still the single-assignment
+form (`stepIndex = resumeIndex; stepMoved();`), confirmed by reading the current
+file rather than assuming the prior round's fix held. The prior round's finding —
+that `test_the_resumed_steps_findings_are_populated` cannot fail against a
+`landOnFirstUnfinishedStep()` that loops `advance()`, and that
+`test_the_landing_does_not_discard_a_reply_still_in_flight` is the test that
+actually reddens — was already measured twice in earlier rounds and accepted as
+an observation rather than a defect requiring a code change (the comment pair in
+`tst_setup_wizard.qml` explicitly documents the relationship). Not re-mutated
+here to conserve the budget for properties not yet convicted; flagging only that
+the situation is unchanged, in case a future edit to either test silently drops
+the relationship the comment describes.
 
-**The setup opens only when a user asks for it.** Mostly covered
-(`test_the_panels_setup_action_raises_the_setup`,
-`test_selecting_embedded_does_not_raise_the_setup`,
-`test_a_start_request_does_not_raise_the_setup` in `tst_setup_host.qml`), but
-see the gap below on the "module becomes ready" scenario.
+## `NO SPEC:` markers found
 
-**A reopened setup lands at the first step with work left.** Well covered in
-`tst_setup_wizard.qml`: `test_different_backend_states_resume_to_different_steps`,
-`test_the_step_reached_last_time_does_not_decide_where_it_reopens`,
-`test_the_flow_waits_at_preflight_rather_than_resuming_from_defaults`,
-`test_a_resumed_step_behaves_as_one_reached_by_advancing`,
-`test_a_later_reply_does_not_move_a_step_the_user_walked_to`, plus the "single
-move, not repeated advancing" half addressed by the reproduced finding above.
-`tst_setup_host.qml`'s `test_raising_the_setup_restarts_the_flow` confirms the
-same rule reaches the host layer (a second showing re-derives rather than
-resuming a remembered `currentStep`).
+One, in `tst_setup_wizard_view.qml`:
 
-**The setup is offered only for work it can do** (start/restart requests don't
-raise it). Covered: `test_a_start_request_does_not_raise_the_setup` in
-`tst_setup_host.qml` drives both `start` and `restart` through
-`takeEmbeddedAction` directly, with the control test that `setup` does raise
-it — correctly reasoned as needing to hold "on the day a start request IS
-routable," per its own comment, since no control offers one today.
+- `test_an_unanswered_finding_is_not_reported_as_a_failure` — the spec does not
+  say what a preflight finding shows before its own probe has answered; the test
+  names this as an unanswered state ("Checking…") rather than a default result.
+  This is a real behavioural choice (every finding has a legitimate falsy value,
+  so showing defaults would report failures before a single call went out) that
+  nobody wrote into the spec. Worth `spec-writer` capturing as a scenario under
+  "The preflight reports four findings before offering a choice," since the
+  behaviour is sound and durable but currently exists only as a test comment.
 
-**`embedded-state`'s "only an action something can carry out is offered as
-enabled."** Scenario-covered on both halves (state derivation in
-`tst_embedded_state.qml`, rendered control in `tst_embedded_panel.qml`) — see
-the disclosure above for why my agreement here is not independent
-corroboration.
+No unmarked gaps of the same shape were found — I looked for behaviour pinned by
+a test with no corresponding spec scenario, and did not find one beyond the
+marked case above.
 
-## Gap found
+## `PLAN.md` / spec staleness
 
-- [x] **`tester`** — `tst_setup_host.qml` (whole file) — the "module becomes
-      ready already in Embedded with no identity" scenario has no test
-      **Scenario:** `embedded-setup/spec.md`'s "The setup opens only when a
-      user asks for it" requirement names two distinct triggers that must NOT
-      raise the setup: selecting Embedded live, and Embedded being "restored as
-      the mode already in force when the module starts." Its own scenario
-      "Starting in Embedded with no identity does not raise the setup" is
-      written as "GIVEN a module whose backend reports `embedded` already in
-      force and `getEmbeddedIdentity().exists` false — WHEN the module becomes
-      ready — THEN the module MUST report the setup as not raised." That is a
-      *startup* event, not a live mode switch.
-      `tst_setup_host.qml`'s `test_selecting_embedded_does_not_raise_the_setup`
-      only models a live switch (`harness.mode = "local"` then back to
-      `"embedded"`, each followed by `repoList.reload()`) — there is no
-      `Component.onCompleted`-equivalent startup path in the harness at all,
-      and no test constructs the harness already in `embedded` mode with no
-      prior mode change. `local.yaml` doesn't cover it either: the app always
-      starts in `explore` and reaches `embedded` only via a click, so the
-      "module becomes ready already in embedded" path is untested at every
-      layer. A null implementation that raised the setup unconditionally on
-      startup whenever the resumed mode is `embedded` with no identity would
-      pass every test in this suite.
-      **Measured:** not mutated — there is no code path exercising "becomes
-      ready" in the fixture to redden; this is a coverage gap rather than a
-      test I could prove passes vacuously by editing the guard.
-
-      **Fixed** in `a9d5e6a` (by `dev-writer`, not `tester` — the gap was closed
-      in the same pass as the other findings rather than deferred to a separate
-      dispatch).
-
-      Your analysis of why it was invisible is exactly right, and it is a
-      fixture-shape problem: `tst_setup_host.qml`'s single `RepoList` is
-      constructed once before any test runs, so every test reaches its state by
-      mutating the harness and calling `reload()` — a live mode change by
-      construction, never a startup. The fix is a `Component` that builds a
-      *second* `RepoList` against a harness already in `embedded` with no
-      identity, which is as close to "the module becomes ready" as this layer
-      gets. `test_starting_up_in_embedded_does_not_raise_the_setup` uses it,
-      asserts the fresh list comes up in `noIdentity` with nothing raised, and
-      carries a control leg clicking the fresh list's own action so it is not
-      satisfied by a list wired to nothing.
-
-      **Proven against the null implementation you described**, rather than
-      asserted: adding
-      `Component.onCompleted: if (mode === "embedded" && !identityExists)
-      openSetup()` to the fixture reddens the new test — and leaves
-      `test_selecting_embedded_does_not_raise_the_setup` **green**, which is the
-      demonstration that the two scenarios are genuinely different and that the
-      existing test could never have covered this one. The mutation was
-      reverted. The reasoning is recorded in `design.md` under *"Becomes ready
-      in Embedded" needs a freshly-built list, not a mode change*.
-
-      On the judgement above the gap — that
-      `test_the_resumed_steps_findings_are_populated`'s relationship to the test
-      that actually guards it is "load-bearing but not enforced": accepted as
-      correct and **not changed**, since you explicitly flagged it as an
-      observation rather than an ask. It is not a defect in this piece; it is
-      the standing cost of a comment-linked pair, and `design.md` already
-      records both halves. Noting it here so a later reader sees it was weighed
-      rather than missed.
+Not separately checked in this pass — the brief's scope was the four
+`embedded-*` specs plus the listed test files, and a `PLAN.md`-vs-spec
+reconciliation was not flagged as part of this round's ask. Noting the omission
+rather than silently skipping it.
 
 ## What was clean
 
-The three mutations claimed by the dev-writer against `EmbeddedState.qml`
-(`!startPending` in `actionEnabled`, `actionHosted` in the same expression, and
-`actionKind !== ""`) were verified by mutation to redden exactly the tests the
-inline comment names —
-`test_an_outstanding_start_withholds_a_hosted_start_control` for the first,
-and (isolated separately) nothing else moved. This is reported for
-completeness but should be weighted per the disclosure above: I located the
-expression by reading the file rather than blind, so this is not an
-independent confirmation in the way the `SetupFlow.qml` reproduction is.
+- The `tst_embedded_panel.qml` "list built already stopped" fixture (the
+  `freshList` component) and `tst_setup_host.qml`'s equivalent `freshRepoList`
+  are both present and doing real work — verified by mutation for the panel one
+  (above), and the setup-host one was already verified in the prior round
+  (`test_starting_up_in_embedded_does_not_raise_the_setup`, present and unchanged
+  in this file).
+- `ui-tests.yml`'s matrix includes `local` (`spec: [browse, branches, source,
+  sync, write, local]`, confirmed by reading the file rather than assuming); the
+  spec is not merely present in the tree.
+- `local.yaml`'s Embedded section is exercised for real: the setup-raised/lowered
+  steps click through `embeddedStateAction` and `wizardClose` rather than calling
+  functions directly, and the no-identity-state assertions
+  (`reposEmbeddedPanel`/`reposEmbeddedState`) are the pair the file's own
+  comments say is needed to distinguish "didn't render" from "rendered the wrong
+  state" — both actually present, not just described.
+- `tst_embedded.qml` and `tst_embedded_real.qml` correctly split the "mode the
+  build cannot start" behaviour (now re-keyed onto `local` in the fixture, since
+  `embedded` is startable in this build) from "Embedded actually works" — the
+  file headers explain the split honestly and neither file quietly tests a
+  fixture state that no longer occurs in production.
+- `embedded-identity`'s MODIFIED requirement is fully pinned at the Rust layer,
+  including the two edge cases (`problem` non-empty and `encrypted:false` for
+  both an unreadable key and no key at all) that are easy to collapse into a
+  single `unwrap_or(false)` and easy to miss covering.
 
-The `tst_setup_host.qml` fixture is a careful, disclosed reproduction of
-`Main.qml`'s shape rather than a claim to test the real file — its own header
-says so, and `local.yaml`'s four wizard-host steps are what closes that gap
-against the real component, which they do (raised over the view, mutual
-exclusion, close-lowers-and-refreshes, mode/tab preserved underneath). The
-resume-table tests in `tst_setup_wizard.qml` are unusually thorough about the
-input-dependence rule — four different backend states landing on four
-different named steps in one assertion
-(`test_different_backend_states_resume_to_different_steps`), which is exactly
-the shape that would catch a `restart()` stuck on one answer. The
-mutual-exclusion and lowering tests in `tst_setup_host.qml` are click-driven
-throughout (`action().clicked()`, not `takeEmbeddedAction()` called directly)
-except where the file's own comments explain why a direct call is used instead
-(`start`/`restart`, which no control offers yet) — consistent with the
-"control reaches nobody" defect class this piece exists to close.
+## Findings
 
-## Mutations run (3, within stated budget)
-
-1. **`SetupFlow.qml`'s `landOnFirstUnfinishedStep()`** changed from a single
-   assignment to a loop over `advance()`. Targets the reported finding above.
-   Ran `tst_setup_wizard.qml` alone: 49 passed, 1 failed
-   (`test_the_landing_does_not_discard_a_reply_still_in_flight`); the named
-   "findings populated" test stayed green as predicted. Restored; `git diff
-   --stat` empty.
-2. **`EmbeddedState.qml`'s `actionEnabled`**, `!startPending` term removed.
-   Ran `tst_embedded_state.qml` alone: 20 passed, 1 failed
-   (`test_an_outstanding_start_withholds_a_hosted_start_control`). Restored.
-   *(Located via reading the file — see disclosure above.)*
-3. **`EmbeddedState.qml`'s `actionEnabled`**, `actionKind !== ""` term removed
-   (with the `!startPending` term restored first, isolating this one term).
-   Ran `tst_embedded_state.qml` alone: 21 passed, 0 failed — **no test
-   reddened**. This contradicts the file's own comment, which claims deleting
-   this term turns `test_a_blocked_home_offers_no_action_that_would_write`
-   red. Restored; final `git status` on the whole worktree came back clean.
-
-   **This is worth flagging even though it came from the disclosed,
-   non-independent path**: either the comment is stale (the guard moved
-   elsewhere, e.g. into `actionKind`'s own derivation, and the term in
-   `actionEnabled` is now redundant with something else that already forces
-   `actionKind === ""` to imply `actionHosted === false`), or the test
-   in question does not exercise this term at all. I did not investigate
-   further, since doing so would mean reading more of the file than the
-   mutation exception allows and I have already used my one exception. Naming
-   this for `spec-test-reviewer`/`dev-writer` to check directly, since I
-   cannot verify it blind at this point without re-reading source I've been
-   told not to.
-
-   **Investigated by `dev-writer`, and you were right to flag it. Both of your
-   two hypotheses were live; the first is the answer.**
-
-   Reproduced your measurement first: removing `actionKind !== ""` from
-   `actionEnabled` (leaving `!startPending`) reddens **zero** tests. Confirmed
-   on a green baseline of the same file.
-
-   **The comment was wrong, and no test could have caught it.** The term is
-   logically dead: `actionHosted` switches on `actionKind`, and its `default:`
-   branch — reached for exactly `""` — already returns `false`. So
-   `actionKind !== "" && actionHosted` and `actionHosted` are the same function
-   for every input. `test_a_blocked_home_offers_no_action_that_would_write` does
-   assert `!actionEnabled` for a blocked home, and does discriminate; it simply
-   gets that answer from `actionHosted`'s `default:` rather than from the term
-   the comment credited. Your first hypothesis, "the guard moved elsewhere and
-   the term is now redundant with something that already forces
-   `actionKind === ""` to imply `actionHosted === false`", is precisely it.
-
-   Fixed in `a9d5e6a` by **removing the term and recording the redundancy**
-   rather than by correcting the comment to name a different test. The useful
-   fact for someone adding an eighth state is *where the guard lives* —
-   `actionHosted`'s `default:` — and a second copy of it in the conjunction
-   obscured that while claiming a test relationship that did not exist.
-
-   **Your mutation sweep also surfaced a real gap you did not reach**, and it is
-   the mirror of this one. The *same* expression appears in
-   `actionUnavailableNote`, where it reads `!actionHosted` — so there it is
-   genuinely load-bearing, and removing it also reddened **nothing**. Without
-   it, a blocked home claims *"Starting the node is not yet available from here.
-   It needs the passphrase that unlocks the key…"* when the real obstacle is an
-   unresolvable home and no act is offered at all — pointing the user at the
-   wrong thing entirely. `test_a_blocked_home_claims_no_unavailability` now
-   covers it, and was proven to fail against the deletion, reporting that exact
-   wrong sentence. Both asymmetries are written into the code comments and into
-   `design.md`'s "What breaks without each guard" list.
-
-   For the record on the disclosure: the non-independence you declared did not
-   cost anything here. The mutation was a real measurement and it found two real
-   defects — one false comment and one unguarded term — neither of which the
-   file's own comments would have led you to, since both were places where those
-   comments were *wrong*.
-
-All three mutations were restored; final `git status` on the worktree is
-clean (confirmed after each restore and again at the end).
+No open findings. All requirement-to-scenario mappings hold, all three sampled
+mutations were caught by name-matched or newly-identified tests, and no
+untestable scenario or contradictory requirement was found across the five specs
+read. The one `NO SPEC:` item above is a gap in the spec's coverage of an
+already-sound behavioural choice, not a defect — recorded for `spec-writer` to
+evaluate, not blocking.
