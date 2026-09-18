@@ -102,6 +102,7 @@ Item {
             callLog = [];
             held = null;
             heldSeeds = null;
+            heldCreate = null;
             serving = false;
         }
 
@@ -183,13 +184,43 @@ Item {
             return true;
         }
 
+        /// Hold the CREATION's reply rather than the preflight probe's.
+        ///
+        /// Creation is a slow backend call — it writes key material and a
+        /// profile — so "the user pressed back while it was in flight" is an
+        /// ordinary interleaving rather than a contrived one. A synchronous
+        /// `create` settles before any step can change, which makes the
+        /// staleness guard on its reply structurally untestable: that is why
+        /// deleting the guard left the whole suite green.
+        property bool holdCreate: false
+
+        /// Held separately from `held`, so a test can hold a creation reply
+        /// without disturbing a preflight probe that is also outstanding.
+        property var heldCreate: null
+
         function create(alias, passphrase, cb) {
             // The ARGUMENTS are logged, because "an identity was created" and
             // "the alias the user typed was the one sent" are different facts.
             callLog.push("createEmbeddedIdentity:" + alias + ":" + passphrase);
+            if (holdCreate) {
+                heldCreate = function () { fake.deliverCreate(alias, passphrase, cb); };
+                return;
+            }
+            deliverCreate(alias, passphrase, cb);
+        }
+
+        function deliverCreate(alias, passphrase, cb) {
             if (createRefusal !== "") { cb({ error: createRefusal }); return; }
             cb({ created: true, nodeId: createdNodeId, home: home,
                  alias: alias, encrypted: passphrase !== "" });
+        }
+
+        function deliverHeldCreate() {
+            if (heldCreate === null) return false;
+            var f = heldCreate;
+            heldCreate = null;
+            f();
+            return true;
         }
 
         // **No `start` and no `startHeld`.** The flow has no `startNode`
@@ -281,6 +312,7 @@ Item {
             fake.createdNodeId = "did:key:z6MkCREATED";
             fake.settingRefusal = "";
             fake.holdIdentity = false;
+            fake.holdCreate = false;
             fake.holdSeeds = false;
             fake.seedItems = [
                 { url: "https://seed.radicle.xyz", alias: "radicle",
@@ -1277,6 +1309,93 @@ Item {
                     + "repopulate the step now in force");
             compare(heldFlow.identityNodeId, "",
                     "carrying none of what it reported");
+        }
+
+        /// **A late CREATION reply does not repopulate a step the user left.**
+        ///
+        /// The test above holds a preflight probe; this one holds the creation
+        /// call, which is the one the guard at `submitIdentity`'s reply handler
+        /// protects and which nothing exercised — deleting that
+        /// `if (!isCurrent(issuedAt)) return;` left the whole suite green.
+        ///
+        /// Creation is the slowest call the flow makes (it writes key material
+        /// and a profile), so pressing `back()` under it is the ordinary
+        /// interleaving rather than a contrived one. Four fields are at stake:
+        /// `identityExists`, `identityNodeId`, `identityCreatedHere` and
+        /// `embeddedHome` — a stale success would assert an identity the user
+        /// has walked away from, and `identityCreatedHere` is the one that
+        /// renders "created" rather than "was already there".
+        ///
+        /// The reply carries a DISTINCTIVE node id, so a flow that applied it
+        /// reports that specific value and one that dropped it reports none —
+        /// the assertion cannot pass against a fake that answers the same way
+        /// whatever it is asked.
+        function test_a_late_creation_reply_does_not_repopulate_a_step_the_user_left() {
+            fake.createdNodeId = "did:key:z6MkSTALECREATE";
+            fake.holdCreate = true;
+
+            // Walk to the identity step with no identity yet, which is the
+            // state whose one forward control creates.
+            heldFlow.runPreflight();
+            verify(heldFlow.advance());
+            compare(heldFlow.step, "embedded");
+            heldFlow.confirmEmbedded();
+            verify(heldFlow.advance());
+            compare(heldFlow.step, "identity", "precondition");
+            compare(heldFlow.identityExists, false,
+                    "precondition: no identity yet, so the control creates");
+
+            verify(heldFlow.submitIdentityStep("tester", "pw"),
+                   "the creation call goes out");
+            verify(fake.heldCreate !== null,
+                   "precondition: its reply is being held");
+
+            // The user leaves the step before the reply lands. This bumps the
+            // epoch, which is what the guard reads.
+            heldFlow.back();
+            compare(heldFlow.step, "embedded",
+                    "precondition: the user has left the identity step");
+
+            verify(fake.deliverHeldCreate(), "the held reply now arrives");
+
+            compare(heldFlow.identityExists, false,
+                    "a creation reply issued under a step the user has left "
+                    + "must not assert an identity on the step now in force");
+            compare(heldFlow.identityNodeId, "",
+                    "carrying none of what it reported");
+            compare(heldFlow.identityCreatedHere, false,
+                    "and claiming no creation, which is what would render "
+                    + "'created' rather than 'was already there'");
+            compare(heldFlow.step, "embedded",
+                    "and it does not advance the step the user walked back to");
+        }
+
+        /// The other direction for the creation reply: with the user still on
+        /// the step that issued it, the SAME reply lands in full. Without this,
+        /// a flow that dropped every creation reply would pass the test above.
+        function test_a_creation_reply_on_the_same_step_does_land() {
+            fake.createdNodeId = "did:key:z6MkSTALECREATE";
+            fake.holdCreate = true;
+
+            heldFlow.runPreflight();
+            verify(heldFlow.advance());
+            heldFlow.confirmEmbedded();
+            verify(heldFlow.advance());
+            compare(heldFlow.step, "identity", "precondition");
+
+            verify(heldFlow.submitIdentityStep("tester", "pw"));
+            verify(fake.heldCreate !== null, "precondition: the reply is held");
+
+            // No step change this time.
+            verify(fake.deliverHeldCreate());
+
+            compare(heldFlow.identityExists, true,
+                    "a creation reply arriving with the user still on the step "
+                    + "that issued it must be applied");
+            compare(heldFlow.identityNodeId, "did:key:z6MkSTALECREATE",
+                    "carrying what it reported");
+            compare(heldFlow.identityCreatedHere, true,
+                    "and recording that THIS showing made it");
         }
 
         /// The other direction: without the step change, the SAME reply does

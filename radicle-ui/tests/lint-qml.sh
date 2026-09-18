@@ -83,8 +83,15 @@ fi
 # common message — `Member "X" not found on type "QQuickItem"` — emitted when a
 # delegate reaches `modelData` / `selected` / `hovered` on an untyped
 # `delegate:` or `contentItem:`. qmllint cannot infer a delegate's real type,
-# so every one of those is a false positive, and there are dozens. Counted at
-# the commit that added this script: 34 of that form, 1 of the form below.
+# so every one of those is a false positive, and there are dozens.
+#
+# No count is written here. To see the split as it stands, run this script and
+# count the two forms in its output: `missing-property` is the category (the
+# false positives dominate it) and `Could not find property` is the real form,
+# which is expected to be ZERO in a tree where the gate passes — that is what
+# passing means. An earlier version of this comment claimed one real hit, which
+# never held on this branch: the defect and this script landed in the same
+# commit, so the number described a state that never existed here.
 #
 # So the discriminator is the message, not the category. Both forms are tagged
 # [missing-property]; only this one means something is wrong.

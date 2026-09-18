@@ -253,7 +253,29 @@ QtObject {
     /// its seven rows wrong — verified by mutation. That test walks all seven
     /// states with `encrypted:false` held, which is the value that would make an
     /// over-eager derivation say yes everywhere.
-    readonly property bool wantsAutoStart: current === "stopped" && !encrypted
+    ///
+    /// **`startHosted` is a term here for the same reason it is one in
+    /// `actionHosted`**, and its absence was a real gap: the automatic start is
+    /// still a start, so the question "does a start reach anybody" has one
+    /// answer on this surface and the manual path must not be the only one
+    /// asking it. Without this term the panel can render a start control that is
+    /// disabled-and-explained *while the module issues the very same start by
+    /// itself* — enablement and routing disagreeing, which is the property
+    /// `routesEmbeddedAction` exists to make impossible. `embeddedStartHosted`
+    /// is hardcoded true today, so this changes no behaviour now; it is what
+    /// stops the automatic path silently ignoring the flag the moment that flag
+    /// becomes conditional.
+    ///
+    /// Held here rather than in `RepoList.autoStartIfWanted()` deliberately.
+    /// This property is the DECISION, and a caller-side check would be a second
+    /// place encoding "may a start go out" — the fourth-copy-of-a-guard shape
+    /// this repo keeps paying for. Dropping this term turns
+    /// `test_an_unhosted_start_is_not_issued_automatically`
+    /// (`tst_embedded_state.qml`) and
+    /// `test_an_unhosted_start_is_not_issued_by_the_module_either`
+    /// (`tst_embedded_panel.qml`) red.
+    readonly property bool wantsAutoStart:
+        current === "stopped" && !encrypted && startHosted
 
     /// Whether the surface should offer a field to type a passphrase into.
     ///

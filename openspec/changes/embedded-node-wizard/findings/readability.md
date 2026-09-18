@@ -11,7 +11,7 @@ architecture are separate instances.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `openspec/changes/embedded-node-wizard/tasks.md:530` —
+- [x] **`dev-writer`** — `openspec/changes/embedded-node-wizard/tasks.md:530` —
       a stale hardcoded test count, left unpruned in the same file where three
       sibling counts were correctly scrubbed this round.
       **Scenario:** the "fourth pass" (`embedded-state`) section states "Full
@@ -38,7 +38,20 @@ architecture are separate instances.
       per file" note the other entries carry), or delete the count entirely
       and keep only "full suite green."
 
-- [ ] **`dev-writer`** — `radicle-ui/tests/lint-qml.sh:87` — a specific,
+      **Fixed** by taking the first option you named. The entry now reads "Full
+      suite green: `sh radicle-ui/tests/run-qml-tests.sh`, 0 failed" and points
+      at `grep -c "function test_"` across `radicle-ui/tests/tst_*.qml` with
+      the "+2 per file for `initTestCase`/`cleanupTestCase`" note the sibling
+      entries carry. Both numbers are gone — including "30 files", which you
+      correctly identified as a coincidence rather than a confirmation.
+
+      No replacement number written anywhere, deliberately: this is a
+      fourth-pass entry with three later passes adding test files on top of it,
+      so any number recorded at that point is stale before the change lands.
+      The entry now says that, so the reason it carries no count is legible
+      rather than looking like an omission.
+
+- [x] **`dev-writer`** — `radicle-ui/tests/lint-qml.sh:87` — a specific,
       checkable count in a comment that does not match a fresh run at this
       commit.
       **Scenario:** the comment says "Counted at the commit that added this
@@ -69,6 +82,30 @@ architecture are separate instances.
       at that norm ("Counted at the commit that added this script"), which
       makes the drift worse, not better: it invites a reader to trust a number
       that carries its own provenance claim and is wrong anyway.
+
+      **Fixed, and your measurement independently reproduced first.** Ran
+      `lint-qml.sh` at this commit and counted its output: `missing-property`
+      → 34, `Could not find property` → **0**, not 1. Your reading was right,
+      and your diagnosis of why is the part worth keeping — the defect and this
+      script landed in the same commit, so "1 of the form below" described a
+      state that never existed on this branch.
+
+      No number replaces it. The comment now explains the two forms as before
+      and then says to run the script and count the two strings in its output
+      to see the split as it stands, with the load-bearing fact stated as an
+      invariant instead of a measurement: `Could not find property` is expected
+      to be **zero** in a tree where the gate passes, because that is what
+      passing means. It also records that an earlier version claimed one real
+      hit and why that never held, so the next reader does not rediscover it.
+
+      That last part is the reason a self-invalidating sentence beats a fresh
+      count here: "0 at this commit" is exactly the shape that rots, whereas
+      "zero whenever the gate passes" cannot become false without the gate
+      itself failing.
+
+      Gate re-run after the edit: `ok: qmllint found no errors and no
+      non-existent-property assignments`, exit 0 — the comment change touches
+      no logic, and the `grep -q` on the presence of the string is unchanged.
 
 ## Clean on this pass
 

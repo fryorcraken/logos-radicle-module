@@ -350,10 +350,11 @@ inbound opt-in is a control that records nothing.
 
 ## 9. Open questions
 
-- **Whether the Embedded empty state belongs in `RepoList` at all.** E0–E6 are
-  facts about the *module*, not a list of repositories, and `RepoView` has the
-  same problem one level down — open a repo in E2 and what happens? Not traced.
-  A shared `EmbeddedState.qml` may be right, but not speculatively.
+- ~~Whether the Embedded empty state belongs in `RepoList` at all.~~ Answered
+  and moved: it ships in `RepoList`, and the reasoning — why not refactored now,
+  what does not bind the placement, and the copy-the-shape trap to avoid when it
+  does move — is in `design.md`'s Risks / Trade-offs, which is the durable
+  record. Not restated here, so the two cannot drift.
 - **Whether E6 is frequent enough to justify its own screen.** Real, and
   `radicle_impl.h` is emphatic, but there is no evidence on how often
   `Runtime::run` panics. Cost is one branch, so it is kept.

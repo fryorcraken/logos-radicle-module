@@ -11,16 +11,21 @@ import QtQuick
  *
  * ## The step is an INDEX, and that is load-bearing
  *
- * Six steps in a fixed order, and the requirement is that advancing moves to
- * the next one and never skips. Held as an index into `steps`, that is true by
- * construction: `advance()` can only produce `stepIndex + 1`, and there is no
- * expressible value that jumps two. Held as six booleans, or as a string
- * assigned per step, every transition is its own assignment to get right and
- * "identity went straight to start" becomes a reachable state needing its own
- * test.
+ * The steps run in a fixed order, and the requirement is that advancing moves
+ * to the next one and never skips. Held as an index into `steps`, that is true
+ * by construction: `advance()` can only produce `stepIndex + 1`, and there is
+ * no expressible value that jumps two. Held as one boolean per step, or as a
+ * string assigned per step, every transition is its own assignment to get right
+ * and "identity went straight to network" becomes a reachable state needing its
+ * own test.
  *
- * `canGoBack` and the confirm-step clamp fall out of the same representation
- * rather than being two more conditions.
+ * The count is deliberately not written here — read `steps` below, which is the
+ * one place it lives. This header said "six" for a round after the start and
+ * confirm steps were deleted, which is what sent a reader hunting for a screen
+ * that no longer existed.
+ *
+ * `canGoBack` and the clamp at either end fall out of the same representation
+ * rather than being separate conditions.
  *
  * ## Blocking is keyed on the FINDING, never on a step's own memory
  *
@@ -699,6 +704,12 @@ QtObject {
         var issuedAt = epoch;
         lastError = "";
         createIdentity(alias, passphrase, function (reply) {
+            // Dropped unless the step that issued this call is still in force.
+            // Deleting this line turns
+            // `test_a_late_creation_reply_does_not_repopulate_a_step_the_user_left`
+            // red, and nothing else: the paired
+            // `test_a_creation_reply_on_the_same_step_does_land` stays green,
+            // so the test discriminates rather than dropping every reply.
             if (!isCurrent(issuedAt)) return;
             if (!reply || reply.error) {
                 // The refusal is the useful result: it names the home in the

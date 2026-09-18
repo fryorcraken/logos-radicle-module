@@ -599,6 +599,11 @@ Item {
         /// the same node status must answer differently, or the derivation could
         /// be reading the node's state and calling it an answer about the key.
         function test_an_unencrypted_stopped_node_wants_a_start() {
+            // Armed because a start that reaches nobody is not wanted at all —
+            // see `test_an_unhosted_start_is_not_issued_automatically`. This
+            // test's subject is the KEY, so hosting is held true throughout and
+            // `encrypted` is the only thing that moves.
+            st.startHosted = true;
             st.encrypted = false;
             compare(st.current, "stopped", "precondition");
             verify(st.wantsAutoStart,
@@ -618,6 +623,10 @@ Item {
         /// make an over-eager derivation say yes — so a `wantsAutoStart` keyed
         /// on the key alone answers `yes` for every one of them.
         function test_no_autostart_outside_the_stopped_state() {
+            // Held true for every row: this test's subject is the STATE, so the
+            // one row that answers `yes` must do so for its state rather than
+            // because hosting happened to be armed on that row alone.
+            st.startHosted = true;
             st.encrypted = false;
             var answers = [];
 
@@ -657,6 +666,34 @@ Item {
                     + "would be refused; in startFailed a start has already "
                     + "been tried and answered, and retrying unasked would loop "
                     + "against a backend that refuses every time");
+        }
+
+        /// **An unhosted start is not wanted automatically either.**
+        ///
+        /// The gap this closes: `wantsAutoStart` used to read the node's state
+        /// and the key alone, so the module issued a start on a surface that
+        /// would render the manual start control disabled-and-explained. An act
+        /// whose request reaches nobody must not be enabled, and the automatic
+        /// path is the same act — the flag being hardcoded true today is what
+        /// made the divergence invisible rather than what made it safe.
+        ///
+        /// `startHosted` is the ONLY thing that moves here, with the stopped
+        /// unencrypted state held — so a derivation that ignores hosting
+        /// answers `yes` both times and this test is what says so.
+        function test_an_unhosted_start_is_not_issued_automatically() {
+            st.encrypted = false;
+            compare(st.current, "stopped", "precondition");
+
+            st.startHosted = true;
+            verify(st.wantsAutoStart,
+                   "a hosted start on a stopped unencrypted node is the case "
+                   + "the automatic start exists for");
+
+            st.startHosted = false;
+            verify(!st.wantsAutoStart,
+                   "and with start unhosted the module must not issue one by "
+                   + "itself — the same gate the rendered control goes "
+                   + "through, so enablement and routing cannot disagree");
         }
 
         /// **A stopped node with an ENCRYPTED key asks, rather than starting.**

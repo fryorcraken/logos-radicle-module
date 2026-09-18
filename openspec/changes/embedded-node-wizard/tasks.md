@@ -97,6 +97,38 @@ tests and every reviewer row need re-running against all of this**; the runner
 owns re-dispatching them, and the rows are left as they are for the same
 one-row-per-stage reason as above.
 
+**A ninth `design + code` pass acted on the final review findings**, and again
+flips no row, for the same one-row-per-stage reason. All seven findings across
+`security`, `correctness`, `architecture` and `readability` are ticked with
+their outcomes appended; `spec-test` and `design-review` were clean.
+
+Two were real defects, and both were the same shape from different angles — a
+rule honoured on the path a user presses and ignored on the path the module
+takes by itself. The autostart bypassed the hosting gate every other Embedded
+act goes through, fixed by making `startHosted` a term of
+`EmbeddedState.wantsAutoStart` so one derivation answers for every host rather
+than each caller re-deriving it; **no behaviour changes today**, since
+`embeddedStartHosted` is hardcoded true, and the fix is what stops the
+automatic path ignoring that flag once piece 3 makes it conditional. And a
+passphrase survived its field being hidden and shown again by any route other
+than submit — the third instance of that class in this piece, fixed on the one
+surface with no lifecycle event to hang it on by using `visible` itself as the
+event.
+
+One was a correct guard with no test: `submitIdentity`'s staleness check could
+be deleted with the whole suite staying green, because the test fake's
+`create` was synchronous and so could not express a late reply at all. The fake
+gained a hold/deliver pair and the guard now has a paired test — one asserting
+the stale reply is dropped, one asserting the same reply lands with no step
+change, so the first cannot pass against a flow that drops everything.
+
+The rest were durable-record and prose-accuracy repairs: `SetupFlow.qml`'s
+header still described six steps and a deleted confirm-step clamp; the
+`RepoList`-carries-two-jobs question lived only in `user-flow.md`'s scratch
+notes and is now a `design.md` risk with the copy-the-shape trap named; and two
+more fabricated counts were deleted rather than updated, one of which described
+a state that never existed on this branch.
+
 ## Implementation — the collapsed setup flow (eighth pass)
 
 Acting on the third reopening of the spec, from the user dogfooding the built
@@ -527,8 +559,12 @@ exposed.
       panel (4 red), `sayingNothing` reading the condition instead of the item
       (1 red, the one test that exists for it, 18 green), the ordering hoisted
       (1 red), `!startPending` dropped from `actionEnabled` (1 red).
-- [x] Full suite green: `sh radicle-ui/tests/run-qml-tests.sh`, 30 files, 509
-      passing, 0 failed.
+- [x] Full suite green: `sh radicle-ui/tests/run-qml-tests.sh`, 0 failed. No
+      count written here — three later passes add test files and tests on top of
+      this one, so any number recorded at this point is stale by the time the
+      change lands. Count with `grep -c "function test_"` across
+      `radicle-ui/tests/tst_*.qml` (+2 per file for
+      `initTestCase`/`cleanupTestCase`), as the sibling entries below do.
 - [x] `lgs basecamp build --variant lgx --module radicle_ui` green from this
       worktree's root.
 

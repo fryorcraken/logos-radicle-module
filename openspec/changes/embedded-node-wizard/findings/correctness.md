@@ -17,7 +17,7 @@ confirming `git status` clean.
 
 ## One real defect found
 
-- [ ] **`dev-writer`** — `radicle-ui/src/qml/SetupFlow.qml:701-702`, function
+- [x] **`dev-writer`** — `radicle-ui/src/qml/SetupFlow.qml:701-702`, function
       `submitIdentity` — the `createIdentity(...)` reply handler's staleness
       guard (`if (!isCurrent(issuedAt)) return;`) is present and correct, but
       **no test in `tst_setup_wizard.qml` or `tst_setup_wizard_view.qml`
@@ -51,6 +51,37 @@ confirming `git status` clean.
       overwrite the step the user has since left" (parallel to the existing
       `test_a_late_reply_does_not_repopulate_a_step_the_user_left`, which
       covers the *preflight* calls only) would close this.
+
+      **Fixed** — the guard was right, so the fix is the missing test.
+      `test_a_late_creation_reply_does_not_repopulate_a_step_the_user_left`
+      (`tst_setup_wizard.qml`) walks to the identity step with no identity,
+      submits creation, presses `back()` while the reply is held, then delivers
+      it — and asserts `identityExists`, `identityNodeId` and
+      `identityCreatedHere` are all untouched, plus that the step did not
+      advance. That is the four-field scenario in this finding, including the
+      unwanted-`advance()` interleaving in your parenthesis.
+
+      The reason nothing exercised it was structural, which is worth recording:
+      the fake's `create` was **synchronous**, so it settled before any step
+      could change and the guard could not be observed at all. It now has a
+      `holdCreate` / `deliverHeldCreate()` pair mirroring the existing
+      `holdIdentity` / `deliverHeld()`, held in a separate slot so a creation
+      reply and a preflight probe can be outstanding independently.
+
+      Paired with `test_a_creation_reply_on_the_same_step_does_land`, which
+      delivers the same held reply with no step change and asserts all three
+      fields DO land. Without that control, a flow that dropped every creation
+      reply would pass the first test — the null implementation your standing
+      rule warns about. The reply carries a distinctive node id
+      (`did:key:z6MkSTALECREATE`) so the assertions discriminate rather than
+      comparing an empty default against an empty default.
+
+      Verified by re-running your mutation: with
+      `if (!isCurrent(issuedAt)) return;` deleted, exactly one test fails —
+      the new staleness one, reporting `identityExists` true where false was
+      expected — while the paired control stays green. Previously that
+      deletion left all 50 green. Guard restored, and a comment at the line now
+      names the test that reddens without it.
 
 ## Claims verified
 
