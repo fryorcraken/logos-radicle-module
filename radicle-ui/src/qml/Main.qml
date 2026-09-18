@@ -1292,9 +1292,6 @@ Item {
                     root.callSettings("createEmbeddedIdentity",
                                       [alias, passphrase], cb);
                 }
-                flow.startNode: function (passphrase, cb) {
-                    root.callSettings("startNode", [passphrase], cb);
-                }
                 flow.saveSetting: function (key, value, cb) {
                     root.callSettings("setSetting", [key, value], cb);
                 }
