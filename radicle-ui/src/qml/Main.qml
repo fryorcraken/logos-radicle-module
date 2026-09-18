@@ -119,6 +119,12 @@ Item {
     readonly property string mode: sourceState.mode
     readonly property bool localAvailable: sourceState.localAvailable
 
+    /// Whether the mode in force is one the user operates as an identity in —
+    /// what gates the header's DID. Derived there rather than here, from one
+    /// rule covering every mode; see `SourceState.modeHasIdentity` for why it
+    /// is not a list of mode names.
+    readonly property bool modeHasIdentity: sourceState.modeHasIdentity
+
     /// Whether this build can start the mode in force. Read by RepoList to
     /// decide whether to fetch at all — see SourceState.modeStartable for why
     /// that is derived from the startable SET rather than compared against a
@@ -153,23 +159,36 @@ Item {
     readonly property string embeddedPathsProblem: caps.pathsProblem || ""
 
     /// The last `getEmbeddedIdentity()` reply's fields.
+    ///
+    /// `embeddedEncrypted` defaults TRUE, unlike its neighbours, and the
+    /// asymmetry is the point: before any reply has landed, `true` means the
+    /// surface asks for a passphrase nobody needs — visible, one dismissal —
+    /// while `false` means it starts a node unasked on a reply nobody supplied.
     property string embeddedHome: ""
     property bool embeddedIdentityExists: false
+    property bool embeddedEncrypted: true
 
     /// The last `getNodeStatus()` reply's fields.
     property bool embeddedRunning: false
     property bool embeddedServing: false
 
-    /// Whether a `startNode` this view issued is outstanding, and the last
-    /// refusal. Neither is in any reply — the node cannot tell you whether you
-    /// are waiting for it — so they are the view's, and `startPending` is
-    /// cleared by the REPLY rather than by the call having been made.
+    /// Whether a `startNode` this view issued is outstanding, the last refusal,
+    /// and whether one of this view's own starts has ever succeeded.
     ///
-    /// Nothing sets either today: no surface here starts a node — see
-    /// `embeddedStartHosted` for why, and both fields exist so the state
-    /// derivation is complete rather than partial.
+    /// None of the three is in any reply — the node cannot tell you whether you
+    /// are waiting for it, nor who started it — so all three are the view's.
+    /// `startPending` is cleared by the REPLY rather than by the call having
+    /// been made, or a node that never answers would settle into "not serving"
+    /// while its start is genuinely still in flight.
+    ///
+    /// `embeddedStartSucceeded` is what keeps a node THIS MODULE started from
+    /// being reported as one in the way. `getNodeStatus()` reports the same two
+    /// fields either way, so without it the surface would warn about socket
+    /// contention over its own success — which is exactly what the setup flow's
+    /// step 5 shipped.
     property bool embeddedStartPending: false
     property string embeddedStartError: ""
+    property bool embeddedStartSucceeded: false
 
     // ---- which Embedded requests this host routes -------------------------
     //
@@ -182,30 +201,41 @@ Item {
     /// "setup" is routed: `onEmbeddedActionTaken` raises the setup overlay.
     readonly property bool embeddedSetupHosted: true
 
-    /// "start" and "restart" are NOT routed, and this is structural rather than
-    /// unfinished wiring.
+    /// "start" is routed now, and what unblocked it was a core change.
     ///
-    /// The setup's start step is gated on no node answering the resolved socket
-    /// — which a restart's node is — it offers no stop, so a restart's two calls
-    /// cannot be sequenced from it, and it starts the node with the passphrase
-    /// its own identity step took in the same showing, which a later showing
-    /// does not have. Decisively: `getEmbeddedIdentity()` carries no `encrypted`
-    /// field (only `createEmbeddedIdentity`'s reply does — `radicle_impl.h:275`),
-    /// so a later session cannot even determine whether a passphrase is needed.
+    /// It was unhosted because nothing could determine whether a passphrase was
+    /// needed: only `createEmbeddedIdentity`'s reply carried an `encrypted`
+    /// field, and that is a reply no later session holds. `getEmbeddedIdentity()`
+    /// reports one now, observed from the key on disk — so the surface knows
+    /// whether to ask, asks where it must, and starts by itself where it need
+    /// not.
     ///
-    /// So these belong to the durable settings surface, which is where a
-    /// passphrase can be asked for. Nothing in `RepoList` or `EmbeddedState`
-    /// hard-codes which acts are available, so the panel needs no edit.
+    /// **The flag alone was never the whole change**, and the routing below
+    /// reads this same property so the two cannot disagree. Arming it without
+    /// writing the branch would have shipped an enabled control whose click was
+    /// dropped on the floor.
     ///
-    /// **But flipping this is not by itself the whole change**, and an earlier
-    /// version of this comment said it was. The flag decides whether the panel
-    /// renders an ENABLED control; `takeEmbeddedAction` decides whether the
-    /// resulting request reaches anything. `routesEmbeddedAction()` below ties
-    /// the two together so they cannot disagree — a hosted kind with no branch
-    /// is a case that function refuses rather than drops — but the branch that
-    /// carries the act out still has to be written. See
-    /// `test_every_hosted_kind_is_one_the_host_routes`.
-    readonly property bool embeddedStartHosted: false
+    /// Note `RepoList` does not route a start through
+    /// `embeddedActionTaken`/`takeEmbeddedAction` at all: the passphrase field
+    /// is on that surface, and handing the value out through a signal would put
+    /// a plaintext secret in a host with no other use for it. This flag governs
+    /// the panel's ENABLEMENT, and `routesEmbeddedAction` keeps the table
+    /// honest for any caller that does route one.
+    readonly property bool embeddedStartHosted: true
+
+    /// "restart" is NOT routed, and this is structural rather than unfinished
+    /// wiring.
+    ///
+    /// A restart is a stop followed by a start, whose two refusals are different
+    /// sentences a user should see separately, and nothing here sequences the
+    /// pair. It belongs to the node's configuration panel.
+    ///
+    /// **Split from `embeddedStartHosted`, which it shared until this change.**
+    /// One flag was right while both acts were unhosted for one shared reason;
+    /// with start hosted, one flag would have enabled a restart that reaches
+    /// nobody — the dead end `embedded-state` exists to remove, re-created one
+    /// state along.
+    readonly property bool embeddedRestartHosted: false
 
     /// Re-read what Embedded's home and node are doing.
     ///
@@ -219,10 +249,62 @@ Item {
         callPlain("getEmbeddedIdentity", [], function (reply) {
             root.embeddedHome = reply.home || "";
             root.embeddedIdentityExists = reply.exists === true;
+            // Read as `!== false` rather than `=== true`, so a reply from a
+            // build that predates this field does not read as an unencrypted
+            // key and start a node unasked. An absent answer means "assume one
+            // is needed", which is the direction that costs a dismissal rather
+            // than a start nobody asked for.
+            root.embeddedEncrypted = reply.encrypted !== false;
         });
         callPlain("getNodeStatus", [], function (reply) {
             root.embeddedRunning = reply.running === true;
             root.embeddedServing = reply.serving === true;
+        });
+    }
+
+    /// Start the embedded node, with `passphrase` — empty for an unencrypted
+    /// key.
+    ///
+    /// **The one act this host performs on the Embedded surface's behalf rather
+    /// than routing.** `RepoList` calls it directly, both for the start it
+    /// issues by itself and for the one a typed passphrase submits, because the
+    /// passphrase lives on that surface: handing it out through
+    /// `embeddedActionTaken(kind)` would either widen that signal to carry a
+    /// plaintext secret or make this host hold one it has no other use for.
+    ///
+    /// `callSettings`, not `callPlain`: a refused start is the useful result —
+    /// it names the passphrase that did not unlock the key, the socket in use
+    /// or the home in the way — and the panel displays it verbatim.
+    ///
+    /// `startPending` is cleared by the REPLY, never by the call having been
+    /// made, so a node that never answers stays `starting` rather than settling
+    /// into "not serving" with its start still in flight.
+    ///
+    /// `startSucceeded` latches on the first success and is never cleared here.
+    /// It answers "did this module put a node on that socket", and stopping or
+    /// crashing afterwards does not make the answer no — while clearing it would
+    /// make this surface warn about contention with a node it started itself,
+    /// which is the defect the field exists to prevent.
+    function startEmbeddedNode(passphrase) {
+        if (!backend || embeddedStartPending) return;
+        embeddedStartPending = true;
+        embeddedStartError = "";
+        callSettings("startNode", [passphrase], function (reply) {
+            root.embeddedStartPending = false;
+            if (reply && reply.error) {
+                root.embeddedStartError = reply.error;
+                return;
+            }
+            // Only a `started:true` reply counts. A reply that merely arrived is
+            // not a started node.
+            if (reply && reply.started === true) {
+                root.embeddedStartSucceeded = true;
+            } else {
+                root.embeddedStartError = "the node did not report itself started";
+            }
+            // The node's own report is the authority on what happened; this
+            // asks rather than assuming the start moved `running` and `serving`.
+            root.refreshEmbedded();
         });
     }
 
@@ -320,11 +402,17 @@ Item {
     /// the no-identity state can produce, and be wrong on the day a start
     /// request becomes routable.
     ///
-    /// `start` and `restart` reach nothing, deliberately — see
-    /// `embeddedStartHosted` for the four structural reasons, the last of which
-    /// is that `getEmbeddedIdentity()` carries no field saying whether the key
-    /// is encrypted. The panel renders them not-enabled and says so, so this is
-    /// belt and braces rather than the only guard.
+    /// `restart` reaches nothing, deliberately — see `embeddedRestartHosted`.
+    /// The panel renders it not-enabled and says so, so this is belt and braces
+    /// rather than the only guard.
+    ///
+    /// `start` is hosted and has a branch here, although the panel does not use
+    /// it: `RepoList` calls `startEmbeddedNode` directly, because the passphrase
+    /// a start may need lives on that surface and this signal carries only a
+    /// kind. The branch exists because the flag says the kind is routed, and a
+    /// hosted kind with no branch is the disagreement `routesEmbeddedAction`
+    /// was written to make impossible. It starts with an empty passphrase,
+    /// which is the only value a caller carrying no secret can mean.
     ///
     /// **Routed via `routesEmbeddedAction()` rather than by an `if` per kind**,
     /// because the enablement the panel renders and the routing this performs
@@ -337,6 +425,7 @@ Item {
     function takeEmbeddedAction(kind) {
         if (!routesEmbeddedAction(kind)) return;
         if (kind === "setup") openSetup();
+        else if (kind === "start") startEmbeddedNode("");
     }
 
     /// Whether this host routes a request of this kind — the same question the
@@ -355,8 +444,8 @@ Item {
     function routesEmbeddedAction(kind) {
         switch (kind) {
         case "setup":              return embeddedSetupHosted;
-        case "start":
-        case "restart":            return embeddedStartHosted;
+        case "start":              return embeddedStartHosted;
+        case "restart":            return embeddedRestartHosted;
         default:                   return false;
         }
     }
@@ -933,21 +1022,34 @@ Item {
                         }
                     }
 
-                    // Local's detail. Absent — not blank, not a placeholder —
-                    // in any other mode, because in Explore you are not
-                    // operating as an identity at all and showing one there
-                    // would be noise. Same reasoning as the Local segment being
-                    // absent rather than disabled when there is no profile.
+                    // The detail of any mode that HAS an identity — Local and
+                    // Embedded both. Absent, not blank and not a placeholder,
+                    // in a mode that has none: in Explore you are not operating
+                    // as anyone, so an empty slot there is noise and a
+                    // placeholder is worse, because it suggests a value that is
+                    // loading. Same reasoning as the Local segment being absent
+                    // rather than disabled when there is no profile.
                     NodeIdentity {
                         id: nodeIdentity
                         objectName: "nodeIdentity"
                         // Two conditions, and they are different questions:
-                        // this mode is the one the identity describes, AND
-                        // there is an identity to describe. The component
-                        // already hides itself for the second (it must, or a
-                        // caller could render an empty slot); this adds the
-                        // first.
-                        visible: root.mode === "local" && nodeIdentity.nodeId !== ""
+                        // this MODE is one that has an identity, AND there is
+                        // an identity to describe. The component already hides
+                        // itself for the second (it must, or a caller could
+                        // render an empty slot); this adds the first.
+                        //
+                        // **`modeHasIdentity`, never a list of modes**, and
+                        // that is the fix rather than a tidy-up. This read
+                        // `root.mode === "local"`, so Embedded showed nothing —
+                        // in the mode where the confusion is most likely,
+                        // because its identity is one this module created
+                        // rather than one the user made, and where
+                        // `radicle_impl.h` most needs a view to say which DID it
+                        // is acting as. A list is one somebody has to notice and
+                        // extend; the rule is right for a mode added later
+                        // without anyone editing this line. See
+                        // `SourceState.modeHasIdentity`.
+                        visible: root.modeHasIdentity && nodeIdentity.nodeId !== ""
                         nodeId: root.caps.nodeId || ""
                         // The WHOLE DID, at every width. This element used to be
                         // the one that yielded — `ElideMiddle` down to a 120px

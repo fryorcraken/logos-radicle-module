@@ -72,6 +72,24 @@ QtObject {
     /// to remove. So both are the no-identity state. See `SetupFlow.qml`.
     property bool identityExists: false
 
+    /// `getEmbeddedIdentity().encrypted` — whether the signing key is sealed,
+    /// OBSERVED from the key on disk rather than echoed from a passphrase
+    /// somebody once typed.
+    ///
+    /// **This one field is what splits the stopped state in two.** The node is
+    /// handed an already-decrypted key when it is built, so a passphrase must
+    /// be supplied at start or not at all: an unencrypted key can therefore be
+    /// started here and only here with no secret, and an encrypted one cannot
+    /// be started without asking. Without this field a surface could only
+    /// prompt always — wrong for an unencrypted key — or attempt a start and
+    /// read the failure, which is a destructive probe rather than a question.
+    ///
+    /// Defaults to `true`, and that direction is deliberate: a forgotten wiring
+    /// then asks for a passphrase that is not needed, which is visible and
+    /// costs a user one dismissal. The opposite default starts a node unasked
+    /// on a reply nobody supplied.
+    property bool encrypted: true
+
     /// `getNodeStatus().running` — the module's own bookkeeping.
     property bool running: false
 
@@ -91,6 +109,25 @@ QtObject {
     /// the way; a summary in the view's own words drops each of those, and a
     /// wrong passphrase is only actionable when it is named.
     property string startError: ""
+
+    /// Whether a `startNode` THIS SURFACE issued was answered with a success.
+    ///
+    /// The one fact that distinguishes a node this module started from one it
+    /// found, because `getNodeStatus()` reports the same two fields for both.
+    ///
+    /// **This is the defect the setup flow shipped.** Step 5 rendered an amber
+    /// "a node is already answering on the resolved socket. Starting a second
+    /// one would contend for it" directly above its own green "Running as
+    /// did:key:…" and "The control socket is answering." Both sentences were
+    /// derived from true readings, and together they described a conflict that
+    /// did not exist: the node being warned about was the one the wizard had
+    /// just started. A correct fact rendered as a hazard when it describes the
+    /// user's own success is worse than no fact, because it sends a user
+    /// looking for a second node that is not there.
+    ///
+    /// Held separately from `startError` being empty, which is NOT the same
+    /// question: no start attempted also leaves it empty.
+    property bool startSucceeded: false
 
     // ---- which requests reach somebody ------------------------------------
     //
@@ -112,14 +149,24 @@ QtObject {
     /// Whether the request to open the guided setup reaches a host.
     property bool setupHosted: false
 
-    /// Whether the requests to start or restart the node reach a host.
+    /// Whether the request to start the node reaches a host.
     ///
-    /// One flag for both: they route to the same surface for the same reason —
-    /// both need a passphrase, and `getEmbeddedIdentity()` reports no field
-    /// saying whether an existing identity's key is encrypted, so nothing can
-    /// even determine whether one is needed. A host able to carry out one is
-    /// able to carry out the other.
+    /// **Separate from `restartHosted`, and they were once one flag.** The two
+    /// shared it while both were unhosted for one shared reason: neither could
+    /// ask for a passphrase, because nothing reported whether one was needed.
+    /// That reason is gone for start — `encrypted` answers it, and this surface
+    /// asks — and survives for restart, so one flag would now make hosting a
+    /// start silently enable a restart that reaches nobody. That is the dead
+    /// end this capability exists to remove, re-created one state along.
     property bool startHosted: false
+
+    /// Whether the request to RESTART the node reaches a host.
+    ///
+    /// False, and structurally rather than as unfinished wiring: a restart is a
+    /// stop followed by a start, whose two refusals are different sentences a
+    /// user should see separately, and nothing sequences the pair. It belongs
+    /// to the durable configuration panel.
+    property bool restartHosted: false
 
     // ---- the derivation ---------------------------------------------------
 
@@ -176,6 +223,75 @@ QtObject {
         current === "starting" || current === "notServing"
         || current === "runningEmpty"
 
+    // ---- starting, and who presses the control ----------------------------
+
+    /// Whether the module should start this node **without being asked**.
+    ///
+    /// A user who has set an embedded node up has asked for a node. Requiring
+    /// them to press a control the module could have pressed itself — every
+    /// time the mode is opened, for the life of the mode — is asking for an act
+    /// with one possible answer. An unencrypted key can be started here and
+    /// only here with no secret, so this is the one case where starting unasked
+    /// costs the user nothing to decline, because there is nothing to decline.
+    ///
+    /// **A decision, not an act.** This component issues no calls; `RepoList`
+    /// watches this going true and issues exactly one. Splitting them is what
+    /// makes "starts by itself" a question about values, answerable with no
+    /// backend anywhere — and it is what makes "issued once per arrival" an
+    /// edge on a derived boolean rather than a counter somebody maintains.
+    ///
+    /// **Keyed on `stopped` and on nothing else**, which is what keeps it out
+    /// of the four states where it would be wrong: in `blocked` and
+    /// `noIdentity` there is nothing to start; in `notServing` the runtime is
+    /// still loaded and a bare start would be refused; in `startFailed` a start
+    /// has already been tried and answered, and retrying unasked would loop
+    /// against a backend that refuses every time. `starting` is excluded by the
+    /// same term, which is what stops a second start going out under the first.
+    ///
+    /// **Dropping the `current === "stopped"` term turns
+    /// `test_no_autostart_outside_the_stopped_state` red**, with every one of
+    /// its seven rows wrong — verified by mutation. That test walks all seven
+    /// states with `encrypted:false` held, which is the value that would make an
+    /// over-eager derivation say yes everywhere.
+    readonly property bool wantsAutoStart: current === "stopped" && !encrypted
+
+    /// Whether the surface should offer a field to type a passphrase into.
+    ///
+    /// **Derived from the key's own nature, never from a start having failed.**
+    /// A prompt keyed on an error would be a consequence of something going
+    /// wrong rather than of the identity being what it is — so it would not
+    /// appear on the first opening, where it is needed, and would appear after
+    /// an unrelated refusal on an unencrypted key, where there is nothing to
+    /// ask for.
+    ///
+    /// `startFailed` is included on purpose as well as `stopped`: a mistyped
+    /// passphrase is the likeliest refusal, and the field has to survive it so
+    /// the user can correct what was refused.
+    readonly property bool wantsPassphrase:
+        encrypted && (current === "stopped" || current === "startFailed")
+
+    /// Whether a node NOBODY here started is answering on the resolved socket.
+    ///
+    /// The distinction the setup flow got wrong. A node answering the socket is
+    /// an obstacle only when this module did not put it there; when the
+    /// module's own start is what did, that same reading is the outcome the
+    /// user wanted. `getNodeStatus()` reports identical fields for both, so the
+    /// one thing that separates them is whether a start this surface issued was
+    /// answered with a success.
+    ///
+    /// A node found already serving when this surface has started none is still
+    /// reported, because that one genuinely is somebody else's and a start
+    /// against it will be refused.
+    ///
+    /// **Dropping the `!startSucceeded` term reddens three named tests**, and
+    /// the third reproduces the user's screenshot: `test_a_node_this_surface_
+    /// started_is_not_reported_as_contention` and `test_a_node_the_surface_did_
+    /// not_start_is_still_reported` here, and
+    /// `test_a_node_this_surface_started_is_not_rendered_as_contention` in
+    /// `tst_embedded_panel.qml`, whose failure message is the contention
+    /// sentence rendered over the surface's own success. Verified by mutation.
+    readonly property bool foundForeignNode: serving && !startSucceeded
+
     // ---- what the panel says ---------------------------------------------
 
     /// The sentence for the state in force. Verbatim backend text where the
@@ -195,7 +311,14 @@ QtObject {
                  + "its own identity — a new one this module creates, separate "
                  + "from any Radicle node you already run.";
         case "stopped":
-            return "The embedded node is set up but not running. "
+            // Two stopped nodes, told apart by the key rather than by anything
+            // the node reports. The unencrypted one is about to be started by
+            // this surface, so it is passed through rather than waited in — a
+            // sentence offering a control the module is already pressing would
+            // be asking for an act with one possible answer.
+            return encrypted
+                 ? "The embedded node needs its passphrase to start."
+                 : "The embedded node is set up but not running. "
                  + "Repositories are not being fetched.";
         case "starting":
             return "Starting the node…";
@@ -205,7 +328,29 @@ QtObject {
             return "The node has stopped answering its control socket. "
                  + "It is still loaded but no longer serving.";
         default:
-            return "No repositories yet. This node lists what it is seeding.";
+            // Two sentences, not two states, and both requirements bind here at
+            // once: the running-and-empty state MUST say this node lists what it
+            // is seeding — so an empty list reads as a node with nothing seeded
+            // rather than as one that has lost something — and a node THIS
+            // SURFACE DID NOT START must be reported as already answering the
+            // socket, because that one is somebody else's.
+            //
+            // So the seeding sentence is unconditional and the contention
+            // sentence is appended where it is true. Making them alternatives
+            // was the first thing tried and it dropped the seeding sentence for
+            // a foreign node, which is the state where "what is listed is not
+            // this module's storage" matters most.
+            //
+            // The contention sentence appears ONLY when `foundForeignNode`
+            // holds. Rendered over this surface's own successful start it is the
+            // defect the setup flow shipped: a hazard describing the user's own
+            // success, sending them to look for a second node that is not there.
+            return "No repositories yet. This node lists what it is seeding."
+                 + (foundForeignNode
+                    ? " A node is already answering on the resolved socket and "
+                    + "this module did not start it, so what is listed is that "
+                    + "node's storage."
+                    : "");
         }
     }
 
@@ -219,8 +364,12 @@ QtObject {
     readonly property string actionLabel: {
         switch (current) {
         case "blocked":       return "";
+        // A stopped node with an UNENCRYPTED key offers nothing: this surface
+        // starts it without being asked, and a control beside a start already
+        // issued would duplicate it. It is the one state whose next act is the
+        // module's rather than the user's.
+        case "stopped":       return encrypted ? "Start the node" : "";
         case "noIdentity":    return "Set up the embedded node";
-        case "stopped":       return "Start the node";
         case "starting":      return "";
         case "startFailed":   return "Try again";
         case "notServing":    return "Restart the node";
@@ -234,7 +383,10 @@ QtObject {
     readonly property string actionKind: {
         switch (current) {
         case "noIdentity":    return "setup";
-        case "stopped":       return "start";
+        // Paired with `actionLabel` above: no label, no kind. Keeping the two
+        // keyed on the same condition is what stops a state naming an act with
+        // no words or offering words with no act.
+        case "stopped":       return encrypted ? "start" : "";
         case "startFailed":   return "start";
         case "notServing":    return "restart";
         default:              return "";
@@ -246,8 +398,8 @@ QtObject {
     readonly property bool actionHosted: {
         switch (actionKind) {
         case "setup":              return setupHosted;
-        case "start":
-        case "restart":            return startHosted;
+        case "start":              return startHosted;
+        case "restart":            return restartHosted;
         default:                   return false;
         }
     }
@@ -286,10 +438,16 @@ QtObject {
     /// control that is greyed with nothing beside it gives the user no other
     /// thing to try, and reads as broken.
     ///
-    /// The wording is careful about which of three claims it makes. It says
-    /// starting is **not yet available from here** — not that a start *failed*
-    /// (nothing was attempted) and not that the node **cannot be started** (it
-    /// can, from a command line, and will be from the settings surface once that
+    /// **It names the act that is unavailable**, which in this version is only
+    /// ever the restart: start is hosted now, so a note saying "starting is not
+    /// available" would describe the one act that is. The note is derived from
+    /// `actionLabel` rather than written per state, so a future unhosted act
+    /// gets the right noun without anyone remembering to add one.
+    ///
+    /// The wording is careful about which of three claims it makes. It says the
+    /// act is **not yet available from here** — not that it *failed* (nothing
+    /// was attempted) and not that the node **cannot** be restarted (it can,
+    /// from a command line, and will be from the configuration panel once that
     /// exists). Naming the surface it will live on is what turns a dead end into
     /// a wait.
     ///
@@ -316,8 +474,9 @@ QtObject {
     /// `test_a_blocked_home_claims_no_unavailability` covers that.
     readonly property string actionUnavailableNote:
         (actionKind !== "" && !actionHosted && !startPending)
-            ? "Starting the node is not yet available from here. It needs the "
-            + "passphrase that unlocks the key, which this surface has no way "
-            + "to ask for."
+            ? actionLabel + " is not yet available from here. A restart is a "
+            + "stop and then a start, whose refusals are different sentences "
+            + "you should see separately, and nothing here sequences the pair. "
+            + "It belongs to the node's configuration panel."
             : ""
 }

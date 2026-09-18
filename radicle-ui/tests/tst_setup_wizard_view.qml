@@ -50,7 +50,14 @@ Item {
             { url: "https://seed.example.org", alias: "example", source: "builtin" }
         ]
 
+        /// Every call the flow issued, in order. Recorded so "this act issues no
+        /// call" is assertable as an absence rather than assumed — without it,
+        /// a test claiming nothing was called is claiming nothing at all.
+        property var callLog: []
+        function reset() { callLog = []; }
+
         function capabilities(cb) {
+            callLog.push("getCapabilities");
             cb({ mode: mode,
                  startableModes: startableModes,
                  modeUnavailableReason: "",
@@ -58,23 +65,29 @@ Item {
                  nodeId: nodeId });
         }
         function identity(cb) {
+            callLog.push("getEmbeddedIdentity");
             cb({ home: "/home/u/.local/share/basecamp/radicle",
                  exists: identityExists, nodeId: nodeId, problem: "" });
         }
         function nodeStatus(cb) {
+            callLog.push("getNodeStatus");
             cb({ running: false, serving: false, home: "", socket: "",
                  reason: "" });
         }
-        function seeds(cb) { cb({ items: seedItems }); }
+        function seeds(cb) {
+            callLog.push("listKnownSeeds");
+            cb({ items: seedItems });
+        }
         function create(a, p, cb) {
+            callLog.push("createEmbeddedIdentity:" + a);
             cb({ created: true, nodeId: "did:key:z6MkMADE", home: "",
                  alias: a, encrypted: p !== "" });
         }
-        function start(p, cb) {
-            cb({ started: true, home: "", socket: "",
-                 nodeId: "did:key:z6MkRUNNING", listening: [] });
-        }
+        // No `start`: the flow has no `startNode` to inject it into, and a fake
+        // offering one would let a future edit wire a start back in and stay
+        // green.
         function setting(k, v, cb) {
+            callLog.push("setSetting:" + k + ":" + v);
             cb({ mode: v, radHome: "", radSocket: "", gitPath: "",
                  remoteSeed: "" });
         }
@@ -160,7 +173,8 @@ Item {
             wizard.flow.fetchNodeStatus = function (cb) { fake.nodeStatus(cb); };
             wizard.flow.fetchSeeds = function (cb) { fake.seeds(cb); };
             wizard.flow.createIdentity = function (a, p, cb) { fake.create(a, p, cb); };
-            wizard.flow.startNode = function (p, cb) { fake.start(p, cb); };
+            // No `startNode`: the flow has no such property. Its absence is the
+            // requirement — this setup starts no node in any step.
             wizard.flow.saveSetting = function (k, v, cb) { fake.setting(k, v, cb); };
             wizard.flow.reset();
             wizard.flow.runPreflight();
@@ -706,47 +720,66 @@ Item {
         /// resident for the rest of the wizard's life, readable through the QML
         /// inspector that this repo's dev Basecamp ships with compiled in.
         ///
-        /// Both consumers have run by the time the start step reports a started
-        /// node: `createEmbeddedIdentity` at identity, `startNode` at start.
-        /// That is the moment there is nothing left to hold it for.
-        function test_the_passphrase_does_not_outlive_the_calls_that_use_it() {
+        /// **It has exactly ONE consumer now** — `createEmbeddedIdentity` — and
+        /// the lifetime is correspondingly shorter: it used to be held past the
+        /// identity step because the start step needed it, and this flow starts
+        /// nothing. So the field is cleared on the reply reporting the identity
+        /// created, which is the moment there is nothing left to hold it for.
+        function test_the_passphrase_does_not_outlive_the_call_that_uses_it() {
             goTo("identity");
             var field = harness.findByName(wizard, "identityPassphrase");
             verify(field !== null, "the passphrase control must be present");
 
             field.text = "correct horse battery";
+            // Read it back BEFORE the call, so this proves a clearing happened
+            // rather than that the field was never filled.
+            compare(String(field.text), "correct horse battery",
+                    "precondition: the field holds what was typed");
+
             wizard.flow.submitIdentity("tester", wizard.passphrase);
             compare(wizard.flow.identityExists, true,
                     "precondition: the identity was created");
 
-            goTo("start");
-            // Read it back before the start call, so this test proves the
-            // clearing happens at start rather than that the field was never
-            // filled.
-            compare(String(field.text), "correct horse battery",
-                    "precondition: the start step still has the passphrase to "
-                    + "hand to startNode");
-
-            wizard.flow.submitStart(wizard.passphrase);
-            compare(wizard.flow.nodeStarted, true,
-                    "precondition: the node started");
-
             compare(String(field.text), "",
-                    "the plaintext passphrase must not stay resident once both "
-                    + "calls that need it have been made");
+                    "the plaintext passphrase must not stay resident once the "
+                    + "one call that needs it has been answered");
+        }
+
+        /// **A refused creation KEEPS the passphrase**, so the retry does not
+        /// make the user retype it.
+        ///
+        /// This is what the clearing has to be keyed on a REPLY for: a clear in
+        /// the button's handler runs before the reply and would destroy the
+        /// value a retry needs. The pair with the test above is the requirement
+        /// — a clearing that fired on every submission would pass that one and
+        /// fail this.
+        function test_a_refused_creation_keeps_the_passphrase_for_the_retry() {
+            goTo("identity");
+            var field = harness.findByName(wizard, "identityPassphrase");
+            field.text = "correct horse battery";
+
+            wizard.flow.createIdentity = function (a, p, cb) {
+                cb({ error: "alias must not contain whitespace" });
+            };
+            wizard.flow.submitIdentity("tester", wizard.passphrase);
+            compare(wizard.flow.identityExists, false,
+                    "precondition: the creation was refused");
+
+            compare(String(field.text), "correct horse battery",
+                    "a refusal must leave the passphrase in place, so the retry "
+                    + "does not make the user retype it");
         }
 
         /// **A passphrase does not outlive the showing it was typed into.**
         ///
-        /// The clearing above is keyed on `nodeStarted`, which covers only the
-        /// showing that runs to completion. This is the abandoned one: the user
-        /// types a passphrase, creates the identity — which consumes it once —
-        /// and then closes the wizard WITHOUT starting the node. `SetupWizard`
-        /// is a single instance the host toggles `visible` on, never destroyed,
-        /// and `SetupFlow.reset()` cannot reach a `TextField` that lives in the
-        /// view. So without a clear at `show()`, the next showing resumes at the
-        /// start step holding the earlier session's plaintext passphrase and
-        /// hands it to `startNode()` with no re-entry by the user.
+        /// The reply-keyed clearing above covers the showing whose creation is
+        /// ANSWERED. This is the abandoned one: the user types a passphrase and
+        /// closes the wizard without submitting at all. `SetupWizard` is a single
+        /// instance the host toggles `visible` on, never destroyed, and
+        /// `SetupFlow.reset()` cannot reach a `TextField` that lives in the view.
+        /// So without a clear at `show()`, the secret stays resident for the rest
+        /// of the module's life, readable through the QML inspector this repo's
+        /// dev Basecamp ships with compiled in.
         ///
         /// Asserted on the field rather than on `wizard.passphrase`, because
         /// the property is a live binding through `passphraseSwitch.checked` —
@@ -759,56 +792,22 @@ Item {
             verify(field !== null, "the passphrase control must be present");
 
             field.text = "correct horse battery";
-            wizard.flow.submitIdentity("tester", wizard.passphrase);
-            compare(wizard.flow.identityExists, true,
-                    "precondition: the identity was created");
+            // The abandonment: nothing is submitted, so no reply-keyed clearing
+            // can have run. That is what makes this the case the outer clearing
+            // exists for.
+            compare(wizard.flow.identityCreatedHere, false,
+                    "precondition: this showing is abandoned before any "
+                    + "creation is answered");
             compare(String(field.text), "correct horse battery",
-                    "precondition: creating an identity does not itself clear "
-                    + "the field — the start step still needs it");
+                    "precondition: the field still holds it");
 
-            // The abandonment: the host lowers the wizard without a start
-            // having been made. `nodeStarted` is still false, so the existing
-            // clearing has not run.
-            compare(wizard.flow.nodeStarted, false,
-                    "precondition: this showing is abandoned before any start");
-
-            // A later showing. `identityExists` is now true, so the flow
-            // resumes past identity — at the very step whose control would
-            // hand the passphrase to startNode().
+            // A later showing.
             fake.identityExists = true;
             wizard.show();
-            compare(wizard.flow.step, "start",
-                    "precondition: the reopened flow resumes at the start step");
 
             compare(String(field.text), "",
                     "a passphrase typed in an abandoned showing must not be "
-                    + "carried into a later one and resubmitted as if freshly "
-                    + "entered");
-        }
-
-        /// The other half of the same rule: clearing per showing must NOT break
-        /// the retry a refused start depends on. `submitStart` failing leaves
-        /// the user on the start step within ONE showing, and the passphrase
-        /// they typed has to survive that — which is why the clear is at
-        /// `show()` and not in the start button's `onClicked`.
-        function test_a_refused_start_keeps_the_passphrase_for_the_retry() {
-            wizard.show();
-            goTo("identity");
-            var field = harness.findByName(wizard, "identityPassphrase");
-            field.text = "correct horse battery";
-            wizard.flow.submitIdentity("tester", wizard.passphrase);
-
-            goTo("start");
-            wizard.flow.startNode = function (p, cb) {
-                cb({ error: "the key could not be unlocked" });
-            };
-            wizard.flow.submitStart(wizard.passphrase);
-            compare(wizard.flow.nodeStarted, false,
-                    "precondition: the start was refused");
-
-            compare(String(field.text), "correct horse battery",
-                    "a refusal must leave the passphrase in place, so the retry "
-                    + "does not make the user retype it");
+                    + "carried into a later one");
         }
 
         // ---- the network step -----------------------------------------------
@@ -863,75 +862,80 @@ Item {
                     + "from listKnownSeeds at all");
         }
 
-        // ---- the start step -------------------------------------------------
+        // ---- the setup ends by finishing ------------------------------------
+        //
+        // What stood here was a start step and a confirm step. Both are gone —
+        // `SetupFlow.steps` records why — and neither left a test behind that
+        // still asserts anything: the start step's `listening` display, the
+        // confirm step's restatement and its clipboard round trip all described
+        // screens that no longer exist. The clipboard behaviour survives where
+        // it is still reachable, on `NodeIdentity` in the header
+        // (`tst_source.qml`), which is the component the DID moved to.
 
-        /// An empty `listening` is DISPLAYED, not omitted: it is the state that
-        /// confirms the outbound-only default.
-        function test_an_empty_listening_list_is_displayed_rather_than_omitted() {
-            goTo("start");
-            wizard.flow.submitStart("");
-            compare(wizard.flow.nodeStarted, true, "precondition: it started");
+        /// **The last step's forward control ENDS the setup**, rather than
+        /// moving to a further step — and it is the same control, not a second
+        /// one beside it.
+        function test_the_last_steps_forward_control_finishes() {
+            goTo("network");
+            verify(wizard.flow.onLastStep,
+                   "precondition: network is the last step");
 
-            var node = harness.findByName(wizard, "startListening");
-            verify(node !== null && node.visible,
-                   "the listening state must be on screen");
-            var t = String(node.text).toLowerCase();
-            verify(t.indexOf("no address") !== -1,
-                   "an empty listening list must be stated as listening on no "
-                   + "address, got: " + t);
+            var reported = 0;
+            function record() { reported = reported + 1; }
+            wizard.closed.connect(record);
+
+            var next = harness.findByName(wizard, "wizardNext");
+            verify(next !== null && next.visible,
+                   "the forward control must still be offered on the last step");
+            verify(next.enabled, "and enabled — it has an act to perform");
+            verify(String(next.text).toLowerCase().indexOf("finish") !== -1,
+                   "and must name finishing rather than advancing, got: "
+                   + next.text);
+
+            next.clicked();
+
+            compare(reported, 1,
+                    "invoking it must report that the user has finished");
+            compare(wizard.flow.step, "network",
+                    "and must NOT have moved to a further step");
+
+            wizard.closed.disconnect(record);
         }
 
-        // ---- the confirm step -----------------------------------------------
+        /// **Ending the setup issues no call.** The steps made every write this
+        /// flow makes; ending is the surface coming down.
+        function test_ending_the_setup_issues_no_call() {
+            goTo("network");
+            fake.reset();
 
-        function test_the_confirm_step_restates_the_consequence_with_its_effect() {
-            goTo("confirm");
-            var t = harness.textOf("confirmSeparateIdentity").toLowerCase();
+            harness.findByName(wizard, "wizardNext").clicked();
 
-            verify(t.indexOf("new identity") !== -1,
-                   "the confirm step must state that this is a new identity, "
-                   + "got: " + t);
-            verify(t.indexOf("delegate authorises") !== -1
-                   || t.indexOf("delegate authorizes") !== -1,
-                   "and that a private repository reaches this node only once "
-                   + "a delegate authorises this DID, got: " + t);
+            compare(fake.callLog.length, 0,
+                    "no call may be issued by finishing: "
+                    + JSON.stringify(fake.callLog));
         }
 
-        /// **Copying puts the allow line on the clipboard**, verified by
-        /// reading the clipboard back rather than by trusting that `copy()`
-        /// was called. `TextEdit.copy()` reports failure through no channel, so
-        /// the call having been made proves nothing.
-        function test_copying_puts_the_allow_line_on_the_clipboard() {
-            goTo("identity");
-            wizard.flow.submitIdentity("tester", "");
-            goTo("confirm");
+        /// The forward control is a NEXT on every other step, so the test above
+        /// is not satisfied by a wizard whose forward control always closes.
+        function test_the_forward_control_advances_on_every_other_step() {
+            goTo("embedded");
+            verify(!wizard.flow.onLastStep, "precondition");
 
-            var cmd = harness.findByName(wizard, "confirmAllowCommand");
-            verify(cmd !== null, "the allow line must be present");
-            verify(cmd.command.indexOf("did:key:z6MkMADE") !== -1,
-                   "carrying the created DID, got: " + cmd.command);
+            var reported = 0;
+            function record() { reported = reported + 1; }
+            wizard.closed.connect(record);
 
-            cmd.clearConfirmation();
-            var copied = cmd.copyToClipboard();
-            verify(copied,
-                   "the copy must be reported only after the clipboard was "
-                   + "verified to hold the line");
-            verify(cmd.clipboardHolds(cmd.command),
-                   "the clipboard must actually hold the allow line");
-        }
+            var next = harness.findByName(wizard, "wizardNext");
+            verify(String(next.text).toLowerCase().indexOf("next") !== -1,
+                   "an intermediate step's control must name advancing, got: "
+                   + next.text);
+            next.clicked();
 
-        /// The negative control for the assertion above: `clipboardHolds` must
-        /// be able to say NO. Without this, a verifier stuck at true would make
-        /// the copy test pass while proving nothing — the same shape as a fake
-        /// returning identical data for every input.
-        function test_the_clipboard_check_can_fail() {
-            goTo("confirm");
-            var cmd = harness.findByName(wizard, "confirmAllowCommand");
-            verify(cmd !== null);
+            compare(wizard.flow.step, "identity",
+                    "and must advance rather than end the setup");
+            compare(reported, 0, "reporting nothing");
 
-            cmd.copyToClipboard();
-            verify(!cmd.clipboardHolds("something that was never copied"),
-                   "clipboardHolds must return false for text the clipboard "
-                   + "does not hold, or the copy assertion proves nothing");
+            wizard.closed.disconnect(record);
         }
 
         // ---- the refusal surface --------------------------------------------

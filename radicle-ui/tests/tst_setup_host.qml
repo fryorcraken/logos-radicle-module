@@ -75,11 +75,9 @@ Item {
             callLog.push("createEmbeddedIdentity:" + alias);
             cb({ created: true, nodeId: "did:key:z6MkCREATED", home: home });
         }
-        function start(passphrase, cb) {
-            callLog.push("startNode");
-            serving = true;
-            cb({ started: true, nodeId: "did:key:z6MkSTARTED", listening: [] });
-        }
+        // No `start`: this fake stands behind the WIZARD's injected calls, and
+        // the wizard has none that starts a node. A fake offering one would let
+        // a future edit wire a start back into the flow and stay green.
         function setting(key, value, cb) {
             callLog.push("setSetting:" + key + ":" + value);
             if (key === "mode") mode = value;
@@ -104,15 +102,29 @@ Item {
     property string embeddedPathsProblem: ""
     property string embeddedHome: "/basecamp/embedded-home"
     property bool embeddedIdentityExists: false
+    /// Encrypted, so the Embedded panel sitting under these tests is INERT: it
+    /// starts nothing by itself. Every test here is about the setup's host, and
+    /// a panel quietly issuing starts underneath them would be a second thing
+    /// happening in each.
+    property bool embeddedEncrypted: true
     property bool embeddedRunning: false
     property bool embeddedServing: false
     property bool embeddedStartPending: false
     property string embeddedStartError: ""
+    property bool embeddedStartSucceeded: false
 
     /// The host's own answer to "which requests do I route", exactly as
-    /// `Main.qml` reports it: the setup is hosted, a start is not.
+    /// `Main.qml` reports it: the setup and a start are hosted, a restart is
+    /// not.
     property bool embeddedSetupHosted: true
-    property bool embeddedStartHosted: false
+    property bool embeddedStartHosted: true
+    property bool embeddedRestartHosted: false
+
+    /// Every `startEmbeddedNode` the panel issued. `Main.qml` performs the call;
+    /// here it is only recorded, so a test can tell "the panel asked this host
+    /// to start" from "the setup was raised".
+    property var startLog: []
+    function startEmbeddedNode(passphrase) { startLog.push(passphrase); }
 
     property var listLog: []
     function call(method, args, onOk, onFail) {
@@ -146,13 +158,14 @@ Item {
     function takeEmbeddedAction(kind) {
         if (!routesEmbeddedAction(kind)) return;
         if (kind === "setup") openSetup();
+        else if (kind === "start") startEmbeddedNode("");
     }
 
     function routesEmbeddedAction(kind) {
         switch (kind) {
         case "setup":              return embeddedSetupHosted;
-        case "start":
-        case "restart":            return embeddedStartHosted;
+        case "start":              return embeddedStartHosted;
+        case "restart":            return embeddedRestartHosted;
         default:                   return false;
         }
     }
@@ -226,8 +239,10 @@ Item {
             flow.fetchIdentity: function (cb) { fake.identity(cb); }
             flow.fetchNodeStatus: function (cb) { fake.nodeStatus(cb); }
             flow.fetchSeeds: function (cb) { fake.seeds(cb); }
+            // No `flow.startNode`: the flow has no such property, and its
+            // absence is the requirement — the setup starts no node in any
+            // step, for any reason.
             flow.createIdentity: function (a, p, cb) { fake.create(a, p, cb); }
-            flow.startNode: function (p, cb) { fake.start(p, cb); }
             flow.saveSetting: function (k, v, cb) { fake.setting(k, v, cb); }
 
             onClosed: {
@@ -256,16 +271,20 @@ Item {
             harness.embeddedPathsProblem = "";
             harness.embeddedHome = "/basecamp/embedded-home";
             harness.embeddedIdentityExists = false;
+            harness.embeddedEncrypted = true;
             harness.embeddedRunning = false;
             harness.embeddedServing = false;
             harness.embeddedStartPending = false;
             harness.embeddedStartError = "";
+            harness.embeddedStartSucceeded = false;
             harness.embeddedSetupHosted = true;
-            harness.embeddedStartHosted = false;
+            harness.embeddedStartHosted = true;
+            harness.embeddedRestartHosted = false;
             harness.settingsOpen = false;
             harness.setupOpen = false;
             harness.refreshCount = 0;
             harness.listLog = [];
+            harness.startLog = [];
 
             fake.mode = "embedded";
             fake.identityExists = false;
@@ -371,20 +390,31 @@ Item {
         /// **A start request does not raise the setup**, and a setup request
         /// does — the pair is the requirement.
         ///
-        /// Driven through `takeEmbeddedAction` rather than through a control,
-        /// deliberately: no control offers a start today, so a click-driven test
-        /// could not express the request at all and the rule would hold only by
-        /// accident of what is reachable. It must hold on the day a start
-        /// request IS routable, which is what this asks.
+        /// **This is now the sharper test, because a start IS routed.** While
+        /// nothing hosted one, `takeEmbeddedAction("start")` returned at the
+        /// first line and the assertion held for a reason that had nothing to do
+        /// with the rule. Here the request reaches a branch and is carried out,
+        /// and the setup still must not be raised — which is what the rule
+        /// actually says: the setup creates an identity and puts the mode in
+        /// force, so a node that already has an identity has nothing left for
+        /// any of its steps to do.
         function test_a_start_request_does_not_raise_the_setup() {
             harness.takeEmbeddedAction("start");
             verify(!harness.setupShown,
-                   "a start request must not raise a flow that cannot perform "
-                   + "it: the setup's start step is gated on no node answering "
-                   + "the socket, and it has no passphrase from a later showing");
+                   "a start request must not raise a flow with no step that "
+                   + "starts anything: it would present four steps, three of "
+                   + "them already done, none of them the act that was asked "
+                   + "for");
+            compare(harness.startLog.length, 1,
+                    "and the start must have been CARRIED OUT instead, or this "
+                    + "asserts about a request that reached nobody: "
+                    + JSON.stringify(harness.startLog));
 
             harness.takeEmbeddedAction("restart");
             verify(!harness.setupShown, "nor must a restart request");
+            compare(harness.startLog.length, 1,
+                    "and an unhosted restart must not be carried out as a "
+                    + "start either: " + JSON.stringify(harness.startLog));
 
             harness.takeEmbeddedAction("setup");
             verify(harness.setupShown,
@@ -403,31 +433,37 @@ Item {
         /// exists to remove.
         ///
         /// Asserted as a relationship rather than per-kind, so it holds for the
-        /// kinds that exist today AND for the day a start becomes routable: the
-        /// host is asked which kinds it hosts, and every one of them must be
+        /// kinds that exist today AND for the day a restart becomes routable:
+        /// the host is asked which kinds it hosts, and every one of them must be
         /// accepted by the router. Reverting `takeEmbeddedAction` to the bare
-        /// `if (kind === "setup")` turns this red on the `start`/`restart` leg
-        /// as soon as `embeddedStartHosted` is armed.
+        /// `if (kind === "setup")` turns this red on the `start` leg, which is
+        /// now armed in the ordinary configuration rather than only
+        /// hypothetically.
         function test_every_hosted_kind_is_one_the_host_routes() {
-            // Today's configuration: only setup is hosted, and only setup routes.
+            // Today's configuration: setup and start are hosted; restart is not.
             compare(harness.routesEmbeddedAction("setup"), true,
                     "setup is hosted, so it must route");
-            compare(harness.routesEmbeddedAction("start"), false,
-                    "start is not hosted, so it must not route");
-            compare(harness.routesEmbeddedAction("restart"), false,
-                    "nor restart");
-
-            // The day the configuration panel routes a start. Arming the one
-            // flag the panel's enablement reads must be enough to make the
-            // request routable — if it is not, the panel offers an enabled
-            // control the host drops on the floor.
-            harness.embeddedStartHosted = true;
             compare(harness.routesEmbeddedAction("start"), true,
-                    "a hosted start must be routed, not silently dropped: an "
+                    "and so is a start, now that `encrypted` says whether a "
+                    + "passphrase is needed");
+            compare(harness.routesEmbeddedAction("restart"), false,
+                    "a restart is not: it is two calls whose refusals are "
+                    + "different sentences, and nothing sequences the pair");
+
+            // **The two flags are independent**, which is the split this change
+            // made. One flag for both would answer the same in each leg below.
+            harness.embeddedStartHosted = false;
+            compare(harness.routesEmbeddedAction("start"), false,
+                    "unhosting the start unroutes it");
+            compare(harness.routesEmbeddedAction("restart"), false,
+                    "and leaves the restart where it was");
+
+            harness.embeddedStartHosted = true;
+            harness.embeddedRestartHosted = true;
+            compare(harness.routesEmbeddedAction("restart"), true,
+                    "a hosted restart must be routed, not silently dropped: an "
                     + "enabled control that does nothing is the defect this "
                     + "capability exists to remove");
-            compare(harness.routesEmbeddedAction("restart"), true,
-                    "and likewise a hosted restart");
 
             // And an unnamed kind still routes nowhere, so this is not
             // satisfied by a host that accepts everything.
@@ -531,20 +567,25 @@ Item {
             compare(setupWizard.currentStep, "identity",
                     "the first showing lands where the backend says the work is");
 
-            // The user walks on and closes.
-            verify(setupWizard.flow.advance());
-            compare(setupWizard.currentStep, "network");
+            // The user walks BACK and closes, so the step the first showing was
+            // closed on is EARLIER than the one the second must derive. That
+            // direction is what makes the assertion discriminate: closing on a
+            // later step and re-deriving to an earlier one would also be
+            // satisfied by a flow that simply reset to step 0.
+            verify(setupWizard.flow.back());
+            compare(setupWizard.currentStep, "embedded");
             harness.findByName(setupWizard, "wizardClose").clicked();
 
-            // The backend has moved on between showings.
+            // The backend has moved on between showings: an identity now
+            // exists, so the work the identity step does is done.
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkEXISTING";
-            fake.serving = true;
 
             action().clicked();
-            compare(setupWizard.currentStep, "confirm",
+            compare(setupWizard.currentStep, "network",
                     "a second showing must re-derive from the backend, not "
-                    + "resume at the step the first was closed on");
+                    + "resume at the step the first was closed on and not "
+                    + "restart from the beginning");
         }
     }
 }
