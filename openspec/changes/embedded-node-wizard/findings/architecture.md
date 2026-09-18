@@ -19,7 +19,7 @@ review is that re-run for architecture.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `Main.qml:200,320-322` and `PLAN.md:113-115` —
+- [x] **`dev-writer`** — `Main.qml:200,320-322` and `PLAN.md:113-115` —
       "hosting a start is one property" is true for `EmbeddedState`'s
       enablement but false for `Main.qml`'s routing, and nothing ties the two
       together.
@@ -69,6 +69,47 @@ review is that re-run for architecture.
       trap CLAUDE.md's "put the complexity in the data structure" section
       warns about — a claim of "one flip" that is actually two, with only one
       of them structurally enforced.
+
+      **Fixed** in `a9d5e6a`, taking the first of your two suggested shapes
+      rather than the narrower prose-only ask, because the prose was a symptom:
+      the claim was repeated in *three* places (`PLAN.md:113-115`,
+      `design.md`'s "Keyed on hosted-ness", and `Main.qml:197-199`'s own
+      comment, which said "flipping this to `true` … is the whole change"), and
+      correcting three copies of a claim that nothing enforces invites the
+      fourth.
+
+      `takeEmbeddedAction` now routes through `routesEmbeddedAction(kind)`, a
+      predicate switching on kind and returning the **same two flags**
+      `EmbeddedState.actionHosted` derives from — so the enablement and the
+      routing are two readings of one table rather than two independent
+      decisions. It is a separate function rather than an inlined guard because
+      it is a different job: it decides whether an act reaches anybody, the
+      caller decides what happens when it does. That separation is what makes
+      the gap *testable* — it lets a test ask "is every hosted kind routed?"
+      without performing any of the acts, which is precisely the question that
+      was unaskable before and therefore untested.
+
+      `test_every_hosted_kind_is_one_the_host_routes` in `tst_setup_host.qml`
+      arms `harness.embeddedStartHosted = true` and asserts `start`/`restart`
+      become routable, with today's configuration as the first leg and an
+      unnamed kind plus an unrecognised one as controls, so it is not satisfied
+      by a host that accepts everything. It failed before the fix. Reverting to
+      the bare `if (kind === "setup")` reddens it on the armed leg — which is
+      the scenario your finding describes, now caught.
+
+      **What this does not do**, stated plainly because the honest limit
+      matters: it does not write the branch that carries a start out, and
+      cannot, for the four reasons under *Start and restart route nowhere*. The
+      flag plus the branch is still two things. What changed is that they can no
+      longer disagree *silently* — an enabled control is now either routed or
+      refused, never dropped on the floor. All three prose copies now say that
+      instead of "one property", and `design.md` gained a decision entry, *The
+      routing reads the same flags the enablement does*, recording the shape and
+      what reverting it reddens.
+
+      The harness copy in `tst_setup_host.qml` was updated in the same commit,
+      keeping the reproduction line-for-line with `Main.qml` as its header
+      promises.
 
 ## What was clean
 

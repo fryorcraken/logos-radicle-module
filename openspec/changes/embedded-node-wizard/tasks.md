@@ -46,6 +46,17 @@ a second, for the one-row-per-stage reason above; what that tick now covers is
 five passes, the last being the wizard's host. The reviewer rows still refer only
 to the first pass.
 
+**A sixth `design + code` pass acted on piece 2's review findings**, and again
+flips no row, for the same one-row-per-stage reason. All eight findings across
+`security`, `readability`, `design-review`, `architecture` and `spec-test` are
+ticked with their outcomes appended. Two were real defects: a passphrase that
+outlived an abandoned showing, and a routing table that could not see the
+hosting flag the panel's enablement reads. Two coverage gaps were closed —
+"the module becomes ready already in Embedded" and a blocked home's silence
+about unavailability — and one comment claiming a mutation reddened a named test
+was measured, found false, and replaced with the reason no test could have
+caught it. The reviewer rows above still refer to the state before this pass.
+
 ## Implementation
 
 <!-- The dev-writer owns this section. -->

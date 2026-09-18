@@ -19,7 +19,7 @@ encrypted-field reasoning is written out in full in both `design.md` and
 
 ## Findings
 
-- [ ] **`dev-writer`** — `EmbeddedState.qml:606-612` (rendering) and
+- [x] **`dev-writer`** — `EmbeddedState.qml:606-612` (rendering) and
       `EmbeddedState.qml:1024-1045` (`actionUnavailableNote`) — an unspecified
       choice was made with no `NO SPEC:` marker and no Decisions entry
       **Scenario:** the brief itself names this as a choice the spec does not
@@ -45,7 +45,31 @@ encrypted-field reasoning is written out in full in both `design.md` and
       silent mid-flight, so both are genuinely open per this repo's own
       `NO SPEC:` convention and neither is marked.
 
-- [ ] **`dev-writer`** — `proposal.md:87-96` — the encrypted-field reasoning is
+      **Fixed** in `a9d5e6a`. `actionUnavailableNote` now carries a `NO SPEC:`
+      block naming both choices — below the button rather than beside it, so the
+      explanation reads as belonging to the disabled control rather than to the
+      state sentence above it; and silent while a start is pending, because the
+      action is then withheld for a reply the `starting` sentence already
+      reports, so "not available" over it would be false. A matching entry was
+      added to `design.md`'s Open Questions beside the two structurally
+      identical ones you name, which also fixes the asymmetry that made this
+      read as incidental. The silence is pinned by
+      `test_no_unavailability_is_claimed_while_a_start_is_outstanding`; the
+      placement is verified against `RepoList.qml`, where
+      `embeddedStateUnavailable` does render after `embeddedStateAction`.
+
+      **Your grep turned up something the marker was hiding.** Chasing "which
+      test does each term in that expression redden" found that
+      `actionKind !== ""` in `actionUnavailableNote` reddened **nothing** — so a
+      blocked home would have claimed "starting the node is not yet available
+      from here" when the obstacle is an unresolvable home and no act is offered
+      at all. `test_a_blocked_home_claims_no_unavailability` now covers it, and
+      was proven to fail against the deletion (it reports the wrong sentence
+      verbatim). The Open Questions entry and the code comment both record which
+      of the two expressions the term is load-bearing in, since it is dead in
+      `actionEnabled` and live here.
+
+- [x] **`dev-writer`** — `proposal.md:87-96` — the encrypted-field reasoning is
       duplicated in full rather than pointed at `design.md`
       **Scenario:** `docs/PLAN.md`'s equivalent paragraph (diff hunk at
       `docs/PLAN.md:105-111`) correctly points — "the four reasons … are in the
@@ -70,6 +94,21 @@ encrypted-field reasoning is written out in full in both `design.md` and
       than the cross-milestone `PLAN.md` the shedding rule is written against,
       so a one-line summary with a pointer would fit its role at least as well
       as the full restatement it has now.
+
+      **Fixed** in `a9d5e6a`, taking the suggestion. `proposal.md`'s bullet now
+      keeps what is genuinely proposal-shaped — that both acts need a passphrase
+      nothing here can ask for, that they therefore belong to the configuration
+      panel, and what the state surface does until it exists — and points at
+      `design.md`'s "Start and restart route nowhere" for the four structural
+      reasons, naming the decisive one in a clause rather than restating all
+      four. That matches what `PLAN.md` already does correctly, and leaves one
+      copy of the reasoning rather than two free to drift.
+
+      Worth noting the drift you predicted was already latent: this same pass
+      corrected a related claim (*"hosting them is one property"*) in
+      `PLAN.md`, `design.md` and `Main.qml`'s comment — three copies, all
+      needing the same edit. That is the argument for the shedding rule made
+      concrete.
 
 ## What is in good shape
 
