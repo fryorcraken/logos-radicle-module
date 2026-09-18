@@ -1399,6 +1399,18 @@ present: the script exits 1 with the `flow.startNode` line restored and 0 with
 it removed. That is the check that it discriminates at all — a lint gate that
 cannot be made to fail is the same no-op in a new costume.
 
+**One caveat, recorded because a green run hides it.** The discrimination above
+was proven against qmllint 6.10.3 locally; the CI runner (ubuntu-24.04) ships
+6.4.2, and its warning *set* differs visibly — it reports `ListModel was not
+found` and `Cannot defer property assignment` where the newer one reports
+`unqualified` and `missing-property`. The CI log confirms the gate now resolves
+`/usr/lib/qt6/bin/qmllint` and analyses every file including `SetupFlow.qml`, so
+it is demonstrably no longer a no-op. What has *not* been proven on 6.4.2 is
+that this particular defect produces the `Could not find property` string there
+too. If a future orphaned assignment slips past CI while the local script
+catches it, that version gap is the first place to look — the fix would be to
+widen the match, not to conclude the gate is worthless.
+
 ## Risks / Trade-offs
 
 - **Four steps is still a lot of screen for a one-time task.** Accepted because
