@@ -1,137 +1,135 @@
-# Security review — `embedded-node-wizard`
+# Security review — `embedded-node-wizard`, piece 2 (hosting the setup wizard)
 
-Scope: `radicle-ui/src/qml/SetupFlow.qml`, `SetupWizard.qml`,
-`CopyableCommand.qml`, and their tests. Security dimension only.
+Scope: `radicle-ui/src/qml/Main.qml` (the host), `SetupWizard.qml`,
+`SetupFlow.qml`'s re-entry logic (`restart()`/`reset()`/
+`landOnFirstUnfinishedStep()`), `EmbeddedState.qml`, `RepoList.qml`, and their
+tests, diffed `90ec3b9..b802335`. Security dimension only. This overwrites
+piece 1's now-closed `security.md` (its `SetupWizard.qml` line references and
+step layout — `ModePicker` at `stepIndex === 1` — no longer match this piece's
+six-step flow).
 
 ## Findings
 
-- [x] **`dev-writer`** — `SetupWizard.qml:92-93,382-390` — the plaintext
-      passphrase outlives every use and nothing ever clears it.
-      **Scenario:** a user types a passphrase at the identity step, submits
-      identity creation (`submitIdentity`), advances through network and start
-      (reusing the same value via `submitStart(wizard.passphrase)`), and
-      reaches confirm. `passphraseField` is a plain `TextField` inside the
-      `StackLayout`'s identity-step `Column` — `StackLayout` instantiates every
-      child eagerly (there is no `Loader` gating any step, confirmed by reading
-      the `StackLayout` block at `SetupWizard.qml:167-170`), so that `TextField`
-      and its `text` property are never destroyed for the remaining lifetime of
-      the wizard component. `wizard.passphrase` is a live binding read off
-      `passphraseField.text` (`readonly property string passphrase:
-      passphraseSwitch.checked ? passphraseField.text : ""`), so the secret sits
-      in cleartext in a resident QML object indefinitely: through the network,
-      start, and confirm steps, after `createEmbeddedIdentity` and `startNode`
-      have both already consumed it, and until the wizard itself is destroyed
-      by whatever hosts it (unspecified in this change — see design.md's open
-      question on the entry point). Nothing in `SetupFlow.qml` (`reset()`,
-      `submitIdentity`, `submitStart`) or in `SetupWizard.qml` ever assigns
-      `passphraseField.text = ""`.
-      **Why it matters:** this is exactly the surface CLAUDE.md flags for this
-      repo — Basecamp's dev build (the one the e2e/inspector layer runs) ships
-      with the QML inspector compiled in, which can read live object properties
-      including `passphraseField.text`, and `QT_LOGGING_RULES` is already turned
-      up for this project. A resident plaintext passphrase is available to that
-      surface for the entire remainder of the session, not just for the moment
-      it was needed.
-      **Measured:** confirmed no `passphraseField.text = ""` (or equivalent
-      clearing) anywhere in `SetupWizard.qml` or `SetupFlow.qml`. Confirmed
-      neither test file (`tst_setup_wizard.qml`, `tst_setup_wizard_view.qml`)
-      references `passphraseField` or asserts it is cleared after
-      `submitIdentity`/`submitStart` succeed — grepped both files for
-      `passphraseField`/`clearConfirmation`/`identityPassphrase` and found only
-      the switch-toggle assertions, none touching the field's retained value.
-      The full QML suite (`sh radicle-ui/tests/run-qml-tests.sh`, including both
-      `tst_setup_wizard*.qml` files) is green with this retention in place —
-      i.e. nothing would fail if the passphrase were retained even longer or
-      copied elsewhere, which is the observable absence of a regression guard
-      for this property.
-      **Severity:** real but scoped — the passphrase is never written to a log,
-      settings file, or clipboard by this diff, and the `.rep`/`radicle_impl.h`
-      boundary correctly takes no home argument, so there's no cross-process or
-      cross-profile leak here. The exposure is "resident in memory for longer
-      than needed inside a process that has a documented in-process inspection
-      surface (the QML debug inspector) in its own dev build," not "sent
-      anywhere." Recommend clearing `passphraseField.text` (and disabling
-      `persistentSelection`/undo history, if any) once both consuming calls
-      (`submitIdentity` success, `submitStart` success) have completed, or once
-      the confirm step is reached — whichever the fix author judges correct —
-      and adding a regression test that fails first.
-
-      **Fixed** in `f471999`. Your analysis of why it persists is what decided
-      the fix: because `StackLayout` instantiates every child eagerly, no step
-      change destroys the field, so it has to be cleared explicitly.
-
-      Of the two moments you offered I took the first — on a `started:true`
-      reply, which is when both consumers have run. Reaching confirm would have
-      been later than necessary, and the whole point is minimising the window.
-
-      It is keyed on `setupFlow.nodeStarted` via a `Connections` block rather
-      than done inside the start button's `onClicked`. That matters: the
-      handler runs *before* the reply, so clearing there would destroy the
-      passphrase a retry needs after a refusal — turning a security fix into a
-      usability bug on exactly the path where the user is already stuck.
-
-      `test_the_passphrase_does_not_outlive_the_calls_that_use_it` is the
-      regression test, and it failed first (actual `correct horse battery`,
-      expected empty). It reads the field back at the start step *before*
-      submitting, asserting the passphrase is still there — so it proves the
-      clearing happened rather than that the field was never populated, which
-      is the null-implementation trap for a test of this shape.
-
-      Not done, and worth saying so rather than leaving it implied: I did not
-      touch undo history or `persistentSelection`. `TextField` with
-      `echoMode: TextInput.Password` is the input here, and the residue that
-      finding names — a live `text` property the inspector reads — is what the
-      clearing addresses. A deeper scrub of Qt's internal undo stack is not
-      something this layer can assert, so claiming it would be a checkbox a
-      test cannot back.
+- [ ] **`dev-writer`** — `SetupWizard.qml:96-98,557-563` /
+      `SetupFlow.qml:426-430,680-708` — the passphrase-residency fix from piece
+      1 (clear `passphraseField.text` on `nodeStarted`) does not cover the
+      close-and-reopen path this piece adds, so a passphrase typed in one
+      showing can silently outlive it and be reused, unrefreshed, in a later
+      one.
+      **Scenario:** a user opens the setup, types a passphrase at the identity
+      step, submits identity creation (`submitIdentity`) — which succeeds and
+      consumes the passphrase once — and then **closes the wizard without
+      starting the node** (clicks Cancel, or just navigates away; `wizardClose`
+      → `wizard.closed()` → `Main.qml`'s `onClosed` only sets `setupOpen = false`
+      and calls `refreshEmbedded()`; neither touches `passphraseField`). Some
+      time later — the same running Basecamp session — the user reopens the
+      setup (`openSetup()` → `setupWizard.show()` → `flow.restart()` →
+      `reset()` + `runPreflight()` + `landOnFirstUnfinishedStep()`). Because
+      the identity now exists and the node is not serving, the flow resumes
+      directly at the **start** step. `wizard.passphrase` is a live binding
+      (`passphraseSwitch.checked ? passphraseField.text : ""`) reading the
+      *same, never-destroyed* `TextField` from the abandoned first showing —
+      `SetupWizard` is one persistent instance under `Main.qml`
+      (`visible: root.setupOpen`, never recreated; `StackLayout` instantiates
+      every step's children eagerly). `reset()` clears every `SetupFlow`
+      property (line 680-708) but never references `passphraseField` — it
+      cannot, since the field lives in the view, not the flow object. So the
+      old passphrase is handed to `startNode()` in the second showing with no
+      re-entry by the user and no indication on screen that this is a stale
+      value from an earlier attempt.
+      **Why it matters:** this is the same class the piece-1 fix addressed
+      (secret material resident in memory, readable through the QML inspector
+      the dev Basecamp ships with, per `SetupWizard.qml:549-551`'s own
+      comment), but now with an added failure mode: the passphrase can be
+      *reused across sessions of the flow* rather than merely lingering within
+      one. If the user meant to abandon that attempt (e.g. changed their mind
+      about the passphrase, or typed it into the wrong field and wants to
+      retype), the stale value is silently resubmitted as if freshly entered.
+      **Measured:** confirmed by reading — the only clearing site anywhere in
+      `SetupWizard.qml`/`SetupFlow.qml` is the `Connections { onNodeStartedChanged }`
+      block at `SetupWizard.qml:557-563`, gated on `setupFlow.nodeStarted`
+      becoming true; `reset()` (`SetupFlow.qml:680-708`) resets every `SetupFlow`
+      property but has no way to reach the view's `TextField`. Then measured
+      directly: wrote a throwaway QML `TestCase` instantiating a real
+      `Ui.SetupWizard` against a fake backend, drove it through
+      `wizard.show()` → type passphrase → `submitIdentity()` (succeeds,
+      `identityExists` becomes true) → **no start** → `wizard.show()` again
+      (simulating close-and-reopen) — and asserted the field's text. Result:
+      `compare(String(field.text), "correct horse battery", …)` **passed** —
+      the passphrase was still present verbatim after the reopen, at the very
+      step (`start`) whose control would hand it to `startNode()`. Ran under
+      `/usr/lib64/qt6/bin/qmltestrunner -import radicle-ui/src/qml`; the
+      existing suite (`tst_setup_wizard_view.qml`, 20/20 passing, including
+      `test_the_passphrase_does_not_outlive_the_calls_that_use_it`) has no
+      test that closes and reopens the wizard, so nothing in the shipped suite
+      exercises or guards this path. The scratch test was deleted after the
+      measurement; the worktree is clean (`git status` shows nothing to
+      commit).
+      **Severity:** real but bounded — the passphrase is never transmitted or
+      logged anywhere in this diff, and the `.rep`/`radicle_impl.h` boundary
+      still takes no home/socket argument (see below), so this is an
+      in-process residency and reuse issue, not a cross-process or
+      cross-profile leak. It is exactly the shape CLAUDE.md and this piece's
+      own task both call out as worth re-checking on re-entry, and it is now
+      reachable because piece 2 is what introduces close-and-reopen. Recommend
+      clearing `passphraseField.text` (and resetting `passphraseSwitch.checked`
+      to its default) at the point the wizard is asked to `show()` again for a
+      showing where the identity step's work is already done (i.e. whenever
+      `resumeIndex` lands past `identity`), not only on `nodeStarted` — with a
+      regression test that opens, types, abandons before start, reopens, and
+      asserts the field is empty.
 
 ## Clean areas (no findings)
 
-- **The identity-consequence-before-write ordering** is correct: the mode step
-  (`stepIndex === 1`) always renders `ModePicker` — including its
-  separate-identity blurb — regardless of `modeInForce`, and `canAdvance`
-  keys purely off `stepIndex + 1`, so there is no code path that reaches the
-  identity step (`stepIndex === 2`) without the mode step (and its statement)
-  having been shown first. `createEmbeddedIdentity` cannot be issued before
-  that render.
-- **The `.rep` boundary's "no home argument" reasoning is respected.**
-  Verified `radicle_ui.rep` and `radicle_impl.h`: neither
-  `getEmbeddedIdentity()`, `createEmbeddedIdentity(alias, passphrase)`, nor
-  `startNode(passphrase)` takes a home or socket parameter, and
-  `SetupFlow.qml` never constructs or forwards one — it only calls the
-  injected functions with `(alias, passphrase, cb)` / `(passphrase, cb)`
-  exactly as the `.rep` declares. The wizard does not reintroduce the hazard
-  the `.rep`'s own comment warns against.
-- **The passphrase trade statement (spec's "no quiet default, no stopping
-  once declined")** is implemented correctly: `passphraseSwitch.checked:
-  true` is the arriving default (safer outcome without touching anything),
-  and the `passphraseTrade` `Text` element carries no `visible:` binding tied
-  to the switch — it renders unconditionally, so turning the passphrase off
-  does not remove either half of the stated trade. Confirmed by the passing
-  `test_the_trade_stays_stated_when_the_passphrase_is_turned_off` test.
-- **The clipboard-bound allow line (`rad id update --allow <DID>`)** carries
-  only a DID that came from a backend reply (`createEmbeddedIdentity`'s
-  `nodeId` or `getCapabilities().nodeId`), never anything the view itself
-  constructs from user input, so there is no way for a sandboxed QML view to
-  make the copied line carry something other than the reported DID.
-  `CopyableCommand`'s `command` property is copied verbatim
-  (`clip.text = command`) with no interpolation of user-typed text (the
-  alias and passphrase never reach this component). The verified-copy
-  mechanism (`clipboardHolds`, a *separate* paste-back editor) is intact and
-  its negative control (`test_the_clipboard_check_can_fail`) passes, so the
-  "Copied" confirmation cannot be a false positive.
-- **No `console.*` logging** of the passphrase, alias, or any reply payload
-  exists anywhere in the three reviewed files.
-- **`getCapabilities().canWriteLocal` vs `localAvailable`**: this wizard does
-  not itself gate any write affordance on `localAvailable` — its `Create
-  identity` and `Start the node` buttons are gated on `canCreateIdentity` /
-  `canStartNode`, which are the wizard's own preflight-derived rules
-  (`homeResolved && !identityExists`, `gitFound && !alreadyServing &&
-  !startPending`), not a stand-in for the capabilities gate CLAUDE.md warns
-  about. That gate governs affordances elsewhere in the app (comment/issue
-  composers), which are out of scope for this diff.
-
-## Worktree
-
-Ready to prune at
-`/home/fryorcraken/src/rad/radicle-logos-module/.claude/worktrees/rev-wiz-security`.
+- **`start`/`restart` are structurally unhosted, not just labelled so.**
+  `Main.qml`'s `embeddedStartHosted` is `readonly property bool … : false`
+  (line 200), `takeEmbeddedAction()` only routes `"setup"` to `openSetup()`
+  and does nothing for any other kind (line 320-322), and
+  `EmbeddedState.actionEnabled` requires `actionHosted` before a control is
+  even rendered enabled (`EmbeddedState.qml:272-273`). `RepoList`'s
+  `embeddedStateAction` button double-checks `actionEnabled` inside
+  `onClicked` before emitting the signal (`RepoList.qml:574-577`), so a caller
+  invoking `.clicked()` programmatically past a disabled control still cannot
+  provoke a `start`/`restart` request. `tst_setup_host.qml`'s
+  `test_a_start_request_does_not_raise_the_setup` exercises this by calling
+  `takeEmbeddedAction("start")`/`"restart"` directly (bypassing any control)
+  and asserts the setup is not raised — confirmed passing. No path in this
+  diff flips `embeddedStartHosted` or reaches `startNode`/`stopNode` from a
+  session that lacks the passphrase the identity step took in the same
+  showing.
+- **The `.rep` boundary's "no home/socket argument" reasoning holds.** All
+  seven functions `Main.qml` injects into `flow.*`
+  (`fetchCapabilities`/`fetchIdentity`/`fetchNodeStatus`/`fetchSeeds`/
+  `createIdentity`/`startNode`/`saveSetting`, lines 1137-1158) call exactly the
+  slot signatures `radicle_ui.rep` declares
+  (`getCapabilities()`, `getEmbeddedIdentity()`, `getNodeStatus()`,
+  `listKnownSeeds()`, `createEmbeddedIdentity(alias, passphrase)`,
+  `startNode(passphrase)`, `setSetting(key, value)`) — no home, no socket
+  argument is threaded from QML anywhere in this piece.
+- **Mutual exclusion of the two overlays is enforced at the raise, not by a
+  binding that could fail open.** `openSetup()` unconditionally sets
+  `settingsOpen = false` before `setupOpen = true`
+  (`Main.qml:300-304`); `toggleSettings()` unconditionally sets
+  `setupOpen = false` before `settingsOpen = true`
+  (`Main.qml:331-338`). Both panes are siblings keyed on independent
+  booleans (`visible: root.settingsOpen` / `visible: root.setupOpen`), so
+  there is no state where both can read true from the raise functions —
+  confirmed by `tst_setup_host.qml`'s
+  `test_raising_each_surface_lowers_the_other` and
+  `test_lowering_one_raises_nothing`, both passing. Lowering either surface
+  never sets the other's flag, so a close cannot hand the user an unrequested
+  overlay.
+- **Nothing raises the setup except the explicit "setup" request.** Grepped
+  every call site of `openSetup()`/`setupOpen = true` in `Main.qml`: the only
+  one is inside `takeEmbeddedAction("setup")`, itself only reachable from
+  `RepoList.onEmbeddedActionTaken`. No mode-selection handler
+  (`setMode`/`sourceState.onChanged`/`onSettled`), no capabilities-driven
+  handler (`onCapsJsonChanged`, `refreshEmbedded()`), and no startup handler
+  (`onBackendReady`, `Component.onCompleted`) calls it — matching
+  `tst_setup_host.qml`'s `test_selecting_embedded_does_not_raise_the_setup`,
+  which passes.
+- **No `console.*` logging or clipboard write of the passphrase, alias, or
+  any reply payload** exists anywhere in the reviewed files; the confirm
+  step's clipboard write (`CopyableCommand`) only ever carries the reported
+  DID (`allowCommand`), never anything derived from the identity/passphrase
+  fields.
