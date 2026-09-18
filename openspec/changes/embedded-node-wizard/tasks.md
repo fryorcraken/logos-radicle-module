@@ -69,6 +69,34 @@ about unavailability — and one comment claiming a mutation reddened a named te
 was measured, found false, and replaced with the reason no test could have
 caught it. The reviewer rows above still refer to the state before this pass.
 
+**The spec was reopened a third time, from dogfooding the built app, and this
+one changes what the piece is.** Two things that were steps of the wizard are
+steps of nothing now. Step 5 rendered an amber "a node is already answering on
+the resolved socket" directly above its own green "Running as did:key:…" — a
+warning about the node it had just started, the same defect class as the identity
+step's already-exists refusal. Step 6 was a terminal screen whose only act was to
+be dismissed. So the setup shrinks to four steps and does **setup only**:
+starting moves to the Embedded surface, where it happens by itself for an
+unencrypted key and behind one passphrase field for an encrypted one, and the DID
+moves to the header, reusing `NodeIdentity.qml` where it already sits.
+
+**This piece is no longer QML-only.** The autostart rule needs
+`getEmbeddedIdentity()` to report `encrypted`, which it does not — only
+`createEmbeddedIdentity`'s reply carries that field, and it echoes its argument
+rather than observing the key. `getCapabilities().canWriteLocal` was considered
+and rejected as a substitute: it probes the home of the mode in force, so it is
+silent about the embedded home from any other mode, and it conflates encryption
+with a missing or unreadable key. So `embedded-identity` gains a MODIFIED
+requirement and `radicle/` gains a change — the probe itself,
+`Keystore::is_encrypted()`, is already used in this repo's write path and needs
+no passphrase or agent, so what is new is exposing it rather than obtaining it.
+`radicle_ui.rep` is unchanged; every slot on it already returns opaque JSON.
+
+A third capability, `embedded-header`, is added for the DID. **`design + code`,
+tests and every reviewer row need re-running against all of this**; the runner
+owns re-dispatching them, and the rows are left as they are for the same
+one-row-per-stage reason as above.
+
 ## Implementation — the respecced identity step (seventh pass)
 
 Acting on the second reopening of the identity step, from the user dogfooding

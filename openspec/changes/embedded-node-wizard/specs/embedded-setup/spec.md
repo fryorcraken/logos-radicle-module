@@ -1,12 +1,20 @@
 ## Purpose
 
 Define the guided setup a user walks through to bring the embedded node into
-existence: the six steps and their order, what each step may do only once the
+existence: the four steps and their order, what each step may do only once the
 step before it has answered, and the three consequences the flow MUST state at
 the moment the user decides rather than leave to be discovered afterwards — that
 a passphrase means an unlock on every start, that the embedded identity is a new
 DID rather than the user's own, and that the node accepts no inbound
 connections.
+
+**The setup sets a node up and then ends.** It does not start the node and does
+not display the DID. Both were steps of this flow and both are now elsewhere,
+for the same reason: neither is a thing done once at setup time. Starting is
+something the mode does whenever it is opened, so a flow is the wrong shape for
+it — `embedded-state` owns it. The DID is wanted at arbitrary later moments and
+mostly when the flow is long closed, so a screen that shows it once and is
+dismissed is the worst place to keep it — `embedded-header` owns it.
 
 **This flow sets up Embedded mode and nothing else.** A user who opened it has
 already chosen Embedded, so the flow states what Embedded means and lets them
@@ -17,19 +25,24 @@ presenting a choice with one permitted answer.
 
 This capability also owns **where the flow is reached from, what raising and
 lowering it does to the surfaces around it, and where a reopened flow lands.**
-Those were left unsaid when the six steps were first specified, and the result
-was a flow with no host: a close control that emitted to nobody, and a state
-panel whose action reached nobody. Entry and re-entry are not a separate subject
-from the six steps — re-entry decides which of the six is in force — so they are
-stated here rather than in a capability of their own.
+Those were left unsaid when the steps were first specified, and the result was a
+flow with no host: a close control that emitted to nobody, and a state panel
+whose action reached nobody. Entry and re-entry are not a separate subject from
+the steps — re-entry decides which step is in force, and how the flow ends
+decides what the user is looking at afterwards — so they are stated here rather
+than in a capability of their own.
 
 ## ADDED Requirements
 
-### Requirement: Six steps in a fixed order
+### Requirement: Four steps in a fixed order
 
-The setup MUST present exactly six steps, in this order: preflight, embedded,
-identity, network, start, confirm. The step in force MUST be observable, and
-MUST be preflight on every showing until the preflight has answered.
+The setup MUST present exactly four steps, in this order: preflight, embedded,
+identity, network. The step in force MUST be observable, and MUST be preflight
+on every showing until the preflight has answered.
+
+The setup MUST NOT present a step that starts the node, and MUST NOT present a
+step whose only content is a restatement of what the preceding steps did. It
+MUST NOT issue `startNode`, in any step, for any reason.
 
 When advancing is permitted, it MUST move to the next step in the sequence and
 MUST NOT skip one. When it is not permitted — the requirements below name every
@@ -43,9 +56,9 @@ about those two controls rather than about the step ever changing by more than
 one.
 
 Going back MUST NOT undo anything an earlier step already performed. Identity
-creation and node start are not reversible through this flow, so a step that has
-performed one MUST report what it did when it is returned to, rather than
-offering to do it again.
+creation is not reversible through this flow, so a step that has performed it
+MUST report what it did when it is returned to, rather than offering to do it
+again.
 
 #### Scenario: The flow opens on preflight
 
@@ -57,10 +70,10 @@ offering to do it again.
 
 - **GIVEN** a flow whose every step is permitted to advance, whose step in force
   has been put back to preflight
-- **WHEN** advance is invoked five times
+- **WHEN** advance is invoked three times
 - **THEN** the step in force after each invocation MUST be, in order, embedded,
-  identity, network, start and confirm
-- **AND** a sixth invocation MUST leave the step in force at confirm
+  identity and network
+- **AND** a fourth invocation MUST leave the step in force at network
 
 #### Scenario: Going back returns to the previous step
 
@@ -68,6 +81,13 @@ offering to do it again.
 - **WHEN** back is invoked
 - **THEN** the step in force MUST be the identity step
 - **AND** invoking back again MUST make the step in force the embedded step
+
+#### Scenario: No step of the setup starts a node
+
+- **GIVEN** a flow over a backend accepting every call
+- **WHEN** the flow is walked from preflight to the network step, advancing and
+  submitting each step's control where one is offered
+- **THEN** no `startNode` call MUST have been issued
 
 #### Scenario: Returning to a step that already acted does not offer to act again
 
@@ -90,7 +110,9 @@ before the flow offers any choice that depends on it:
   reports `exists:false` too, and the two are indistinguishable through this
   reply;
 - whether a node is already answering on the resolved socket, from
-  `getNodeStatus().serving`;
+  `getNodeStatus().serving`. The setup starts no node, so this finding blocks
+  nothing here and is reported for what it tells the user: that something else
+  is already using the socket this node would want;
 - whether the module can resolve a home to write into at all, from a non-empty
   `getEmbeddedIdentity().home` together with an empty
   `getCapabilities().pathsProblem`.
@@ -155,6 +177,13 @@ A preflight finding that failed MUST block advancing past the step whose work it
 makes impossible, and the flow MUST state which finding is blocking rather than
 presenting a disabled control with no reason.
 
+**A failed finding that makes no step's work impossible MUST block nothing.**
+Reporting a fact and blocking a step are different acts, and only one of the
+four findings gates work this flow does — which is a consequence of the setup
+starting no node. Two of them, named below, are reported and block nothing at
+all; a step blocked for work it does not do is a step a user cannot get past for
+no reason.
+
 An unresolvable home, and a home already holding a complete identity, MUST both
 block **creation** at the identity step: the first because there is nowhere to
 write, the second because `createEmbeddedIdentity` refuses an occupied home.
@@ -173,21 +202,34 @@ surface that names the `keys` path to remove. Submitting creation and displaying
 that refusal is therefore how the user learns the recovery — which is the
 general rule the refusal requirement below states, applied here.
 
-A missing `git` MUST block the start step, and MUST NOT block the identity step:
-identity creation writes key material and does not spawn `git`.
+**A missing `git` MUST block no step of this setup.** Identity creation writes
+key material and does not spawn `git`, and no step here starts a node, so there
+is nothing in this flow a missing `git` makes impossible. The finding MUST still
+be reported, because it makes the *node* unable to fetch and the user is better
+told now than at the first fetch — but reporting a fact and blocking a step are
+different acts, and a step blocked for work it does not do is a step a user
+cannot get past for no reason.
 
-A node already answering on the resolved socket MUST block the start step, and
-MUST NOT block the identity step.
+**A node already answering on the resolved socket MUST block no step of this
+setup either**, for the same reason: this flow starts nothing, so a socket in
+use stops none of its work.
 
 Blocking MUST be keyed on the finding, so that a backend reporting the finding
 as passing removes the block with nothing else changed.
 
-#### Scenario: A missing git blocks start but not identity
+#### Scenario: A missing git blocks no step
 
 - **GIVEN** a preflight reporting `gitFound:false` and every other check passing
 - **THEN** advancing from the identity step MUST be permitted
-- **AND** the control that starts the node MUST NOT be enabled
-- **AND** the displayed reason MUST name the git finding
+- **AND** advancing from the embedded step MUST be permitted
+- **AND** the git finding MUST be displayed as failed
+
+#### Scenario: A node already serving blocks no step
+
+- **GIVEN** a preflight reporting `serving:true` and every other check passing
+- **THEN** advancing from the identity step MUST be permitted
+- **AND** advancing from the network step MUST be permitted
+- **AND** the socket finding MUST report that a node is already answering
 
 #### Scenario: An occupied home blocks creation without blocking the step
 
@@ -209,20 +251,13 @@ as passing removes the block with nothing else changed.
 - **THEN** that message MUST be displayed verbatim
 - **AND** the flow MUST NOT report the identity as created
 
-#### Scenario: A node already serving blocks start
-
-- **GIVEN** a preflight reporting `serving:true`
-- **THEN** the control that starts the node MUST NOT be enabled
-- **AND** the displayed reason MUST state that a node is already answering on
-  the socket
-
 #### Scenario: A block lifts when its finding passes
 
-- **GIVEN** a flow whose start step is blocked because the preflight reported
-  `gitFound:false`
-- **WHEN** the same flow is given a preflight reporting `gitFound:true`, with
+- **GIVEN** a flow whose identity step's forward control is not enabled because
+  the preflight reported an unresolvable home with no identity
+- **WHEN** the same flow is given a preflight reporting a resolving home, with
   nothing else changed
-- **THEN** the control that starts the node MUST be enabled
+- **THEN** the identity step's forward control MUST be enabled
 
 ### Requirement: The embedded step confirms Embedded and states the identity consequence
 
@@ -231,9 +266,18 @@ Radicle home and runs the node itself — and MUST state, in the step itself,
 that the node operates as a **new identity this module creates**, separate from
 any Radicle node the user already runs and from any identity they already hold.
 
-That statement MUST NOT be deferred to the confirm step: the confirm step
-restates it with the DID that by then exists, and a statement made only after
-the identity has been created is made after the decision it informs.
+It MUST also state what follows from that separateness: the repositories in the
+user's existing home are not in this node's storage, and a private repository
+reaches this node only once a delegate authorises this DID.
+
+**This step is the only place the flow states it**, so it MUST be stated here in
+full rather than partly. It was previously split between this step and a
+terminal step that restated it with the DID; that step is gone, and a
+consequence stated in half is one a user acts on without.
+
+Stating it here rather than after creation is also the right moment on its own
+terms: a statement made only after the identity exists is made after the
+decision it informs.
 
 The step MUST NOT offer `explore` or `local`. It MUST NOT present the modes as a
 set to pick from, and it MUST NOT annotate a mode as unavailable, whatever
@@ -281,6 +325,8 @@ is why the statement of what Embedded means stays displayed either way.
 - **THEN** the displayed text MUST state that this module runs a node of its own
 - **AND** it MUST state that the node operates as a new identity, separate from
   any Radicle node the user already runs
+- **AND** it MUST state that a private repository reaches this node only once a
+  delegate authorises this DID
 
 #### Scenario: The separateness statement precedes any identity write
 
@@ -548,6 +594,16 @@ node is started — the node is handed an already-decrypted signing key when it 
 built, so a passphrase cannot be supplied later — and that an unencrypted key
 starts the node with no prompt at the cost of a secret stored in plaintext.
 
+That statement is now also a statement about what happens on **every subsequent
+opening of Embedded**, not only about a start the user will ask for: an
+unencrypted key means the node starts by itself, and an encrypted one means a
+passphrase is asked for each time. The step MUST state that consequence, because
+it is the one the user lives with and it is chosen here and nowhere else.
+
+The passphrase the step takes MUST be used for `createEmbeddedIdentity` and for
+nothing else. The setup starts no node, so it has no second use for it, and it
+MUST NOT be retained past the reply to the creation call.
+
 Both halves of that trade MUST be stated. A statement naming only the security
 benefit, or only the unlock cost, is a recommendation rather than a trade, and
 the user cannot weigh it.
@@ -613,6 +669,23 @@ rule, and a second rule in the view would drift from it.
 - **THEN** the `createEmbeddedIdentity` call's passphrase argument MUST be
   `correct horse battery`
 
+#### Scenario: The trade names what happens on every later opening
+
+- **WHEN** the identity step is shown over a backend reporting no identity
+- **THEN** the displayed text MUST state that an unencrypted key lets the node
+  start without a prompt
+- **AND** it MUST state that an encrypted key is asked for each time
+
+#### Scenario: The passphrase does not outlive the creation call
+
+- **GIVEN** an identity step with alias `tester` and a passphrase of
+  `correct horse battery`, over a backend that accepts creation
+- **WHEN** creation is submitted and the reply reporting the identity created
+  has arrived
+- **THEN** the flow MUST NOT retain that passphrase
+- **AND** no call carrying it MUST have been issued other than the
+  `createEmbeddedIdentity` call
+
 #### Scenario: A rejected alias is reported from the backend, not pre-empted
 
 - **GIVEN** an identity step whose alias contains whitespace
@@ -664,105 +737,43 @@ an oversight.
 - **AND** the displayed text MUST state that enabling them is not available in
   this flow
 
-### Requirement: The start step waits for the node and explains a failure
+### Requirement: The setup ends by finishing, not by being dismissed
 
-The start step MUST call `startNode` with the passphrase the identity step took,
-and MUST report success only on a reply reporting `started:true` — never on the
-call having been issued.
+The network step is the last, and its forward control MUST end the setup: it
+MUST report that the user has finished, which is what lowers the surface, and it
+MUST NOT move to a further step.
 
-While the call is outstanding the step MUST show that it is waiting, and MUST
-NOT offer the start control again, so a second node is not started over the
-first.
+The setup MUST NOT present a terminal screen whose only act is to be dismissed.
+A step that states what already happened and offers one control that closes it
+asks the user for an act that changes nothing — and the facts such a screen
+would carry are each better placed where they are wanted: the DID in the header
+where it is always reachable, and the node's state on the surface the user
+returns to.
 
-On success the step MUST display the node id the reply reports, and MUST display
-`listening` — including when it is empty, which is the state that confirms the
-outbound-only default the network step described.
+Ending the setup MUST NOT start the node, MUST NOT write the mode again, and
+MUST NOT issue any call. The steps made every write this flow makes; ending is
+the surface coming down.
 
-On an `{"error":"..."}` reply the step MUST display that message and MUST NOT
-advance. The flow MUST NOT report a started node on any reply that is not a
-success.
+What the user sees after the setup ends is the Embedded surface, which reports
+the node's state and starts it where it can — `embedded-state`'s requirements,
+not this capability's. That is what replaces the dismissed terminal screen, and
+it is reached without the user doing anything.
 
-After a reported success the step MUST reflect `getNodeStatus().serving` rather
-than only `running`: a node whose threads have died leaves `running` true while
-`serving` goes false, and that is the state a user cannot otherwise account for.
+#### Scenario: Finishing the last step ends the setup
 
-#### Scenario: A started node is reported only on a success reply
+- **GIVEN** a flow whose step in force is the network step
+- **WHEN** the step's forward control is invoked
+- **THEN** the flow MUST report that the user has finished
+- **AND** the step in force MUST NOT have moved to a further step
 
-- **GIVEN** a start step whose backend replies `{"started":true,…}` with a node
-  id
-- **WHEN** start is invoked
-- **THEN** the step MUST report the node as started
-- **AND** the reported node id MUST be the one in the reply
+#### Scenario: Ending the setup issues no call
 
-#### Scenario: An error reply is displayed and does not advance
-
-- **GIVEN** a start step whose backend replies with an `error` carrying a
-  distinctive message
-- **WHEN** start is invoked
-- **THEN** that message MUST be displayed
-- **AND** the step MUST NOT report the node as started
-- **AND** the step in force MUST still be the start step
-
-#### Scenario: The start control is withheld while a start is outstanding
-
-- **GIVEN** a start step where start has been invoked and no reply has arrived
-- **THEN** the start control MUST NOT be enabled
-- **AND** the waiting state MUST be visible
-
-#### Scenario: An empty listening list is displayed rather than omitted
-
-- **GIVEN** a start step whose backend replies `started:true` with an empty
-  `listening` array
-- **THEN** the step MUST display that the node is listening on no address
-
-#### Scenario: A node that stops serving is shown as not serving
-
-- **GIVEN** a start step that reported a started node
-- **WHEN** `getNodeStatus()` subsequently reports `running:true` with
-  `serving:false`
-- **THEN** the step MUST NOT display the node as serving
-- **AND WHEN** `getNodeStatus()` reports `running:true` with `serving:true`
-- **THEN** the step MUST display the node as serving
-
-### Requirement: The confirm step restates the new identity with its allow line
-
-The confirm step MUST restate that the embedded node is a new identity, distinct
-from any identity the user already holds, and MUST say what follows from it: the
-repositories in the user's existing home are not in this node's storage, and a
-private repository reaches this node only once a delegate authorises this DID.
-
-It MUST display the DID `createEmbeddedIdentity` or `getCapabilities().nodeId`
-reported, and MUST display a `rad id update --allow <DID>` line carrying that
-same DID, ready to copy. The DID in the line MUST be the one reported rather
-than a placeholder, so copying the line as shown is the correct command.
-
-Copying MUST put that line on the clipboard.
-
-The restatement MUST NOT be the flow's only statement of the consequence; the
-embedded step states it before the identity is created, and this step restates it
-with the DID that now exists.
-
-#### Scenario: The allow line carries the reported DID
-
-- **GIVEN** a confirm step told a node id of a distinctive DID
-- **THEN** a `rad id update --allow` line MUST be displayed
-- **AND** it MUST contain that DID
-- **AND WHEN** the step is told a different node id
-- **THEN** the displayed line MUST contain the second DID and MUST NOT contain
-  the first
-
-#### Scenario: Copying puts the allow line on the clipboard
-
-- **GIVEN** a confirm step displaying an allow line for a known DID
-- **WHEN** the copy control is invoked
-- **THEN** the clipboard MUST hold that line
-
-#### Scenario: The separateness consequence is restated with its effect
-
-- **WHEN** the confirm step is shown
-- **THEN** the displayed text MUST state that this is a new identity
-- **AND** it MUST state that a private repository reaches this node only once a
-  delegate authorises this DID
+- **GIVEN** a flow whose step in force is the network step, over a backend
+  accepting every call
+- **WHEN** the step's forward control is invoked
+- **THEN** no `startNode` call MUST have been issued
+- **AND** no `setSetting` call MUST have been issued
+- **AND** no `createEmbeddedIdentity` call MUST have been issued
 
 ### Requirement: A step reports a backend refusal rather than a generic failure
 
@@ -952,8 +963,14 @@ that a flow given different replies lands on different steps:
 - with the mode not yet reported as `embedded`, the embedded step;
 - with the mode `embedded` and `getEmbeddedIdentity().exists` false, the identity
   step;
-- with an identity existing and the node not serving, the start step;
-- with an identity existing and the node serving, the confirm step.
+- with the mode `embedded` and an identity existing, the network step, which is
+  the last and has no work the backend can report as done.
+
+The node's state MUST NOT affect where a reopened setup lands. This flow neither
+starts nor stops a node, so whether one is running says nothing about which of
+its steps still has work — and a flow that landed differently for a running node
+than for a stopped one would be reporting the node's state through the step it
+chose, which is `embedded-state`'s job and not a step's.
 
 The resume MUST put the step in force once, as a single move, rather than by
 repeatedly advancing. Advancing moves the staleness epoch the preflight replies
@@ -986,20 +1003,30 @@ as the first step with work left.
   existing identity with a node id, and the node not serving
 - **WHEN** the preflight has answered
 - **THEN** the step in force MUST NOT be the identity step
-- **AND** the step in force MUST be the start step
+- **AND** the step in force MUST be the network step
 
 #### Scenario: Different backend states resume to different steps
 
 - **GIVEN** a setup raised against a backend reporting `embedded` in force,
-  `getEmbeddedIdentity().exists` false, and the node not serving
+  `getEmbeddedIdentity().exists` false
 - **WHEN** the preflight has answered
 - **THEN** the step in force MUST be the identity step
-- **AND WHEN** a setup is raised against a backend reporting `embedded` in force,
-  an existing identity with a node id, and the node not serving
-- **THEN** the step in force MUST be the start step
-- **AND WHEN** a setup is raised against a backend reporting `embedded` in force,
-  an existing identity and the node serving
-- **THEN** the step in force MUST be the confirm step
+- **AND WHEN** a setup is raised against a backend reporting `embedded` in force
+  and an existing identity with a node id
+- **THEN** the step in force MUST be the network step
+- **AND WHEN** a setup is raised against a backend reporting a mode other than
+  `embedded` and an existing identity
+- **THEN** the step in force MUST be the embedded step
+
+#### Scenario: The node's state does not change where the flow lands
+
+- **GIVEN** a setup raised against a backend reporting `embedded` in force, an
+  existing identity, and the node reporting `running:false` and `serving:false`
+- **WHEN** the preflight has answered
+- **THEN** the step in force MUST be the network step
+- **AND WHEN** the same setup is lowered and raised again against a backend
+  identical but for the node reporting `running:true` and `serving:true`
+- **THEN** the step in force MUST still be the network step
 
 #### Scenario: A mode not yet in force resumes to the embedded step
 
@@ -1015,22 +1042,22 @@ as the first step with work left.
 - **WHEN** the setup is raised again and the preflight has answered
 - **THEN** the step in force MUST be the identity step
 - **AND WHEN** the same setup is lowered and raised again against a backend now
-  reporting an existing identity with the node serving
-- **THEN** the step in force MUST be the confirm step
+  reporting an existing identity
+- **THEN** the step in force MUST be the network step
 
 #### Scenario: The flow waits at preflight rather than resuming from defaults
 
 - **GIVEN** a setup raised against a backend whose identity reply is withheld,
-  reporting `embedded` in force and the node serving
+  reporting `embedded` in force
 - **THEN** the step in force MUST be the preflight step
 - **AND WHEN** the withheld reply is delivered, reporting an existing identity
-- **THEN** the step in force MUST be the confirm step
+- **THEN** the step in force MUST be the network step
 
 #### Scenario: The resumed step's findings are populated
 
-- **GIVEN** a setup raised against a backend reporting `embedded` in force, an
-  existing identity with a distinctive node id, and the node not serving
-- **WHEN** the preflight has answered and the step in force is the start step
+- **GIVEN** a setup raised against a backend reporting `embedded` in force and
+  an existing identity with a distinctive node id
+- **WHEN** the preflight has answered and the step in force is the network step
 - **THEN** the identity finding MUST report that an identity exists, carrying that
   node id
 - **AND WHEN** back is invoked to reach the identity step
@@ -1042,27 +1069,21 @@ as the first step with work left.
 The module MUST raise the setup only for a request to set the embedded node up.
 A request to start or restart an already-created node MUST NOT raise it.
 
-The setup's start step is gated on no node answering the resolved socket, which a
-restart's node is; it offers no stop, so a restart's two calls cannot be sequenced
-from it; and it starts the node with the passphrase the identity step took in the
-same showing, which a later showing does not have. `getEmbeddedIdentity()` reports
-no field saying whether an existing identity's key is encrypted, so the module
-cannot even determine whether a passphrase is needed. Raising the setup for those
-requests would present a flow that cannot perform them.
+**Starting is not a step of this flow, so it cannot be served by raising it.**
+The setup creates an identity and puts the mode in force; a node that already has
+an identity has nothing left for any of its steps to do, so raising it for a
+start request would present four steps, three of them already done, none of them
+the act that was asked for. Starting belongs to the Embedded surface, which is
+where a node's state is reported and where `embedded-state` requires the start to
+happen.
 
-Starting and restarting an existing node are therefore **out of scope for this
-capability**, and belong to the durable settings surface, which is where a
-passphrase can be asked for. Until that surface exists, the state surface MUST NOT
-present an enabled action for the states whose action would be a start or a
-restart — see `embedded-state`. An action that reaches nobody is the dead end this
-work exists to remove, and leaving one enabled is worse than offering none,
-because it reads as a control that is merely broken.
+A restart is also not this flow's: it is two calls whose refusals are different
+sentences, and this capability sequences neither.
 
 The requirement is about which request was made, not about which state the module
 is in, so a host that raised the setup for every request alike MUST fail it. That
 is what stops the rule being satisfied by a host that happens never to receive a
-start request today, and is why it must hold on the day such a request is
-routable.
+start request today.
 
 #### Scenario: A start request does not raise the setup
 

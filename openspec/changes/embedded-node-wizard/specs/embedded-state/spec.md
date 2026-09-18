@@ -6,9 +6,16 @@ reports, each with its own sentence and its own next action, so that a mode
 whose node has not been created, has not been started, or has stopped serving
 is never rendered as a node that exists and holds nothing.
 
-This capability owns the *state surface* — the panel that stands where a
-repository list would be. It does not own the guided setup that panel offers to
-open, which is `embedded-setup`'s, nor the durable configuration panel.
+This capability also owns **starting the node**. Starting is not a setup step —
+it is something Embedded does every time it is opened, for the life of the
+mode — so it belongs to the surface that reports the node's state rather than to
+a flow a user walks once. That includes the node starting by itself where it
+can, the passphrase being asked for where it cannot, and the rule that keeps a
+node this module started from being reported as an obstacle.
+
+It does not own the guided setup this surface offers to open, which is
+`embedded-setup`'s, nor the durable configuration panel, nor the header's
+display of the identity, which is `embedded-header`'s.
 
 ## ADDED Requirements
 
@@ -47,9 +54,15 @@ elsewhere.
 Each state MUST carry its own sentence describing what is true, and its own
 action naming what the user may do next. A single banner MUST NOT stand in for
 these, because the states differ in the action they offer and not only in their
-wording: a home with no identity offers to open the setup, a stopped node offers
-a start, a node that has stopped serving offers a restart, and a blocked home
-offers no action that would write, because none can succeed.
+wording: a home with no identity offers to open the setup, a stopped node with
+an encrypted key offers a passphrase and a start, a node that has stopped
+serving offers a restart, and a blocked home offers no action that would write,
+because none can succeed.
+
+A stopped node with an **unencrypted** key offers no action at all, because the
+surface starts it without being asked — see the requirement on that below. It is
+the one state whose next act is the module's rather than the user's, and it MUST
+NOT render a control that would duplicate a start already issued.
 
 Naming an action is distinct from that action being available. Which actions this
 version of the module can carry out is stated separately below, and a state whose
@@ -75,8 +88,8 @@ exceeded, which the view cannot reconstruct.
 
 - **GIVEN** a repository list in `embedded` told `exists:false`
 - **THEN** the rendered action MUST be the one that opens the guided setup
-- **AND WHEN** the same list is told `exists:true` with a node reporting
-  `running:false` and `serving:false`
+- **AND WHEN** the same list is told `exists:true` with `encrypted:true` and a
+  node reporting `running:false` and `serving:false`
 - **THEN** the rendered action MUST be the one that starts the node
 - **AND** the rendered sentence MUST differ from the one rendered for
   `exists:false`
@@ -92,8 +105,9 @@ exceeded, which the view cannot reconstruct.
 
 #### Scenario: The most fundamental obstacle is the one rendered
 
-- **GIVEN** a repository list in `embedded` whose `startNode` was answered with
-  a distinctive refusal, and which is then told a non-empty `pathsProblem`
+- **GIVEN** a repository list in `embedded` told `encrypted:true`, whose
+  `startNode` was answered with a distinctive refusal, and which is then told a
+  non-empty `pathsProblem`
 - **THEN** the rendered sentence MUST contain the `pathsProblem` text
 - **AND** no action MUST be named
 - **AND WHEN** the same list is told an empty `pathsProblem`, with the refusal
@@ -364,6 +378,188 @@ they are `embedded-setup`'s.
 - **THEN** the rendered sentence MUST state that the node runs as a new
   identity, separate from any Radicle node the user already runs
 
+### Requirement: An unencrypted identity starts its node without being asked
+
+While the mode in force is `embedded`, the state is **stopped**, and
+`getEmbeddedIdentity()` reports `encrypted:false`, the surface MUST issue
+`startNode` with an empty passphrase without the user taking any action.
+
+A user who has set an embedded node up has asked for a node. Requiring them to
+press a control the module could have pressed itself — every time the mode is
+opened, for the life of the mode — is asking for an act with one possible
+answer. The node can be started here and only here without a secret, so this is
+the one case where starting unasked costs the user nothing to decline, because
+there is nothing to decline.
+
+The start MUST be issued **once per arrival in the stopped state**, and MUST NOT
+be re-issued while the call is outstanding or after it has been answered, until
+the state has left **stopped** and returned to it. A surface that re-issued on
+every reading would start a node repeatedly against a backend that is slow to
+answer.
+
+A start issued this way MUST be reported through the same states as one a user
+asked for: the state MUST be **starting** while it is outstanding, and a refusal
+MUST put it in **start failed** with the backend's message displayed. It MUST
+NOT be reported more quietly for having been automatic — a node that failed to
+start is the same fact either way, and a user who never pressed anything has
+less context, not more.
+
+The automatic start MUST NOT happen in any other state. In **blocked** and **no
+identity** there is nothing to start; in **not serving** the runtime is still
+loaded and a bare start would be refused; in **start failed** a start has
+already been tried and answered, and retrying unasked would loop against a
+backend that refuses every time.
+
+#### Scenario: A stopped node with an unencrypted key starts by itself
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:false`, and a node reporting `running:false` and `serving:false`
+- **WHEN** the state is rendered, with no action taken
+- **THEN** exactly one `startNode` call MUST have been issued
+- **AND** its passphrase argument MUST be the empty string
+- **AND** the rendered state MUST be the starting one
+
+#### Scenario: The automatic start is issued once, not on every reading
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:false` and a node reporting `running:false` and `serving:false`,
+  whose `startNode` reply is withheld
+- **WHEN** the backend reports the same node status a second and a third time
+- **THEN** exactly one `startNode` call MUST have been issued
+
+#### Scenario: A refused automatic start is reported as a refusal
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:false` and a stopped node, whose `startNode` is answered with a
+  distinctive message
+- **THEN** the rendered state MUST be the start-failed one
+- **AND** that message MUST be displayed
+
+#### Scenario: No automatic start where there is nothing to start
+
+- **GIVEN** a repository list in `embedded` told `exists:false`
+- **THEN** no `startNode` call MUST have been issued
+- **AND WHEN** the same list is instead told a non-empty `pathsProblem`
+- **THEN** no `startNode` call MUST have been issued
+- **AND WHEN** the same list is instead told `exists:true` with
+  `encrypted:false` and a node reporting `running:true` with `serving:false`
+- **THEN** no `startNode` call MUST have been issued
+
+### Requirement: An encrypted identity is asked for its passphrase, not sent to a flow
+
+While the mode in force is `embedded`, the state is **stopped**, and
+`getEmbeddedIdentity()` reports `encrypted:true`, the surface MUST offer a field
+to type a passphrase into and a control that starts the node with what was
+typed. It MUST NOT start the node unasked, because it has no passphrase to start
+it with.
+
+That prompt MUST be **one field on this surface**, not a step of the guided
+setup and not a separate flow. A passphrase is one answer to one question asked
+at one moment; routing it through a multi-step flow would make the user walk
+steps whose work is already done to reach the only one that is not.
+
+The surface MUST NOT display the passphrase as it is typed, and MUST NOT retain
+it after the reply to the `startNode` call it was submitted with. A refused
+start MUST leave the field available so a mistyped passphrase can be corrected,
+and the refusal MUST be displayed as the backend worded it — a wrong passphrase
+is the most likely refusal, and it is only actionable when it is named.
+
+The distinction between the two states MUST be derived from the reported
+`encrypted` field, so that a surface told the same node status with a different
+`encrypted` value behaves differently. It MUST NOT be derived from whether a
+start has previously failed, which would make the prompt a consequence of an
+error rather than of the identity's own nature.
+
+#### Scenario: An encrypted identity prompts rather than starting
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:true`, and a node reporting `running:false` and `serving:false`
+- **THEN** no `startNode` call MUST have been issued
+- **AND** a field for a passphrase MUST be present
+- **AND** the request to open the guided setup MUST NOT have been emitted
+
+#### Scenario: The same node status behaves differently on the encrypted field
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:true` and a node reporting `running:false` and `serving:false`
+- **THEN** no `startNode` call MUST have been issued
+- **AND WHEN** the same list is told the identical node status with
+  `encrypted:false`
+- **THEN** exactly one `startNode` call MUST have been issued
+
+#### Scenario: The typed passphrase is the one submitted
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:true` and a stopped node, with `correct horse battery` typed into
+  the passphrase field
+- **WHEN** the control that starts the node is invoked
+- **THEN** exactly one `startNode` call MUST have been issued
+- **AND** its passphrase argument MUST be `correct horse battery`
+
+#### Scenario: A refused passphrase can be corrected
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:true` and a stopped node, whose `startNode` is answered with a
+  distinctive message
+- **WHEN** a passphrase is submitted
+- **THEN** that message MUST be displayed
+- **AND** the passphrase field MUST still be present
+- **AND WHEN** a second passphrase is submitted against a backend that now
+  reports the node started
+- **THEN** that message MUST NOT be displayed
+
+#### Scenario: The passphrase does not outlive its call
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:true` and a stopped node
+- **WHEN** a passphrase is submitted and the reply reporting the node started
+  has arrived
+- **THEN** the surface MUST NOT retain that passphrase
+
+### Requirement: A node this module started is not reported as one in the way
+
+A node answering the resolved socket MUST be reported as an obstacle only when
+this module did not start it. When the module's own start is what put a node on
+that socket, the surface MUST report that the node is running — which is the
+outcome the user wanted — and MUST NOT report that something is contending for
+the socket.
+
+This is the defect the setup flow shipped and the reason starting moved here: a
+screen warned that "a node is already answering on the resolved socket" directly
+above its own report that the node was running and serving. Both sentences were
+derived from true readings, and together they described a conflict that did not
+exist, because the node being warned about was the one the module had just
+started. A correct fact rendered as a hazard when it describes the user's own
+success is worse than no fact, because it sends a user looking for a second node
+that is not there.
+
+The surface MUST therefore distinguish the two by whether a `startNode` call it
+issued was answered with a success, and MUST NOT distinguish them by the node
+status alone, which reports the same fields for both.
+
+A node found already serving when the module has started none MUST still be
+reported as such, because that one genuinely is somebody else's and a start
+against it will be refused.
+
+#### Scenario: A node this surface started reads as running, not as contention
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:false` and a stopped node, whose `startNode` is answered reporting
+  the node started, and whose node then reports `serving:true`
+- **THEN** the rendered text MUST NOT state that a node is already answering on
+  the socket
+- **AND** the rendered text MUST NOT state that starting a second node would
+  contend for it
+
+#### Scenario: A node the surface did not start is still reported as found
+
+- **GIVEN** a repository list in `embedded` told `exists:true` with
+  `encrypted:true` and a node reporting `serving:true`, with no `startNode`
+  call ever issued by this surface
+- **THEN** the rendered text MUST state that a node is already answering on the
+  socket
+- **AND** no `startNode` call MUST have been issued
+
 ### Requirement: Only an action something can carry out is offered as enabled
 
 The surface MUST render an action as enabled only when a request it emits reaches
@@ -377,14 +573,16 @@ that has not built this yet, and it gives a user no other thing to try. That is
 the dead end this capability was written to remove, and re-creating it one state
 along would be the same defect.
 
-The request that opens the guided setup reaches a host. The requests that start or
-restart a node do not, and `embedded-setup` says why: both need a passphrase that
-only the durable settings surface can ask for, and `getEmbeddedIdentity()` reports
-no field saying whether an existing identity's key is encrypted. So while that
-surface does not exist the **stopped**, **start failed** and **not serving** states
-MUST name their action while leaving it not enabled, and MUST state that starting
-the node is not yet available from here — not that it failed, and not that the node
-cannot be started at all.
+The request that opens the guided setup reaches a host, and so does the request
+that starts a node: this capability hosts starting, and `getEmbeddedIdentity()`
+reports `encrypted`, which is what makes a passphrase askable here.
+
+The request that **restarts** a node does not reach a host. A restart is a stop
+followed by a start, whose two refusals are different sentences a user should
+see separately, and nothing sequences the pair. So the **not serving** state MUST
+name its action while leaving it not enabled, and MUST state that restarting the
+node is not yet available from here — not that it failed, and not that the node
+cannot be restarted at all.
 
 This MUST be keyed on whether the action's request is hosted, so that hosting one
 makes it enabled with nothing else changed. A surface hard-coding which states are
@@ -394,10 +592,10 @@ moment the host appears.
 #### Scenario: An unhosted action is named but not enabled, and says so
 
 - **GIVEN** a repository list in `embedded` told `exists:true` with a node
-  reporting `running:false` and `serving:false`
-- **THEN** the named action MUST be the one that starts the node
+  reporting `running:true` and `serving:false` and no start outstanding
+- **THEN** the named action MUST be the one that restarts the node
 - **AND** it MUST NOT be enabled
-- **AND** the rendered text MUST state that starting the node is not yet
+- **AND** the rendered text MUST state that restarting the node is not yet
   available from here
 - **AND WHEN** the same list is told `exists:false`
 - **THEN** the named action MUST be the one that opens the guided setup
@@ -407,21 +605,21 @@ moment the host appears.
 #### Scenario: Hosting an action is what enables it
 
 - **GIVEN** a repository list in `embedded` told `exists:true` with a node
-  reporting `running:false` and `serving:false`, and told that the request to
-  start a node reaches nobody
+  reporting `running:true` and `serving:false`, and told that the request to
+  restart a node reaches nobody
 - **THEN** the named action MUST NOT be enabled
-- **AND WHEN** the same list is told that the request to start a node reaches a
-  host, with nothing else changed
+- **AND WHEN** the same list is told that the request to restart a node reaches
+  a host, with nothing else changed
 - **THEN** the named action MUST be enabled
 - **AND** the rendered text MUST NOT state that it is unavailable
 
 #### Scenario: An action that is not enabled emits no request
 
 - **GIVEN** a repository list in `embedded` told `exists:true` with a node
-  reporting `running:false` and `serving:false`
+  reporting `running:true` and `serving:false` and no start outstanding
 - **WHEN** the rendered action is taken
 - **THEN** no request MUST have been emitted
-- **AND** no `startNode` call MUST have been issued
+- **AND** no `stopNode` call MUST have been issued
 
 ### Requirement: The blank-pane assertion keeps a live referent
 
