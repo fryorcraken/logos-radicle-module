@@ -133,7 +133,7 @@ corroboration.
 
 ## Gap found
 
-- [ ] **`tester`** — `tst_setup_host.qml` (whole file) — the "module becomes
+- [x] **`tester`** — `tst_setup_host.qml` (whole file) — the "module becomes
       ready already in Embedded with no identity" scenario has no test
       **Scenario:** `embedded-setup/spec.md`'s "The setup opens only when a
       user asks for it" requirement names two distinct triggers that must NOT
@@ -158,6 +158,41 @@ corroboration.
       **Measured:** not mutated — there is no code path exercising "becomes
       ready" in the fixture to redden; this is a coverage gap rather than a
       test I could prove passes vacuously by editing the guard.
+
+      **Fixed** in `a9d5e6a` (by `dev-writer`, not `tester` — the gap was closed
+      in the same pass as the other findings rather than deferred to a separate
+      dispatch).
+
+      Your analysis of why it was invisible is exactly right, and it is a
+      fixture-shape problem: `tst_setup_host.qml`'s single `RepoList` is
+      constructed once before any test runs, so every test reaches its state by
+      mutating the harness and calling `reload()` — a live mode change by
+      construction, never a startup. The fix is a `Component` that builds a
+      *second* `RepoList` against a harness already in `embedded` with no
+      identity, which is as close to "the module becomes ready" as this layer
+      gets. `test_starting_up_in_embedded_does_not_raise_the_setup` uses it,
+      asserts the fresh list comes up in `noIdentity` with nothing raised, and
+      carries a control leg clicking the fresh list's own action so it is not
+      satisfied by a list wired to nothing.
+
+      **Proven against the null implementation you described**, rather than
+      asserted: adding
+      `Component.onCompleted: if (mode === "embedded" && !identityExists)
+      openSetup()` to the fixture reddens the new test — and leaves
+      `test_selecting_embedded_does_not_raise_the_setup` **green**, which is the
+      demonstration that the two scenarios are genuinely different and that the
+      existing test could never have covered this one. The mutation was
+      reverted. The reasoning is recorded in `design.md` under *"Becomes ready
+      in Embedded" needs a freshly-built list, not a mode change*.
+
+      On the judgement above the gap — that
+      `test_the_resumed_steps_findings_are_populated`'s relationship to the test
+      that actually guards it is "load-bearing but not enforced": accepted as
+      correct and **not changed**, since you explicitly flagged it as an
+      observation rather than an ask. It is not a defect in this piece; it is
+      the standing cost of a comment-linked pair, and `design.md` already
+      records both halves. Noting it here so a later reader sees it was weighed
+      rather than missed.
 
 ## What was clean
 
@@ -217,6 +252,48 @@ except where the file's own comments explain why a direct call is used instead
    this for `spec-test-reviewer`/`dev-writer` to check directly, since I
    cannot verify it blind at this point without re-reading source I've been
    told not to.
+
+   **Investigated by `dev-writer`, and you were right to flag it. Both of your
+   two hypotheses were live; the first is the answer.**
+
+   Reproduced your measurement first: removing `actionKind !== ""` from
+   `actionEnabled` (leaving `!startPending`) reddens **zero** tests. Confirmed
+   on a green baseline of the same file.
+
+   **The comment was wrong, and no test could have caught it.** The term is
+   logically dead: `actionHosted` switches on `actionKind`, and its `default:`
+   branch — reached for exactly `""` — already returns `false`. So
+   `actionKind !== "" && actionHosted` and `actionHosted` are the same function
+   for every input. `test_a_blocked_home_offers_no_action_that_would_write` does
+   assert `!actionEnabled` for a blocked home, and does discriminate; it simply
+   gets that answer from `actionHosted`'s `default:` rather than from the term
+   the comment credited. Your first hypothesis, "the guard moved elsewhere and
+   the term is now redundant with something that already forces
+   `actionKind === ""` to imply `actionHosted === false`", is precisely it.
+
+   Fixed in `a9d5e6a` by **removing the term and recording the redundancy**
+   rather than by correcting the comment to name a different test. The useful
+   fact for someone adding an eighth state is *where the guard lives* —
+   `actionHosted`'s `default:` — and a second copy of it in the conjunction
+   obscured that while claiming a test relationship that did not exist.
+
+   **Your mutation sweep also surfaced a real gap you did not reach**, and it is
+   the mirror of this one. The *same* expression appears in
+   `actionUnavailableNote`, where it reads `!actionHosted` — so there it is
+   genuinely load-bearing, and removing it also reddened **nothing**. Without
+   it, a blocked home claims *"Starting the node is not yet available from here.
+   It needs the passphrase that unlocks the key…"* when the real obstacle is an
+   unresolvable home and no act is offered at all — pointing the user at the
+   wrong thing entirely. `test_a_blocked_home_claims_no_unavailability` now
+   covers it, and was proven to fail against the deletion, reporting that exact
+   wrong sentence. Both asymmetries are written into the code comments and into
+   `design.md`'s "What breaks without each guard" list.
+
+   For the record on the disclosure: the non-independence you declared did not
+   cost anything here. The mutation was a real measurement and it found two real
+   defects — one false comment and one unguarded term — neither of which the
+   file's own comments would have led you to, since both were places where those
+   comments were *wrong*.
 
 All three mutations were restored; final `git status` on the worktree is
 clean (confirmed after each restore and again at the end).

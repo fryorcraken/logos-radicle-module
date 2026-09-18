@@ -10,7 +10,7 @@ six-step flow).
 
 ## Findings
 
-- [ ] **`dev-writer`** — `SetupWizard.qml:96-98,557-563` /
+- [x] **`dev-writer`** — `SetupWizard.qml:96-98,557-563` /
       `SetupFlow.qml:426-430,680-708` — the passphrase-residency fix from piece
       1 (clear `passphraseField.text` on `nodeStarted`) does not cover the
       close-and-reopen path this piece adds, so a passphrase typed in one
@@ -78,6 +78,39 @@ six-step flow).
       `resumeIndex` lands past `identity`), not only on `nodeStarted` — with a
       regression test that opens, types, abandons before start, reopens, and
       asserts the field is empty.
+
+      **Fixed** in `a9d5e6a`. `SetupWizard.show()` now clears
+      `passphraseField.text` and returns `passphraseSwitch.checked` to its
+      declared default, making a passphrase's lifetime **exactly one showing** —
+      which is stronger than the recommendation, and simpler: it needs no
+      `resumeIndex` test, because there is no showing in which carrying a
+      passphrase forward is wanted. `show()` is the only place it can go: it is
+      the single per-showing entry point, it runs before anything could be typed
+      in the new showing, and it is in the view, where the field is and where
+      `SetupFlow.reset()` cannot reach.
+
+      Written test-first. `test_a_passphrase_does_not_outlive_an_abandoned_
+      showing` in `tst_setup_wizard_view.qml` drives the reported scenario —
+      show → type → `submitIdentity` → assert the field still holds it (so the
+      test proves a clear happened rather than that the field was never filled)
+      → assert `nodeStarted` is false → arm `identityExists` → `show()` again →
+      assert the reopened flow resumes at `start` → assert the field is empty.
+      It failed before the fix with exactly the reviewer's observation
+      (`Actual: correct horse battery, Expected: ""`) and passes after.
+
+      **The constraint you flagged is kept, and now has its own guard.**
+      Clearing on the button's `onClicked` would destroy the passphrase a retry
+      needs after a refusal; keying on the showing sidesteps that, because a
+      refused `submitStart` does not re-enter `show()`.
+      `test_a_refused_start_keeps_the_passphrase_for_the_retry` pins that
+      direction — it injects a `startNode` that refuses, and asserts the field
+      still holds the passphrase afterwards — so a future edit that "simplifies"
+      the clear back into the click handler turns it red.
+
+      The reasoning is in `design.md` under *The passphrase is cleared once both
+      calls that need it have run*, which now carries the showing-scoped half
+      and states why the click handler is the trap, so it survives this
+      tracker's deletion.
 
 ## Clean areas (no findings)
 

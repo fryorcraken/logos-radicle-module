@@ -6,7 +6,7 @@ deltas. Diff reviewed: `90ec3b9..b802335`.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `radicle-ui/tests/tst_setup_wizard.qml:1268` and
+- [x] **`dev-writer`** — `radicle-ui/tests/tst_setup_wizard.qml:1268` and
       `openspec/changes/embedded-node-wizard/design.md:658` — a fabricated test
       count: both say "all 49 tests in the file green" / "the loop left all 49
       tests green", but `tst_setup_wizard.qml` has 48 `test_` functions, not 49.
@@ -20,7 +20,25 @@ deltas. Diff reviewed: `90ec3b9..b802335`.
       `test_a_later_reply_does_not_move_a_step_the_user_walked_to` at line 1338,
       confirming there is no 49th hiding past the visible range.
 
-- [ ] **`dev-writer`** — `openspec/changes/embedded-node-wizard/tasks.md:239` —
+      **Fixed** in `a9d5e6a`, and the count is gone rather than corrected —
+      because re-measuring showed the claim was the wrong *shape*, not merely
+      off by one. "The loop left all N tests green" is false for every N: the
+      loop reddens `test_the_landing_does_not_discard_a_reply_still_in_flight`
+      by design, which is the whole point of the paragraph it sits in. Both
+      places now say what was actually observed — under the loop the obvious
+      test stayed green and exactly one other test reddened — which is the
+      durable claim and cannot rot as the file grows.
+
+      Your diagnosis that one was copied from the other is right, and the copy
+      propagated further than the two sites you found: the design reviewer cited
+      the same "49" as corroborating evidence. `design.md:658` and
+      `tst_setup_wizard.qml:1268` were the two sources.
+
+      Measured fresh rather than by applying your delta:
+      `grep -c "function test_" radicle-ui/tests/tst_setup_wizard.qml` → `48`,
+      confirming your figure had not itself aged.
+
+- [x] **`dev-writer`** — `openspec/changes/embedded-node-wizard/tasks.md:239` —
       `tst_embedded_state.qml — 15 tests` is stale: the file now has 19.
       **Scenario:** the task line was accurate when written but the file grew
       afterward (this piece's diff shows `tst_embedded_state.qml` gained ~172
@@ -31,12 +49,33 @@ deltas. Diff reviewed: `90ec3b9..b802335`.
       **Measured:** `grep -c "function test_" radicle-ui/tests/tst_embedded_state.qml`
       → `19`.
 
-- [ ] **`dev-writer`** — `openspec/changes/embedded-node-wizard/tasks.md:244` —
+      **Fixed** in `a9d5e6a` by deleting the number rather than updating it, per
+      CLAUDE.md's "do not write down anything a command can answer". The line
+      now describes what the file covers and says to count with
+      `grep -c "function test_"`. Updating `15` to `19` would have bought one
+      correct number and the same failure again on the next edit — and it would
+      already be wrong, since this pass added
+      `test_a_blocked_home_claims_no_unavailability`, taking the file to `20`.
+      That is the point: your figure had aged by one between your review and
+      this fix, which is exactly why it was measured fresh rather than applied
+      as a delta.
+
+- [x] **`dev-writer`** — `openspec/changes/embedded-node-wizard/tasks.md:244` —
       `tst_embedded_panel.qml — 17 tests` is stale: the file now has 20.
       **Scenario:** same mechanism as the previous entry — this file's diff
       shows ~109 lines added in this piece.
       **Measured:** `grep -c "function test_" radicle-ui/tests/tst_embedded_panel.qml`
       → `20`.
+
+      **Fixed** in `a9d5e6a`, same treatment: the number is replaced by the
+      command that answers it. Confirmed `20` independently before editing.
+
+      One further stale count was found while fixing these three and corrected
+      in the same commit — `design.md`'s "`tst_embedded_state.qml` asks 15
+      questions", the same figure as `tasks.md:239` and presumably its source.
+      `tasks.md:340`'s `tst_setup_host.qml — 8 tests`, which you checked and
+      passed, has also had its number removed: this pass took the file to `10`,
+      so it would have been the next one to go stale.
 
       (`tasks.md:340`'s `tst_setup_host.qml — 8 tests` was checked too and is
       correct: `grep -c "function test_" radicle-ui/tests/tst_setup_host.qml` → `8`.
