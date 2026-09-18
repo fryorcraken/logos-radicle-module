@@ -74,6 +74,11 @@ Item {
     readonly property bool advanceEnabled: setupFlow.canAdvance
     readonly property bool confirmEmbeddedEnabled: setupFlow.canConfirmEmbedded
     readonly property bool createEnabled: setupFlow.canCreateIdentity
+    /// The identity step's ONE forward control, and which of the three states
+    /// decides what it does. Two observables because they answer two questions:
+    /// "is the way out offered" and "what will it do".
+    readonly property bool identityForwardEnabled: setupFlow.canAdvanceIdentity
+    readonly property string identityState: setupFlow.identityState
     readonly property bool startEnabled: setupFlow.canStartNode
     readonly property string errorShown: setupFlow.lastError
 
@@ -358,10 +363,28 @@ Item {
                 }
 
                 // ---- 3. identity ---------------------------------------------
+                //
+                // THREE states, told apart, and ONE control out.
+                //
+                // What this replaces was photographed by the user: a green
+                // "Created: did:key:z6Mkv…" above an amber "An identity already
+                // exists in this home … Creating a second one is refused", a
+                // filled passphrase field with the encrypt switch off, and two
+                // buttons — "Create identity" and "Next". Every one of those is
+                // a consequence of the step rendering "there is an identity"
+                // without asking WHERE it came from, and of offering creation
+                // and advancing as separate acts.
+                //
+                // So the three states are `setupFlow.identityState`, one value
+                // with three cases, and each renders exactly one statement. Two
+                // of them cannot be on screen at once, which is the point of it
+                // being one value rather than two booleans.
                 Column {
                     spacing: Theme.gapSm
 
                     Text {
+                        objectName: "identityIntro"
+                        visible: setupFlow.identityState === "none"
                         width: body.width
                         text: "Create the identity this node operates as."
                         color: Theme.textDim
@@ -369,13 +392,40 @@ Item {
                         wrapMode: Text.WordWrap
                     }
 
-                    // Returning to a step that already acted reports what it
-                    // did rather than offering to do it again. Identity
-                    // creation is not reversible through this flow.
+                    // ---- which home ------------------------------------------
+                    //
+                    // A DID names the identity and says NOTHING about where it
+                    // lives. The embedded home is derived from the Basecamp
+                    // profile's data directory — a path the user did not choose
+                    // and cannot guess — so a step reporting only a DID leaves
+                    // them unable to find, back up or inspect what was created,
+                    // or to tell it from their own ~/.radicle.
+                    //
+                    // Displayed in ALL THREE states, because "which home is
+                    // this" is the same question before and after creation.
+                    Text {
+                        objectName: "identityHome"
+                        width: body.width
+                        text: setupFlow.embeddedHome !== ""
+                              ? "This node's Radicle home: "
+                                + setupFlow.embeddedHome
+                              // An empty `home` is not an empty path to print.
+                              // The backend's own sentence names what was tried,
+                              // and is preferred over this wording.
+                              : "No Radicle home could be resolved to write "
+                                + "into. " + setupFlow.problemFor(
+                                    setupFlow.identityProblem,
+                                    setupFlow.pathsProblem, "")
+                        color: setupFlow.embeddedHome !== ""
+                               ? Theme.textDim : Theme.bad
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WrapAnywhere
+                    }
+
+                    // ---- state 2: created in THIS showing ---------------------
                     Text {
                         objectName: "identityCreated"
-                        visible: setupFlow.identityExists
-                                 && setupFlow.identityNodeId !== ""
+                        visible: setupFlow.identityState === "created"
                         width: body.width
                         text: "Created: " + setupFlow.identityNodeId
                         color: Theme.good
@@ -384,7 +434,50 @@ Item {
                         wrapMode: Text.WrapAnywhere
                     }
 
+                    // ---- state 3: already there on arrival --------------------
+                    //
+                    // A SUCCESS, not a failure. A user who already holds an
+                    // identity has succeeded at this step; the old rendering
+                    // told them creation was refused, which describes an attempt
+                    // nobody made. The note below says why creation is not
+                    // offered — as a note, in the ordinary text colour, never on
+                    // the refusal surface, which is reserved for a refusal the
+                    // backend returned to this showing.
                     Text {
+                        objectName: "identityAlreadyThere"
+                        visible: setupFlow.identityState === "present"
+                        width: body.width
+                        text: "An identity is already set up here: "
+                              + setupFlow.identityNodeId
+                        color: Theme.good
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.mono
+                        wrapMode: Text.WrapAnywhere
+                    }
+
+                    Text {
+                        objectName: "identityAlreadyThereNote"
+                        visible: setupFlow.identityState === "present"
+                        width: body.width
+                        text: "Nothing to create — this step is done. A second "
+                            + "identity in the same home is refused rather than "
+                            + "overwriting the first."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // ---- state 1's controls ----------------------------------
+                    //
+                    // The alias, the switch, the trade and the field all belong
+                    // to the no-identity state, because it is the only one in
+                    // which this step submits either. Where an identity exists
+                    // its key was sealed, or not, when it was created, and this
+                    // flow cannot change that — so stating the trade there would
+                    // describe a decision that is not the user's to take.
+                    Text {
+                        objectName: "identityAliasLabel"
+                        visible: setupFlow.identityState === "none"
                         text: "Alias"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontSm
@@ -394,6 +487,7 @@ Item {
                         id: aliasField
                         objectName: "identityAlias"
                         width: body.width
+                        visible: setupFlow.identityState === "none"
                         enabled: setupFlow.canCreateIdentity
                         placeholderText: "how this node names itself"
                         // No pre-validation, deliberately. The backend passes
@@ -409,6 +503,8 @@ Item {
                     // Default ON: leaving the control alone must produce the
                     // safer outcome.
                     Row {
+                        objectName: "identityPassphraseRow"
+                        visible: setupFlow.identityState === "none"
                         spacing: Theme.gapSm
 
                         Switch {
@@ -430,6 +526,7 @@ Item {
                     // See the file header for why neither is conditional.
                     Text {
                         objectName: "passphraseTrade"
+                        visible: setupFlow.identityState === "none"
                         width: body.width
                         text: "With a passphrase, the node must be unlocked "
                             + "every time it starts — it is handed an "
@@ -446,7 +543,8 @@ Item {
                         id: passphraseField
                         objectName: "identityPassphrase"
                         width: body.width
-                        visible: passphraseSwitch.checked
+                        visible: setupFlow.identityState === "none"
+                                 && passphraseSwitch.checked
                         enabled: setupFlow.canCreateIdentity
                         echoMode: TextInput.Password
                         placeholderText: "passphrase"
@@ -462,12 +560,18 @@ Item {
                         wrapMode: Text.WordWrap
                     }
 
+                    // ---- the ONE forward control -----------------------------
+                    //
+                    // Creating the identity IS how this step is left, so there
+                    // is no second control asking a question whose only
+                    // permitted answer is yes. The label comes from the flow, so
+                    // it names the act that will actually be performed.
                     Button {
-                        objectName: "identityCreate"
-                        text: "Create identity"
-                        enabled: setupFlow.canCreateIdentity
-                        onClicked: setupFlow.submitIdentity(aliasField.text,
-                                                            wizard.passphrase)
+                        objectName: "identityForward"
+                        text: setupFlow.identityActionLabel
+                        enabled: setupFlow.canAdvanceIdentity
+                        onClicked: setupFlow.submitIdentityStep(
+                                       aliasField.text, wizard.passphrase)
                     }
                 }
 
@@ -686,8 +790,16 @@ Item {
                     onClicked: setupFlow.back()
                 }
 
+                // **Absent on the identity step**, which offers its own single
+                // forward control instead. Two buttons that both move forward is
+                // exactly what the user photographed — "Create identity" beside
+                // "Next" — and it makes it possible to advance past a step whose
+                // work was never done. Hidden rather than disabled: a disabled
+                // Next beside an enabled "Create identity and continue" would
+                // still read as two ways out, one of them broken.
                 Button {
                     objectName: "wizardNext"
+                    visible: setupFlow.step !== "identity"
                     text: "Next"
                     enabled: setupFlow.canAdvance
                     onClicked: setupFlow.advance()

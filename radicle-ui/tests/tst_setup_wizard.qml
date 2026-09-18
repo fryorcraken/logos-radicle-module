@@ -368,15 +368,23 @@ Item {
         /// Returning to a step that already acted must report what it did
         /// rather than offer to do it again. Identity creation is not
         /// reversible through this flow.
+        ///
+        /// **The forward control issuing no second creation call is the part
+        /// that needs asserting, not just the gate.** `canCreateIdentity` going
+        /// false says the CALL is refused; it does not say the control the user
+        /// clicks refrains from making it. Those are two different things now
+        /// that one control does both jobs, and the call log is what separates
+        /// them.
         function test_returning_to_a_step_that_acted_does_not_offer_to_act_again() {
             flow.runPreflight();
             verify(harness.advanceTo(flow, "identity"));
             verify(flow.canCreateIdentity, "precondition: creation is offered");
 
-            verify(flow.submitIdentity("tester", "pw"));
+            verify(flow.submitIdentityStep("tester", "pw"));
             compare(flow.identityExists, true, "precondition: it was created");
+            compare(flow.step, "network",
+                    "precondition: creating advanced in the same act");
 
-            verify(flow.advance());
             verify(flow.back());
             compare(flow.step, "identity");
             compare(flow.canCreateIdentity, false,
@@ -384,6 +392,18 @@ Item {
                     + "again — createEmbeddedIdentity refuses an occupied home");
             compare(flow.identityNodeId, fake.createdNodeId,
                     "and the created node id must still be displayed");
+
+            // The control, invoked on the returned-to step, must issue nothing.
+            fake.reset();
+            verify(flow.submitIdentityStep("tester", "pw"));
+            for (var i = 0; i < fake.callLog.length; i++)
+                verify(String(fake.callLog[i])
+                           .indexOf("createEmbeddedIdentity") !== 0,
+                       "the forward control must issue no creation call on a "
+                       + "step whose identity already exists, got: "
+                       + JSON.stringify(fake.callLog));
+            compare(flow.step, "network",
+                    "and must advance instead");
         }
 
         // ---- the preflight --------------------------------------------------
@@ -523,15 +543,189 @@ Item {
                    + flow.startBlockedReason);
         }
 
-        function test_an_occupied_home_blocks_identity_creation() {
+        /// **An occupied home blocks the CALL and not the STEP.** The two used
+        /// to be one property, which is what stranded a user on a step whose
+        /// only act was already complete while an amber sentence told them
+        /// creation was refused.
+        ///
+        /// Both halves are asserted, because they are the distinction: the
+        /// creation gate is closed, and the forward control is open and
+        /// advances without issuing anything.
+        function test_an_occupied_home_blocks_creation_without_blocking_the_step() {
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkOCCUPIED";
             flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+            fake.reset();
 
-            compare(flow.canCreateIdentity, false);
-            verify(flow.createBlockedReason.indexOf("already exists") !== -1,
-                   "the reason must state that an identity already exists, "
-                   + "got: " + flow.createBlockedReason);
+            compare(flow.canCreateIdentity, false,
+                    "the creation call must be refused for an occupied home");
+            compare(flow.canAdvanceIdentity, true,
+                    "but the step's forward control must stay available — the "
+                    + "step's work is already done");
+
+            verify(flow.submitIdentityStep("tester", "pw"));
+            for (var i = 0; i < fake.callLog.length; i++)
+                verify(String(fake.callLog[i])
+                           .indexOf("createEmbeddedIdentity") !== 0,
+                       "no creation call must go out, got: "
+                       + JSON.stringify(fake.callLog));
+            compare(flow.step, "network",
+                    "and the control must advance");
+        }
+
+        /// **An unresolvable home blocks the step itself.** The other half of
+        /// the split above: with no identity and nowhere to write, the control
+        /// can neither create nor advance past work that was not done.
+        ///
+        /// The second scenario is what makes the first mean something — with the
+        /// home resolvable and nothing else changed, the control is offered.
+        function test_an_unresolvable_home_blocks_the_identity_step_itself() {
+            fake.identityExists = false;
+            fake.pathsProblem = "socket path exceeds the 108-byte cap";
+            fake.home = "";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+
+            compare(flow.canAdvanceIdentity, false,
+                    "with no identity and nowhere to write, the forward "
+                    + "control must not be enabled");
+            compare(flow.submitIdentityStep("tester", "pw"), false,
+                    "and invoking it must do nothing");
+            compare(flow.step, "identity",
+                    "leaving the step in force unchanged");
+            verify(flow.createBlockedReason !== "",
+                   "with the reason stated rather than left as a disabled "
+                   + "control");
+
+            // The only change: a home that resolves.
+            flow.reset();
+            fake.reset();
+            fake.pathsProblem = "";
+            fake.home = "/home/u/.local/share/basecamp/radicle";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+            compare(flow.canAdvanceIdentity, true,
+                    "a home that resolves must offer the control, with nothing "
+                    + "else changed");
+        }
+
+        /// **One forward control creates AND advances, in one act.** The defect
+        /// this replaces was two buttons — "Create identity" and "Next" — for a
+        /// step where creating the identity *is* how it is left.
+        function test_one_forward_control_creates_and_advances_together() {
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+            fake.reset();
+
+            verify(flow.submitIdentityStep("tester", "pw"));
+
+            var creations = 0;
+            for (var i = 0; i < fake.callLog.length; i++)
+                if (String(fake.callLog[i])
+                        .indexOf("createEmbeddedIdentity") === 0)
+                    creations = creations + 1;
+            compare(creations, 1, "exactly one creation call, got: "
+                    + JSON.stringify(fake.callLog));
+            compare(flow.step, "network",
+                    "and the step must have been left without a second "
+                    + "invocation");
+        }
+
+        /// **The label names the act the control will perform.** A button
+        /// reading "Create identity" on a step that will only advance states an
+        /// act that will not happen.
+        ///
+        /// Both directions, because a label stuck on either string would pass
+        /// one assertion.
+        function test_the_label_names_the_act_the_control_will_perform() {
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+            var withNone = String(flow.identityActionLabel).toLowerCase();
+            verify(withNone.indexOf("create") !== -1,
+                   "with no identity the label must name creating one, got: "
+                   + withNone);
+
+            flow.reset();
+            fake.reset();
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkOCCUPIED";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+            var withOne = String(flow.identityActionLabel).toLowerCase();
+            verify(withOne.indexOf("create") === -1,
+                   "with an identity the label must NOT name creating one, "
+                   + "got: " + withOne);
+            verify(withOne.indexOf("continue") !== -1,
+                   "and must name continuing to the next step, got: "
+                   + withOne);
+        }
+
+        /// **The three states are told apart**, and what decides which is what
+        /// the backend reported — never the step having been shown.
+        ///
+        /// The distinction that matters is the second versus the third: a user
+        /// who already holds an identity has SUCCEEDED at this step, and a
+        /// rendering that cannot tell "you just made this" from "this was
+        /// already here" is the one that told them creation was refused.
+        function test_the_three_identity_states_are_told_apart() {
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+            compare(flow.identityState, "none",
+                    "no identity reported means no identity state");
+            compare(flow.identityNodeId, "",
+                    "and no node id to display");
+
+            fake.createdNodeId = "did:key:z6MkJUSTMADE";
+            verify(flow.submitIdentityStep("tester", "pw"));
+            compare(flow.identityState, "created",
+                    "an identity this showing created must report as created");
+            compare(flow.identityNodeId, "did:key:z6MkJUSTMADE",
+                    "carrying the node id the reply reported");
+
+            // A fresh showing over a backend that already has one, with no
+            // creation submitted.
+            flow.reset();
+            fake.reset();
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkWASALREADYTHERE";
+            flow.runPreflight();
+            compare(flow.identityState, "present",
+                    "an identity found on arrival must NOT report as created "
+                    + "by this showing");
+            compare(flow.identityNodeId, "did:key:z6MkWASALREADYTHERE",
+                    "carrying the second node id");
+        }
+
+        /// **An identity that was already there is not reported as a failure.**
+        /// The refusal surface is reserved for a refusal the backend returned to
+        /// THIS showing; nothing was attempted here.
+        function test_an_identity_already_there_is_not_reported_as_a_failure() {
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkOCCUPIED";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+
+            compare(flow.lastError, "",
+                    "no refusal must be displayed for an attempt nobody made");
+            compare(flow.createBlockedReason, "",
+                    "and the blocking surface must not claim creation was "
+                    + "refused: this step's work is done, not obstructed");
+        }
+
+        /// **Created and refused are never both in force.** They describe
+        /// different outcomes of the same act, and both at once leaves the user
+        /// unable to tell which occurred — which is what the screenshot showed.
+        function test_created_and_refused_are_never_in_force_together() {
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+
+            verify(flow.submitIdentityStep("tester", "pw"));
+            compare(flow.identityState, "created", "precondition: created");
+            compare(flow.lastError, "",
+                    "a successful creation must leave no refusal displayed");
+            compare(flow.createBlockedReason, "",
+                    "nor any statement that creating one is refused");
         }
 
         /// **A half-created home is OFFERED creation**, and the backend's
@@ -848,6 +1042,31 @@ Item {
             verify(flow.submitIdentity("tester", "correct horse battery"));
             compare(fake.callLog[0],
                     "createEmbeddedIdentity:tester:correct horse battery");
+        }
+
+        /// **A refused creation stays on the step with the control available**,
+        /// so the user can correct what was refused and submit again. The second
+        /// half — the retry succeeding — is what stops a flow that never
+        /// advanced from passing the first.
+        function test_a_refused_creation_stays_on_the_step_and_can_retry() {
+            fake.createRefusal = "alias may not contain whitespace";
+            flow.runPreflight();
+            verify(harness.advanceTo(flow, "identity"));
+
+            verify(flow.submitIdentityStep("not valid", "pw"));
+            compare(flow.lastError, "alias may not contain whitespace",
+                    "the refusal must be displayed as the backend worded it");
+            compare(flow.step, "identity",
+                    "and the step in force must still be the identity step");
+            compare(flow.canAdvanceIdentity, true,
+                    "with the forward control still available for the retry");
+            compare(flow.identityState, "none",
+                    "and nothing reported as created");
+
+            fake.createRefusal = "";
+            verify(flow.submitIdentityStep("tester", "pw"));
+            compare(flow.step, "network",
+                    "a retry the backend accepts must leave the step");
         }
 
         /// A rejected alias is reported FROM the backend, not pre-empted: the

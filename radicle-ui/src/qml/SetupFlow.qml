@@ -118,6 +118,33 @@ QtObject {
     /// getEmbeddedIdentity().problem, verbatim.
     property string identityProblem: ""
 
+    /// Whether the identity that exists was created by a `createEmbeddedIdentity`
+    /// call made from THIS showing.
+    ///
+    /// Set only by that call's reply, cleared by `reset()`. It is the one fact
+    /// in this flow that a backend reply cannot supply: `getEmbeddedIdentity()`
+    /// reports that an identity exists and says nothing about who made it, and
+    /// "this showing made it" is a fact about this showing.
+    ///
+    /// Held as a separate flag rather than as a third value of `identityExists`
+    /// because the two answer different questions — "is there one" gates the
+    /// creation call, "did we make it" decides what is reported — and folding
+    /// them would put a display concern inside the gate.
+    property bool identityCreatedHere: false
+
+    /// Which of the identity step's THREE states is in force.
+    ///
+    /// `"none"` | `"created"` | `"present"`, derived rather than assigned. One
+    /// string rather than two booleans the view reads separately, because the
+    /// spec's hard requirement is that "created" and "already there" are never
+    /// rendered the same way and that "created" and "refused" are never on
+    /// screen together — and a single value with three cases makes rendering two
+    /// of them at once unrepresentable rather than merely discouraged. That is
+    /// the defect the user photographed: a green "Created: <DID>" above an amber
+    /// "an identity already exists … creating a second is refused".
+    readonly property string identityState:
+        !identityExists ? "none" : (identityCreatedHere ? "created" : "present")
+
     /// Whether a node is answering on the resolved socket, from
     /// getNodeStatus().serving.
     ///
@@ -183,19 +210,51 @@ QtObject {
     //
     // Each reads a finding. Nothing here reads "did the preflight pass".
 
+    /// Whether the CREATION CALL may be issued.
+    ///
     /// An unresolvable home has nowhere to write; an occupied one is refused by
     /// createEmbeddedIdentity regardless. A HALF-CREATED home is deliberately
     /// not blocked — see the header.
+    ///
+    /// **This is not the forward control's gate**, and keeping the two apart is
+    /// the whole shape of the identity step. `canAdvanceIdentity` below is what
+    /// the control reads. The spec splits them because the two blocks it names
+    /// block different things: an unresolvable home blocks the STEP (there is no
+    /// identity and no way to make one), while an occupied home blocks only the
+    /// CALL (the step's work is already done, so the control advances). Collapsed
+    /// into one property, an occupied home would strand the user on a step whose
+    /// only act is complete.
     readonly property bool canCreateIdentity:
         homeResolved && !identityExists
 
-    /// Why creation is unavailable, or "" when it is. Stated rather than left
-    /// as a disabled control with no reason.
+    /// Whether the identity step's ONE forward control is offered.
+    ///
+    /// Either there is an identity — the step's work is done, so the control
+    /// advances — or creation is possible. When neither holds, the control can
+    /// neither create nor advance past work that was not done, so it is withheld
+    /// and `createBlockedReason` says why.
+    readonly property bool canAdvanceIdentity:
+        identityExists || canCreateIdentity
+
+    /// What the forward control will DO, as the label must say.
+    ///
+    /// Derived rather than chosen by the view, so "the label names the act" is a
+    /// property of the state the act is decided from. A label naming creation on
+    /// a step that will only advance states an act that will not happen, which
+    /// the spec calls the same defect as a control that does the wrong thing.
+    readonly property string identityActionLabel:
+        identityExists ? "Continue" : "Create identity and continue"
+
+    /// Why creation is unavailable, or "" when it is.
+    ///
+    /// Note what is NOT in here any more: an identity that already exists. That
+    /// sentence was factually correct and read as a failure to a user who had
+    /// simply already done this — it explained an attempt nobody made. The
+    /// "already there" state is now reported by the step as the success it is
+    /// (`identityState === "present"`), and this string is reserved for the one
+    /// case that genuinely blocks: nowhere to write.
     readonly property string createBlockedReason: {
-        if (identityExists)
-            return "An identity already exists in this home"
-                 + (identityNodeId !== "" ? " (" + identityNodeId + ")" : "")
-                 + ". Creating a second one is refused, never an overwrite.";
+        if (identityExists) return "";
         if (!homeResolved)
             return problemFor(identityProblem, pathsProblem,
                               "No Radicle home could be resolved to write into.");
@@ -562,6 +621,32 @@ QtObject {
 
     // ---- the identity step ------------------------------------------------
 
+    /// The identity step's ONE forward control.
+    ///
+    /// **This is what the button calls**, and it is one function because it is
+    /// one act: leaving the identity step. Whether that act includes a creation
+    /// call is decided here from what the backend reported, not by the user
+    /// answering a second question whose only permitted answer is yes.
+    ///
+    /// With no identity, it creates and — on a reply reporting one created —
+    /// advances **in the same act**, with no further invocation. The advance is
+    /// inside the reply handler rather than after the call, because a reply is
+    /// the only thing that can say creation succeeded; advancing after issuing
+    /// the call would leave a refused creation on the network step.
+    ///
+    /// With an identity already there, it advances and issues **no call**. The
+    /// backend refuses an occupied home, so a second creation call has no
+    /// outcome but a refusal the user did not ask for — which is exactly the
+    /// amber sentence the two-control version rendered beside a green success.
+    ///
+    /// Returns whether the act was performed, so a caller can tell "refused,
+    /// nothing happened" from "done".
+    function submitIdentityStep(alias, passphrase) {
+        if (!canAdvanceIdentity) return false;
+        if (identityExists) return advance();
+        return submitIdentity(alias, passphrase);
+    }
+
     /// Create the identity, passing the alias through exactly as typed.
     ///
     /// No pre-validation of the alias, deliberately: the backend passes the
@@ -569,6 +654,14 @@ QtObject {
     /// second rule here would drift from it — presenting as the wizard
     /// rejecting an alias the backend would have accepted, with nothing on
     /// screen saying which layer refused.
+    ///
+    /// **Kept as its own function rather than folded into
+    /// `submitIdentityStep`.** Creating the identity and leaving the step are
+    /// two jobs that happen to compose: this one owns the call, its arguments
+    /// and its refusal, and the caller above owns the decision about which act
+    /// to perform. It is also the entry point the passphrase-lifetime tests
+    /// drive directly, because they are about what reaches the backend rather
+    /// than about navigation.
     function submitIdentity(alias, passphrase) {
         if (!createIdentity || !canCreateIdentity) return false;
         var issuedAt = epoch;
@@ -584,8 +677,16 @@ QtObject {
             }
             flow.identityExists = reply.created === true;
             flow.identityNodeId = reply.nodeId || "";
+            // The one fact no later reply can supply: THIS showing made it. It
+            // is what keeps "created" and "was already there" two renderings
+            // rather than one.
+            flow.identityCreatedHere = reply.created === true;
             if (reply.nodeId) flow.nodeId = reply.nodeId;
             if (reply.home) flow.embeddedHome = reply.home;
+            // Created and advanced in one act. Guarded on the created flag
+            // rather than on the call having returned, so a reply that is not a
+            // success leaves the user on the step with the refusal on screen.
+            if (flow.identityExists && flow.step === "identity") flow.advance();
         });
         return true;
     }
@@ -693,6 +794,10 @@ QtObject {
         identityExists = false;
         identityNodeId = "";
         identityProblem = "";
+        // Per-showing by construction: "this showing created it" cannot outlive
+        // the showing, and a resumed flow that found an identity must report it
+        // as already there rather than as one it made.
+        identityCreatedHere = false;
         alreadyServing = false;
         embeddedHome = "";
         pathsProblem = "";
