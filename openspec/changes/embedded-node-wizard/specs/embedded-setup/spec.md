@@ -74,7 +74,8 @@ offering to do it again.
 - **GIVEN** an identity step that has created an identity, reported by the
   backend as `exists:true` with a node id
 - **WHEN** the step in force returns to the identity step
-- **THEN** the control that creates an identity MUST NOT be enabled
+- **THEN** invoking the identity step's forward control MUST issue no
+  `createEmbeddedIdentity` call
 - **AND** the created node id MUST be displayed
 
 ### Requirement: The preflight reports four findings before offering a choice
@@ -155,8 +156,15 @@ makes impossible, and the flow MUST state which finding is blocking rather than
 presenting a disabled control with no reason.
 
 An unresolvable home, and a home already holding a complete identity, MUST both
-block the identity step: the first because there is nowhere to write, the second
-because `createEmbeddedIdentity` refuses an occupied home.
+block **creation** at the identity step: the first because there is nowhere to
+write, the second because `createEmbeddedIdentity` refuses an occupied home.
+
+Those two block creation differently, and the difference is what the user sees.
+An unresolvable home blocks the step itself: there is no identity and no way to
+make one, so the step's forward control is not enabled and the reason is
+stated. An occupied home blocks only the creation call: the step's work is
+already done, so the forward control stays available and advances, as the
+identity step's own requirements state.
 
 A half-created home MUST NOT block the identity step. `getEmbeddedIdentity()`
 reports it as `exists:false`, which the preflight cannot distinguish from an
@@ -181,19 +189,23 @@ as passing removes the block with nothing else changed.
 - **AND** the control that starts the node MUST NOT be enabled
 - **AND** the displayed reason MUST name the git finding
 
-#### Scenario: An occupied home blocks identity creation
+#### Scenario: An occupied home blocks creation without blocking the step
 
 - **GIVEN** a preflight whose `getEmbeddedIdentity()` reports `exists:true`
-- **THEN** the control that creates an identity MUST NOT be enabled
-- **AND** the displayed reason MUST state that an identity already exists
+- **WHEN** the identity step's forward control is invoked
+- **THEN** no `createEmbeddedIdentity` call MUST have been issued
+- **AND** the step in force MUST be the network step
+- **AND WHEN** a preflight instead reports an unresolvable home with no identity
+- **THEN** the forward control MUST NOT be enabled
+- **AND** the step in force MUST still be the identity step
 
 #### Scenario: A half-created home is offered creation, and its refusal shown
 
 - **GIVEN** a preflight whose `getEmbeddedIdentity()` reports `exists:false`
   with an empty `problem`, over a home the backend will refuse as half-created
-- **THEN** the control that creates an identity MUST be enabled
-- **AND WHEN** creation is submitted and the backend refuses with a message
-  naming a `keys` path to remove
+- **THEN** the identity step's forward control MUST be enabled
+- **AND WHEN** it is invoked and the backend refuses with a message naming a
+  `keys` path to remove
 - **THEN** that message MUST be displayed verbatim
 - **AND** the flow MUST NOT report the identity as created
 
@@ -338,6 +350,192 @@ is why the statement of what Embedded means stays displayed either way.
   displayed
 - **AND** advancing MUST be permitted
 
+### Requirement: The identity step offers one forward control
+
+Creating the identity is how a user leaves the identity step: once an identity
+exists there is nothing further the step does, and no other act moves it
+forward. The step MUST therefore offer **exactly one control that moves the
+flow forward**, and MUST NOT offer creation and advancing as two separate
+controls. Two controls for one act make the user perform a second act whose
+only possible answer is yes, and make it possible to advance past a step whose
+work was never done.
+
+With no identity in the embedded home, that control MUST create the identity
+and, on a reply reporting the identity created, MUST advance to the next step
+in the same act, without a further invocation.
+
+With an identity already in the embedded home — whether this showing created it
+or it was there when the step was entered — that control MUST advance and MUST
+NOT issue `createEmbeddedIdentity`. The backend refuses an occupied home, so a
+second creation call has no outcome but a refusal the user did not ask for.
+
+The control's label MUST say which of those two it will do. A label naming
+creation on a step that will only advance states an act that will not happen,
+which is the same defect as a control that does the wrong thing.
+
+The control MUST NOT be enabled while creation is blocked and no identity
+exists — the blocking requirement above names those cases — because in that
+state it can neither create nor advance past work that was not done.
+
+A refused creation MUST NOT advance. The step MUST remain in force with the
+refusal displayed, and the control MUST remain available so the user can
+correct what was refused and submit again.
+
+#### Scenario: One forward control creates and advances together
+
+- **GIVEN** an identity step with alias `tester`, over a backend reporting no
+  identity in the embedded home and accepting creation
+- **WHEN** the step's forward control is invoked once
+- **THEN** exactly one `createEmbeddedIdentity` call MUST have been issued
+- **AND** the step in force MUST be the network step
+- **AND** no second invocation MUST have been required to leave the identity
+  step
+
+#### Scenario: With an identity already there, the control advances and creates nothing
+
+- **GIVEN** an identity step entered over a backend reporting `exists:true` with
+  a node id
+- **WHEN** the step's forward control is invoked
+- **THEN** no `createEmbeddedIdentity` call MUST have been issued
+- **AND** the step in force MUST be the network step
+
+#### Scenario: The label names the act the control will perform
+
+- **GIVEN** an identity step over a backend reporting no identity
+- **THEN** the forward control's label MUST name creating the identity
+- **AND WHEN** the same step is given a backend reporting `exists:true` with a
+  node id
+- **THEN** the forward control's label MUST NOT name creating an identity
+- **AND** it MUST name continuing to the next step
+
+#### Scenario: A refused creation stays on the step with the control available
+
+- **GIVEN** an identity step over a backend that refuses creation with a
+  distinctive message
+- **WHEN** the forward control is invoked
+- **THEN** that message MUST be displayed
+- **AND** the step in force MUST still be the identity step
+- **AND** the forward control MUST still be enabled
+- **AND WHEN** the control is invoked again against a backend that now accepts
+  creation
+- **THEN** the step in force MUST be the network step
+
+#### Scenario: A blocked step with no identity offers no forward control
+
+- **GIVEN** an identity step whose home cannot be resolved, over a backend
+  reporting no identity
+- **THEN** the forward control MUST NOT be enabled
+- **AND** the displayed reason MUST name what is blocking
+
+### Requirement: The identity step distinguishes its three states
+
+The identity step MUST render three states distinctly, and what it displays
+MUST be derived from what the backend reported rather than from the step having
+been shown:
+
+- **no identity yet** — the backend reports no identity in the embedded home.
+  The step MUST NOT display a node id, and MUST NOT display any statement that
+  an identity exists. The alias and passphrase controls belong to this state,
+  because it is the only one in which the step submits either.
+- **created in this showing** — a `createEmbeddedIdentity` call made from this
+  showing replied that the identity was created. The step MUST report it as
+  created, carrying the node id the reply reported.
+- **already there on arrival** — the backend reported an identity before this
+  showing submitted any creation. The step MUST report that the identity was
+  already present, carrying its node id, and MUST NOT report it as created by
+  this showing.
+
+The second and third states MUST NOT be rendered the same way. A user who
+already holds an identity has succeeded at this step, and telling them creation
+is refused describes a failure that did not happen — the refusal sentence
+explains an attempt, and no attempt was made.
+
+The step MUST NOT display, at the same time, a statement that the identity was
+created and a statement that creating one is refused. Those two describe
+different outcomes of the same act, and both on screen at once leave the user
+unable to tell which occurred.
+
+In the third state, an explanation that a second identity would be refused is
+permitted as a note on why the step does not offer creation, and MUST NOT be
+presented as a failure or an error. Where the step renders backend refusals,
+that surface MUST be reserved for a refusal the backend actually returned to
+this showing.
+
+#### Scenario: The three states are told apart
+
+- **GIVEN** an identity step over a backend reporting no identity
+- **THEN** the step MUST NOT report an identity as existing
+- **AND** the step MUST NOT display a node id
+- **AND WHEN** creation is submitted and the backend replies created, with a
+  distinctive node id
+- **THEN** the step MUST report the identity as created in this showing,
+  carrying that node id
+- **AND WHEN** a fresh showing is instead entered over a backend reporting
+  `exists:true` with a different distinctive node id, with no creation submitted
+- **THEN** the step MUST report that an identity was already present, carrying
+  the second node id
+- **AND** it MUST NOT report the identity as created in this showing
+
+#### Scenario: An identity that was already there is not reported as a failure
+
+- **GIVEN** an identity step entered over a backend reporting `exists:true` with
+  a node id, with no creation submitted in this showing
+- **THEN** no refusal MUST be displayed
+- **AND** the step MUST NOT display a statement that creating an identity was
+  refused
+
+#### Scenario: Created and refused are never displayed together
+
+- **GIVEN** an identity step that has submitted creation and been told the
+  identity was created
+- **THEN** the step MUST display that the identity was created
+- **AND** the step MUST NOT simultaneously display a statement that creating an
+  identity is refused
+
+### Requirement: The identity step names the home it writes to
+
+The identity step MUST display the filesystem path of the embedded home it is
+writing into, or has written into, taking it from `getEmbeddedIdentity().home`.
+
+A DID names the identity and says nothing about where it lives. The embedded
+home is a path the user did not choose and cannot guess — it is derived from
+the Basecamp profile's data directory — so a step that reports only a DID
+leaves the user unable to find, back up or inspect what was created, and unable
+to tell an embedded home from their own Radicle home.
+
+The path displayed MUST be the one the backend reported, so that a step told a
+different home displays a different path. It MUST be displayed in all three of
+the step's states, because the question it answers — which home is this — is
+the same before and after creation.
+
+When no home could be resolved, `home` is empty and there is no path to state.
+The step MUST then state that no home could be resolved instead of displaying
+an empty path, and MUST display the backend's own sentence where one was
+supplied, as the refusal requirement below already requires.
+
+#### Scenario: The reported home is the path displayed
+
+- **GIVEN** an identity step told a `getEmbeddedIdentity()` reply whose `home`
+  is a distinctive path
+- **THEN** that path MUST be displayed
+- **AND WHEN** the step is told a reply carrying a different distinctive path
+- **THEN** the second path MUST be displayed and the first MUST NOT
+
+#### Scenario: The home is stated before and after creation
+
+- **GIVEN** an identity step over a backend reporting no identity and a
+  distinctive `home`
+- **THEN** that path MUST be displayed
+- **AND WHEN** creation is submitted and succeeds
+- **THEN** that path MUST still be displayed
+
+#### Scenario: An unresolvable home is stated rather than shown as an empty path
+
+- **GIVEN** an identity step told a `getEmbeddedIdentity()` reply whose `home`
+  is empty, with a distinctive `problem`
+- **THEN** the step MUST state that no home could be resolved
+- **AND** that `problem` sentence MUST be displayed
+
 ### Requirement: The identity step states the passphrase trade where it is chosen
 
 The identity step MUST take an alias and a passphrase, and MUST offer setting a
@@ -357,6 +555,13 @@ the user cannot weigh it.
 The statement MUST be visible for both settings of the control, so a user who
 turns the passphrase off sees what they gave up and what they gained.
 
+This requirement binds the state in which the passphrase is chosen — the one
+where no identity exists yet. Where an identity already exists there is no
+passphrase to choose, so the step offers neither the control nor the statement:
+its key was sealed, or not, when it was created, and this flow cannot change
+that. Stating a trade the user can no longer make would describe a decision
+that is not theirs to take.
+
 The alias MUST be submitted to `createEmbeddedIdentity` as the user typed it.
 The flow MUST NOT pre-validate it against its own rule: `embedded-identity`
 requires the backend to pass through the `radicle` crate's own statement of the
@@ -364,21 +569,32 @@ rule, and a second rule in the view would drift from it.
 
 #### Scenario: A passphrase is the arriving default
 
-- **WHEN** the identity step is shown for the first time
+- **WHEN** the identity step is shown for the first time, over a backend
+  reporting no identity
 - **THEN** the control choosing whether to set a passphrase MUST be in the state
   that sets one
 
 #### Scenario: Both halves of the trade are stated before the choice is made
 
-- **WHEN** the identity step is shown, before the passphrase control is touched
+- **WHEN** the identity step is shown over a backend reporting no identity,
+  before the passphrase control is touched
 - **THEN** the displayed text MUST state that the node must be unlocked each
   time it starts when a passphrase is set
 - **AND** it MUST state that an unencrypted key stores a secret in plaintext
 
 #### Scenario: The trade stays stated when the passphrase is turned off
 
-- **GIVEN** an identity step whose passphrase control has been turned off
+- **GIVEN** an identity step over a backend reporting no identity, whose
+  passphrase control has been turned off
 - **THEN** the displayed text MUST still state both halves of the trade
+
+#### Scenario: An identity that already exists offers no passphrase choice
+
+- **GIVEN** an identity step entered over a backend reporting `exists:true` with
+  a node id
+- **THEN** no control choosing whether to set a passphrase MUST be present
+- **AND WHEN** the same step is instead given a backend reporting no identity
+- **THEN** that control MUST be present
 
 #### Scenario: An unencrypted identity is created with an empty passphrase
 
@@ -755,6 +971,23 @@ requirements above on what each step may do, what it must state and what blocks 
 apply unchanged, and in particular a step that has already acted MUST report what
 it did rather than offer to act again.
 
+The rule above is what decides where a reopened flow lands, and an existing
+identity therefore lands it past the identity step. That MUST stay true: the
+identity step's forward control advancing rather than creating, when an identity
+is already there, is about what the step does when a user reaches it — by going
+back, or with an identity that appeared between the preflight and the step — and
+MUST NOT be read as a reason for the resume to land on it. A resume that landed
+on a step whose only act is already done would present a step with nothing to do
+as the first step with work left.
+
+#### Scenario: An existing identity resumes past the identity step
+
+- **GIVEN** a setup raised against a backend reporting `embedded` in force, an
+  existing identity with a node id, and the node not serving
+- **WHEN** the preflight has answered
+- **THEN** the step in force MUST NOT be the identity step
+- **AND** the step in force MUST be the start step
+
 #### Scenario: Different backend states resume to different steps
 
 - **GIVEN** a setup raised against a backend reporting `embedded` in force,
@@ -800,7 +1033,9 @@ it did rather than offer to act again.
 - **WHEN** the preflight has answered and the step in force is the start step
 - **THEN** the identity finding MUST report that an identity exists, carrying that
   node id
-- **AND** the control that creates an identity MUST NOT be enabled
+- **AND WHEN** back is invoked to reach the identity step
+- **THEN** invoking that step's forward control MUST issue no
+  `createEmbeddedIdentity` call
 
 ### Requirement: The setup is offered only for work it can do
 

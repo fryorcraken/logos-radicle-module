@@ -28,6 +28,18 @@ one row per stage so concurrent cherry-picks do not conflict. What that tick now
 covers is both passes: the wizard, and `embedded-state` plus the re-keyed
 `source-modes` requirement. The reviewer rows still refer only to the first pass.
 
+**The identity step was reopened a second time, from dogfooding the built app.**
+Three defects on one screen, all of them the spec's silence rather than the
+implementation's: the step offered creation and advancing as two controls where
+creating the identity *is* how the step is left; an identity that already existed
+rendered as a refusal beside a success, so "you already did this" and "your
+attempt failed" looked the same; and neither message named the home being written
+to, though `getEmbeddedIdentity()` reports it. The spec now carries three
+requirements for the identity step — one forward control, its three states, and
+the home named — and the blocking, resume and passphrase requirements were
+adjusted where they assumed two controls. **The `dev-writer`, `tester` and every
+reviewer row above predate this**; the runner owns re-dispatching them.
+
 **The spec was reopened a second time, for the wizard's host.** `embedded-setup`
 gained four requirements — the setup as a surface raised over the view, mutual
 exclusion with the settings surface, which acts may open it, and where a reopened

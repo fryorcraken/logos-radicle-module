@@ -61,6 +61,16 @@ admits, before there is anywhere for a setup entry point to live.
 - Each step reports what it found rather than proceeding on an assumption: a
   failed preflight check names the thing that failed and blocks the step it
   gates, rather than being discovered at the identity write or the node start.
+- **The identity step has one forward control, three distinct states, and names
+  the home it writes to.** Creating the identity *is* how the step is left, so
+  offering creation and advancing separately asks a second question with one
+  permitted answer. The three states are no identity yet, one this showing
+  created, and one that was already there — the third is the state a two-control
+  step rendered as a success and a refusal at once, which reads as a failure to a
+  user who has simply already done this. And both messages named a DID while
+  neither named the path: the embedded home is derived from the Basecamp
+  profile's data directory, so a user cannot find or inspect what was created
+  from a DID alone, though `getEmbeddedIdentity()` reports the path.
 - Pins the three consequences above as requirements about **what the wizard must
   state and when**, not as prose in a design document: the passphrase trade at
   the identity step, the new-identity consequence at both the embedded step and
