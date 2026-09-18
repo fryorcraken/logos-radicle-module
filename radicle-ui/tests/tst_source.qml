@@ -839,16 +839,30 @@ Item {
     // The mode-detail slot.
     //
     // One rule the user learns once: the thing beside the toggle is the detail
-    // of whichever mode is selected. Explore's detail is the seed, Local's is
-    // the identity, Embedded has none until Phase 2.
+    // of whichever mode is selected. Explore's detail is the seed; the identity
+    // is the detail of every mode that HAS one.
     //
     // The two REAL components are hosted here under the same `visible:`
     // bindings Main.qml gives them, so this pins the rule rather than a copy of
     // it. Main.qml itself needs a live QtRO backend and cannot be instantiated
     // in a component test; what CAN drift — the two conditions — is what is
     // asserted, and `slotMode` below is the single input both read.
+    //
+    // **The identity's condition reads the REAL `SourceState.modeHasIdentity`**,
+    // not a mode comparison written out here. That is the whole change: it was
+    // `slotMode === "local"`, matching what `Main.qml` had, and the consequence
+    // was that Embedded — the mode where a user is most likely to believe they
+    // are operating as their own DID, because its identity is one the module
+    // created — showed nothing, while `radicle_impl.h` required a view to always
+    // show `mode` and `nodeId`. Reproducing the comparison here would let the
+    // same list-shaped rule come back with this file still green.
     // -----------------------------------------------------------------------
     property string slotMode: "local"
+
+    Ui.SourceState {
+        id: slotState
+        mode: root.slotMode
+    }
 
     Ui.SeedPicker {
         id: slotSeedPicker
@@ -866,7 +880,7 @@ Item {
         id: slotIdentity
         objectName: "slotIdentity"
         anchors.top: slotSeedPicker.bottom
-        visible: root.slotMode === "local" && slotIdentity.nodeId !== ""
+        visible: slotState.modeHasIdentity && slotIdentity.nodeId !== ""
         nodeId: "did:key:z6MkvS2mYc1JMmSaBHqTfNvKuo4Y3kRnPKeWY1sX9qTfAbCd"
     }
 
@@ -899,13 +913,86 @@ Item {
                    "in Explore you are not operating as an identity at all");
         }
 
-        /// Embedded has no node yet, so it has no detail. Not a placeholder,
-        /// not an empty pill — nothing, with the toggle's caption carrying the
-        /// explanation instead.
-        function test_embedded_shows_neither() {
+        /// **Embedded shows its DID as Local does**, which is the change.
+        ///
+        /// It used to show nothing, because the slot's condition was a mode
+        /// comparison naming `local` alone. Embedded is precisely the mode where
+        /// a user is most likely to believe they are operating as their existing
+        /// DID while they are operating as a different one — its identity is one
+        /// the module created rather than one they made — at which point their
+        /// repositories are simply missing with nothing on screen explaining
+        /// why.
+        ///
+        /// The two legs carry DIFFERENT DIDs and the first is asserted absent,
+        /// so a slot rendering a hardcoded string passes neither.
+        function test_embedded_shows_its_identity_as_local_does() {
+            var localDid = "did:key:z6MkLOCALaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            var embeddedDid = "did:key:z6MkEMBEDbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+            root.slotMode = "local";
+            slotIdentity.nodeId = localDid;
+            verify(slotIdentity.visible, "precondition: Local shows its DID");
+            compare(String(root.findByName(slotIdentity,
+                                           "nodeIdentityLabel").text),
+                    localDid, "in full, including its did:key: prefix");
+
             root.slotMode = "embedded";
-            verify(!slotSeedPicker.visible);
-            verify(!slotIdentity.visible);
+            slotIdentity.nodeId = embeddedDid;
+            verify(slotIdentity.visible,
+                   "and Embedded must show its DID exactly as Local does");
+            var shown = String(root.findByName(slotIdentity,
+                                               "nodeIdentityLabel").text);
+            compare(shown, embeddedDid, "the second DID, in full");
+            verify(shown.indexOf("z6MkLOCAL") === -1,
+                   "and the first must be gone: " + shown);
+
+            verify(!slotSeedPicker.visible,
+                   "which seed is proxied to is not a fact about Embedded");
+        }
+
+        /// **A mode with no identity displays nothing** — not a blank slot and
+        /// not a placeholder, which would suggest a value that is loading.
+        ///
+        /// Two separate reasons to show nothing, and both legs are here: the
+        /// mode has no identity at all (Explore), and the mode has one but none
+        /// exists yet (Embedded before setup).
+        function test_a_mode_with_no_identity_displays_nothing() {
+            root.slotMode = "explore";
+            verify(!slotIdentity.visible,
+                   "in Explore you are not operating as anyone");
+
+            root.slotMode = "embedded";
+            slotIdentity.nodeId = "";
+            verify(!slotIdentity.visible,
+                   "and an Embedded home before setup has no identity to show");
+
+            slotIdentity.nodeId = "did:key:z6MkAFTERSETUPcccccccccccccccccccccccc";
+            verify(slotIdentity.visible,
+                   "with nothing else changed, an identity that now exists is "
+                   + "shown — so the absence above is about the VALUE, not "
+                   + "about the mode");
+        }
+
+        /// **One rule, not a list of modes**, asked of the production
+        /// derivation directly.
+        ///
+        /// The list version is what shipped and what cost Embedded its DID. A
+        /// list has to be noticed and extended by somebody; a rule keyed on
+        /// whether the mode reads a home of its own is right for a fourth mode
+        /// before anyone writes one.
+        function test_having_an_identity_is_derived_rather_than_listed() {
+            var answers = [];
+            var modes = ["explore", "local", "embedded"];
+            for (var i = 0; i < modes.length; i++) {
+                root.slotMode = modes[i];
+                answers.push(modes[i] + ":"
+                             + (slotState.modeHasIdentity ? "yes" : "no"));
+            }
+            compare(answers.join(" "),
+                    "explore:no local:yes embedded:yes",
+                    "a mode has an identity exactly when it reads a Radicle "
+                    + "home of its own — which is what routing to the local* "
+                    + "methods means");
         }
 
         /// Exactly one at a time, across every mode. Asserted as a loop over

@@ -37,21 +37,32 @@ Item {
         /// every test departs from by moving one field.
         ///
         /// **Hosted-ness is part of the baseline, and it is what this module
-        /// actually hosts**: the request that opens the setup reaches `Main.qml`;
-        /// the requests that start or restart a node reach nobody, because both
-        /// need a passphrase only the durable settings surface can ask for and
-        /// `getEmbeddedIdentity()` reports no field saying whether one is needed
-        /// at all. Tests that are about the hosted-ness rule itself move these.
+        /// actually hosts**: the requests that open the setup and start the node
+        /// both reach `Main.qml`; the request that RESTARTS one reaches nobody,
+        /// because a restart is two calls whose refusals are different sentences
+        /// and nothing sequences the pair. Tests about the hosted-ness rule
+        /// itself move these.
+        ///
+        /// **`encrypted:true` is the baseline deliberately**, although an
+        /// unencrypted key is the commoner case. It is the value that makes the
+        /// stopped state INERT — no start is issued, nothing is asked for — so
+        /// every test below departs from a state that does nothing by itself,
+        /// and the tests that are about starting by itself arm it explicitly.
+        /// The opposite baseline would have every unrelated test silently
+        /// sitting in a state that wants a start.
         function init() {
             st.pathsProblem = "";
             st.home = "/home/u/.local/share/basecamp/embedded-home";
             st.identityExists = true;
+            st.encrypted = true;
             st.running = false;
             st.serving = false;
             st.startPending = false;
             st.startError = "";
+            st.startSucceeded = false;
             st.setupHosted = true;
             st.startHosted = false;
+            st.restartHosted = false;
         }
 
         // ---- the ordering -------------------------------------------------
@@ -352,6 +363,10 @@ Item {
         /// `running:false` as well as once it reports `running:true`.
         function test_an_outstanding_start_withholds_a_hosted_start_control() {
             st.startHosted = true;
+            // An encrypted key, so `stopped` names a start rather than being
+            // the state this surface starts by itself — the control is the
+            // subject here, and the unencrypted state deliberately has none.
+            st.encrypted = true;
 
             st.startPending = true;
             compare(st.current, "stopped",
@@ -364,7 +379,13 @@ Item {
             verify(!st.actionEnabled,
                    "as it must once the node reports running too");
 
+            // The control leg goes back to `stopped` rather than clearing
+            // `startPending` where it stands: with `running:true` that would be
+            // `notServing`, whose act is a RESTART and is deliberately unhosted,
+            // so the assertion would fail for a reason this test is not about.
+            st.running = false;
             st.startPending = false;
+            compare(st.current, "stopped", "control precondition");
             verify(st.actionEnabled,
                    "control: with no start outstanding a HOSTED action returns");
         }
@@ -561,6 +582,228 @@ Item {
             verify(st.actionUnavailableNote !== "",
                    "control: with nothing outstanding the unhosted restart does "
                    + "explain itself");
+        }
+
+        // ---- starting by itself, or asking for a passphrase ----------------
+
+        /// **A stopped node with an unencrypted key wants its start issued**,
+        /// with no action taken by the user.
+        ///
+        /// `wantsAutoStart` is the DECISION, held here where it is a question
+        /// about values; `RepoList` owns the issuing. Splitting them is what
+        /// makes "started by itself" assertable without a backend — see
+        /// `tst_embedded_panel.qml` for the other half, which proves exactly one
+        /// call goes out.
+        ///
+        /// The discriminator is `encrypted`, moved with EVERYTHING ELSE HELD:
+        /// the same node status must answer differently, or the derivation could
+        /// be reading the node's state and calling it an answer about the key.
+        function test_an_unencrypted_stopped_node_wants_a_start() {
+            st.encrypted = false;
+            compare(st.current, "stopped", "precondition");
+            verify(st.wantsAutoStart,
+                   "an unencrypted key can be started with no secret, so the "
+                   + "module presses the control the user would have pressed");
+
+            st.encrypted = true;
+            verify(!st.wantsAutoStart,
+                   "and an encrypted one cannot: there is no passphrase to "
+                   + "start it with, and the same node status must answer "
+                   + "differently on this field alone");
+        }
+
+        /// The autostart happens in `stopped` and NOWHERE ELSE.
+        ///
+        /// Each row is reached with `encrypted:false` — the value that would
+        /// make an over-eager derivation say yes — so a `wantsAutoStart` keyed
+        /// on the key alone answers `yes` for every one of them.
+        function test_no_autostart_outside_the_stopped_state() {
+            st.encrypted = false;
+            var answers = [];
+
+            function ask(label) {
+                answers.push(label + ":" + (st.wantsAutoStart ? "yes" : "no"));
+            }
+
+            st.pathsProblem = "nowhere to write";
+            ask("blocked");
+
+            st.pathsProblem = "";
+            st.identityExists = false;
+            ask("noIdentity");
+
+            st.identityExists = true;
+            ask("stopped");
+
+            st.startPending = true;
+            st.running = true;
+            ask("starting");
+
+            st.startPending = false;
+            st.startError = "the node control socket is already in use";
+            ask("startFailed");
+
+            st.startError = "";
+            ask("notServing");
+
+            st.serving = true;
+            ask("runningEmpty");
+
+            compare(answers.join(" "),
+                    "blocked:no noIdentity:no stopped:yes starting:no "
+                    + "startFailed:no notServing:no runningEmpty:no",
+                    "in blocked and noIdentity there is nothing to start; in "
+                    + "notServing the runtime is still loaded and a bare start "
+                    + "would be refused; in startFailed a start has already "
+                    + "been tried and answered, and retrying unasked would loop "
+                    + "against a backend that refuses every time");
+        }
+
+        /// **A stopped node with an ENCRYPTED key asks, rather than starting.**
+        ///
+        /// The prompt is a property of the identity's own nature, so it is
+        /// derived from `encrypted` and not from a start having failed — which
+        /// would make it a consequence of an error rather than of the key.
+        function test_an_encrypted_stopped_node_asks_for_its_passphrase() {
+            st.encrypted = true;
+            compare(st.current, "stopped", "precondition");
+            verify(st.wantsPassphrase,
+                   "an encrypted key must be asked for");
+            verify(!st.wantsAutoStart,
+                   "and must not be started unasked, because there is no "
+                   + "passphrase to start it with");
+
+            st.encrypted = false;
+            verify(!st.wantsPassphrase,
+                   "an unencrypted one has nothing to ask for");
+        }
+
+        /// The prompt is not a consequence of a failed start.
+        ///
+        /// Both legs hold `encrypted` fixed and move the refusal, so a
+        /// derivation reading `startError` answers differently in one of them.
+        function test_the_passphrase_prompt_does_not_follow_a_failed_start() {
+            st.encrypted = false;
+            st.startError = "the node did not start";
+            compare(st.current, "startFailed", "precondition");
+            verify(!st.wantsPassphrase,
+                   "a failed start on an UNENCRYPTED key asks for nothing — "
+                   + "the prompt follows the identity, not the error");
+
+            st.encrypted = true;
+            verify(st.wantsPassphrase,
+                   "while an encrypted key is asked for even here, so a retry "
+                   + "can carry a corrected passphrase");
+        }
+
+        // ---- a node this module started is not one in the way --------------
+
+        /// **The defect the setup flow shipped, at the layer that decides it.**
+        ///
+        /// Step 5 rendered an amber "a node is already answering on the resolved
+        /// socket" directly above its own green "Running as did:key:…". Both
+        /// were derived from true readings; together they described a conflict
+        /// that did not exist, because the node warned about was the one the
+        /// module had just started.
+        ///
+        /// The two are told apart by whether a `startNode` THIS SURFACE issued
+        /// was answered with a success — the one fact the node status cannot
+        /// carry, since it reports the same fields either way. Both legs below
+        /// report `serving:true`; only `startSucceeded` differs.
+        function test_a_node_this_surface_started_is_not_reported_as_contention() {
+            st.encrypted = false;
+            st.startSucceeded = true;
+            st.running = true;
+            st.serving = true;
+
+            compare(st.current, "runningEmpty", "precondition");
+            verify(!st.foundForeignNode,
+                   "a node this surface started is the outcome the user wanted, "
+                   + "not something in the way");
+            verify(st.sentence.indexOf("already answering") === -1,
+                   "so nothing may say a node is already answering: "
+                   + st.sentence);
+            verify(st.sentence.indexOf("contend") === -1,
+                   "nor that starting a second would contend for the socket: "
+                   + st.sentence);
+        }
+
+        /// A node the surface did NOT start is still reported as found, because
+        /// that one genuinely is somebody else's and a start against it will be
+        /// refused.
+        function test_a_node_the_surface_did_not_start_is_still_reported() {
+            st.encrypted = true;
+            st.startSucceeded = false;
+            st.running = true;
+            st.serving = true;
+
+            verify(st.foundForeignNode,
+                   "with no start ever issued by this surface, a serving node "
+                   + "is somebody else's");
+            verify(st.sentence.indexOf("already answering") !== -1,
+                   "and must be reported as such, got: " + st.sentence);
+
+            st.startSucceeded = true;
+            verify(!st.foundForeignNode,
+                   "control: the identical node status reads differently once "
+                   + "this surface's own start succeeded — which is the fact "
+                   + "the status cannot carry");
+        }
+
+        // ---- start is hosted; restart is not -------------------------------
+
+        /// **Start and restart are hosted SEPARATELY**, and that split is the
+        /// change. They shared one flag while both were unhosted for one shared
+        /// reason — neither could ask for a passphrase. That reason is gone for
+        /// start: `encrypted` says whether one is needed, and this surface asks.
+        /// It survives for restart, which is two calls whose refusals are
+        /// different sentences and which nothing here sequences.
+        ///
+        /// One flag would now make hosting start silently enable a restart that
+        /// reaches nobody — the dead-end this capability exists to remove.
+        function test_start_and_restart_are_hosted_independently() {
+            st.startHosted = true;
+            st.restartHosted = false;
+
+            st.encrypted = true;
+            compare(st.current, "stopped", "precondition");
+            compare(st.actionKind, "start");
+            verify(st.actionEnabled,
+                   "a hosted start is enabled");
+
+            st.running = true;
+            compare(st.current, "notServing", "precondition");
+            compare(st.actionKind, "restart");
+            verify(!st.actionEnabled,
+                   "while an unhosted restart is not — one flag for both would "
+                   + "have enabled it here");
+            verify(st.actionUnavailableNote.indexOf("not yet available from here")
+                   !== -1,
+                   "and it says why, got: " + st.actionUnavailableNote);
+
+            st.restartHosted = true;
+            verify(st.actionEnabled,
+                   "control: hosting the restart is what enables it, with "
+                   + "nothing else changed");
+        }
+
+        /// The restart note names RESTARTING rather than starting, now that the
+        /// two are different questions with different answers.
+        function test_the_unavailable_note_names_the_act_that_is_unavailable() {
+            st.startHosted = true;
+            st.restartHosted = false;
+            st.running = true;
+            compare(st.current, "notServing", "precondition");
+            verify(st.actionUnavailableNote.toLowerCase().indexOf("restart")
+                   !== -1,
+                   "the note must name restarting, which is the act that is "
+                   + "unavailable, got: " + st.actionUnavailableNote);
+            verify(st.actionUnavailableNote.indexOf("failed") === -1,
+                   "never that it failed — none was attempted: "
+                   + st.actionUnavailableNote);
+            verify(st.actionUnavailableNote.indexOf("cannot be restarted") === -1,
+                   "nor that the node cannot be restarted at all: "
+                   + st.actionUnavailableNote);
         }
     }
 }

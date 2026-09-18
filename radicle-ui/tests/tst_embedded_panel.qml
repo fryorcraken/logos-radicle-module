@@ -49,21 +49,45 @@ Item {
         property string embeddedPathsProblem: ""
         property string embeddedHome: "/basecamp/embedded-home"
         property bool embeddedIdentityExists: true
+        /// **Encrypted by default in this fixture**, although unencrypted is the
+        /// commoner case in life. It is the value that makes the stopped state
+        /// INERT — nothing is started, nothing is asked for — so every test that
+        /// is not about starting departs from a panel that does nothing by
+        /// itself. The autostart tests arm it the other way explicitly, and the
+        /// arming is what makes them read as the subject rather than as a side
+        /// effect every other test is silently sitting in.
+        property bool embeddedEncrypted: true
         property bool embeddedRunning: false
         property bool embeddedServing: false
         property bool embeddedStartPending: false
         property string embeddedStartError: ""
+        property bool embeddedStartSucceeded: false
 
         /// Which requests this host routes, exactly as `Main.qml` reports them:
-        /// the setup is hosted, a start is not. Held as properties rather than
-        /// baked into the panel, because the requirement is that hosting an
-        /// action enables it with nothing else changed — so a test moves one of
-        /// these and reads the answer back.
+        /// the setup and a start are hosted, a RESTART is not. Held as
+        /// properties rather than baked into the panel, because the requirement
+        /// is that hosting an action enables it with nothing else changed — so a
+        /// test moves one of these and reads the answer back.
         property bool embeddedSetupHosted: true
-        property bool embeddedStartHosted: false
+        property bool embeddedStartHosted: true
+        property bool embeddedRestartHosted: false
 
         property var callLog: []
         property var pending: null
+
+        /// Every `startEmbeddedNode` this panel issued, with the passphrase it
+        /// carried — so "started by itself" is distinguishable from "did not",
+        /// and "started once" from "started on every reading".
+        ///
+        /// Recorded rather than performed: this fake does NOT move
+        /// `embeddedStartPending`, so a test can assert on the calls without the
+        /// state moving underneath it. The tests that need the real sequence set
+        /// `embeddedStartPending` themselves, which is what `Main.qml` does.
+        property var startLog: []
+
+        function startEmbeddedNode(passphrase) {
+            startLog.push(passphrase);
+        }
 
         function call(method, args, onOk, onFail) {
             callLog.push(source + method);
@@ -91,13 +115,46 @@ Item {
             return true;
         }
 
-        function reset() { callLog = []; pending = null; }
+        function reset() { callLog = []; pending = null; startLog = []; }
     }
 
     Ui.RepoList {
         id: list
         anchors.fill: parent
         app: app
+    }
+
+    /// A second, freshly-built `RepoList` — the only way to model "the module
+    /// becomes ready ALREADY in the stopped state" at this layer.
+    ///
+    /// `list` above is constructed once, before any test runs, and every test
+    /// reaches its state by mutating the harness. That is a live CHANGE, which
+    /// always fires the `onWantsAutoStartChanged` handler — so a `RepoList` that
+    /// relied on the change signal alone would pass every test in this file
+    /// while never starting a node for the user who opens Basecamp with Embedded
+    /// already the mode in force and an unencrypted key. That is the ordinary
+    /// case for anyone who has used the mode before, and it is the one this
+    /// component cannot reproduce any other way.
+    ///
+    /// Measured, not assumed: deleting `Component.onCompleted: autoStartIfWanted()`
+    /// reddened NOTHING in this file until this Component existed.
+    /// The harness under its own id, for the Component below.
+    ///
+    /// **`app: app` inside the Component resolves to the RepoList's OWN `app`
+    /// property, not to the outer object** — QML scoping puts the item's
+    /// properties in front of the file's ids — so the fresh list would come up
+    /// with a null host and derive `blocked`. Caught by the precondition rather
+    /// than by reading; it is the same shadowing trap this repo records for
+    /// component names and `on*` properties.
+    readonly property var hostApp: app
+
+    Component {
+        id: freshList
+
+        Ui.RepoList {
+            anchors.fill: parent
+            app: root.hostApp
+        }
     }
 
     function findByName(node, name) {
@@ -125,12 +182,15 @@ Item {
             app.embeddedPathsProblem = "";
             app.embeddedHome = "/basecamp/embedded-home";
             app.embeddedIdentityExists = true;
+            app.embeddedEncrypted = true;
             app.embeddedRunning = false;
             app.embeddedServing = false;
             app.embeddedStartPending = false;
             app.embeddedStartError = "";
+            app.embeddedStartSucceeded = false;
             app.embeddedSetupHosted = true;
-            app.embeddedStartHosted = false;
+            app.embeddedStartHosted = true;
+            app.embeddedRestartHosted = false;
             root.writesObserved = [];
             list.reload();
             app.reset();
@@ -139,6 +199,9 @@ Item {
         function note() { return root.findByName(list, "embeddedStateNote"); }
         function action() { return root.findByName(list, "embeddedStateAction"); }
         function emptyMsg() { return root.findByName(list, "listEmptyState"); }
+        function passphrase() {
+            return root.findByName(list, "embeddedPassphrase");
+        }
 
         // ---- the panel renders --------------------------------------------
 
@@ -496,14 +559,21 @@ Item {
         /// programmatic emit, so a panel relying on `enabled` alone would pass a
         /// click-driven check and fail this. The requirement is about the
         /// request, not about the mouse.
+        /// **The unhosted example is now the RESTART**, and it moved because
+        /// start became hosted. A stopped node was the example while nothing
+        /// could start one; with a start routed, this test written against
+        /// `stopped` would be asserting that an ENABLED control emits nothing,
+        /// which is a different and false claim.
         function test_an_action_that_is_not_enabled_emits_no_request() {
             var seen = [];
             function record(kind) { seen.push(kind); }
             list.embeddedActionTaken.connect(record);
 
-            // A stopped node: the act is a start, which reaches nobody.
+            // A node that has stopped serving: the act is a restart, which
+            // reaches nobody.
+            app.embeddedRunning = true;
             list.reload();
-            compare(list.embedded.actionKind, "start", "precondition");
+            compare(list.embedded.actionKind, "restart", "precondition");
             var a = action();
             verify(a !== null && a.visible, "the control is rendered");
             verify(!a.enabled, "and is not enabled");
@@ -512,9 +582,11 @@ Item {
 
             compare(seen.length, 0,
                     "no request may be emitted: " + JSON.stringify(seen));
-            compare(app.callLog.length, 0,
-                    "and no startNode may have been issued: "
-                    + JSON.stringify(app.callLog));
+            compare(app.startLog.length, 0,
+                    "and no start may have been issued either — the guard is "
+                    + "about the REQUEST, and a restart routed as a start would "
+                    + "be refused by the backend rather than sequenced: "
+                    + JSON.stringify(app.startLog));
 
             list.embeddedActionTaken.disconnect(record);
         }
@@ -524,8 +596,12 @@ Item {
         /// nothing else changed. A panel hard-coding which states are enabled
         /// would answer identically for both halves.
         function test_hosting_an_action_enables_the_rendered_control() {
+            // The restart, for the reason the test above records: it is the act
+            // this version does not host, so it is the one whose enablement can
+            // be moved by moving a flag.
+            app.embeddedRunning = true;
             list.reload();
-            compare(list.embedded.actionKind, "start", "precondition");
+            compare(list.embedded.actionKind, "restart", "precondition");
             verify(!action().enabled, "unhosted, the control is not enabled");
 
             var note = root.findByName(list, "embeddedStateUnavailable");
@@ -534,12 +610,36 @@ Item {
             verify(note.text.indexOf("not yet available from here") !== -1,
                    "naming that it is not yet available here, got: " + note.text);
 
-            app.embeddedStartHosted = true;
+            app.embeddedRestartHosted = true;
             verify(action().enabled,
                    "hosting the request enables the control, with nothing else "
                    + "changed");
             verify(!note.visible,
                    "and the unavailability sentence goes with it");
+        }
+
+        /// **Start and restart are hosted independently, through the rendered
+        /// panel.** One flag governed both while both were unhosted; with start
+        /// routed, one flag would enable a restart that reaches nobody.
+        ///
+        /// Both legs hold `embeddedStartHosted` TRUE and differ only in the
+        /// restart flag, so a panel reading one flag for both answers the same
+        /// in each and fails.
+        function test_hosting_a_start_does_not_host_a_restart() {
+            compare(app.embeddedStartHosted, true, "precondition");
+            compare(app.embeddedRestartHosted, false, "precondition");
+
+            // stopped, with an encrypted key so a control is offered at all.
+            list.reload();
+            compare(list.embedded.actionKind, "start", "precondition");
+            verify(action().enabled, "the hosted start is enabled");
+
+            app.embeddedRunning = true;
+            list.reload();
+            compare(list.embedded.actionKind, "restart", "precondition");
+            verify(!action().enabled,
+                   "while the restart is not — hosting one must not host the "
+                   + "other");
         }
 
         /// The hosted setup action IS enabled and DOES emit, so the two tests
@@ -588,6 +688,235 @@ Item {
                    "and the Embedded panel must not be: this is a different "
                    + "state, and Local is not Embedded");
             verify(!list.sayingNothing, "the pane is not blank");
+        }
+
+        // ---- starting by itself -------------------------------------------
+
+        /// **The node genuinely starts itself**, and this is the test that says
+        /// so: the other file proves the panel WANTS to, this one proves a call
+        /// goes out.
+        ///
+        /// `encrypted` is the only field moved between the two legs, and the
+        /// node status is identical in both — so a panel starting on the node's
+        /// state rather than on the key answers the same in each and fails.
+        function test_an_unencrypted_stopped_node_is_started_without_being_asked() {
+            app.embeddedEncrypted = false;
+            list.reload();
+
+            compare(app.startLog.length, 1,
+                    "exactly one start must have been issued with no action "
+                    + "taken: " + JSON.stringify(app.startLog));
+            compare(app.startLog[0], "",
+                    "carrying an empty passphrase, which is the only secret a "
+                    + "surface that asked for none can mean");
+            compare(list.embedded.actionKind, "",
+                    "and no control is offered beside it — a button the module "
+                    + "has already pressed asks for an act with one answer");
+
+            // The control: the same node status with an encrypted key starts
+            // nothing and asks instead.
+            app.reset();
+            app.embeddedEncrypted = true;
+            list.reload();
+            compare(app.startLog.length, 0,
+                    "an encrypted key must not be started unasked — there is no "
+                    + "passphrase to start it with: "
+                    + JSON.stringify(app.startLog));
+        }
+
+        /// **A module that BECOMES READY already stopped starts its node too.**
+        ///
+        /// This is the case a live mode change cannot reach, and the one an
+        /// ordinary user hits every time: Basecamp opens with Embedded already
+        /// the mode in force, the key is unencrypted, and the node is not
+        /// running. `wantsAutoStart` is then true from its first evaluation, so
+        /// no change signal ever fires and a surface watching only for changes
+        /// would sit there doing nothing.
+        ///
+        /// Built against a harness ALREADY in that state, which is as close to a
+        /// module start as this layer gets.
+        function test_a_list_built_already_stopped_starts_its_node() {
+            app.embeddedEncrypted = false;
+            app.reset();
+
+            var fresh = freshList.createObject(root);
+            verify(fresh !== null, "the fresh list must build");
+            compare(fresh.embedded.current, "stopped",
+                    "precondition: it is built already in the stopped state");
+
+            compare(app.startLog.length, 1,
+                    "a list that finds itself stopped with an unencrypted key "
+                    + "must start the node, with no change signal to hang it "
+                    + "on: " + JSON.stringify(app.startLog));
+            compare(app.startLog[0], "", "with an empty passphrase");
+
+            // The control: the same construction against an ENCRYPTED key
+            // starts nothing, so this is not a list that starts on being built.
+            app.reset();
+            app.embeddedEncrypted = true;
+            var sealed = freshList.createObject(root);
+            compare(app.startLog.length, 0,
+                    "an encrypted key must not be started on construction "
+                    + "either: " + JSON.stringify(app.startLog));
+
+            // **Destroyed and WAITED FOR.** `destroy()` is deferred to the next
+            // event-loop turn, so a list left merely scheduled goes on watching
+            // the harness — and the next test's single expected start arrives
+            // twice. Found the expensive way: three unrelated tests reported two
+            // calls where they expected one.
+            fresh.destroy();
+            sealed.destroy();
+            wait(0);
+        }
+
+        /// **Issued once per arrival, not on every reading.**
+        ///
+        /// The reply is withheld — `embeddedStartPending` stays true, exactly as
+        /// `Main.qml` leaves it while a start is in flight — and the backend is
+        /// then made to report the same node status twice more. A panel
+        /// re-issuing on each reading would start a node repeatedly against a
+        /// backend that is slow to answer.
+        function test_the_automatic_start_is_issued_once_not_on_every_reading() {
+            app.embeddedEncrypted = false;
+            list.reload();
+            compare(app.startLog.length, 1, "precondition: one start went out");
+
+            // The call is now outstanding, which is what a real host records
+            // before the reply lands.
+            app.embeddedStartPending = true;
+
+            // The same status reported a second and a third time.
+            list.reload();
+            list.reload();
+
+            compare(app.startLog.length, 1,
+                    "still exactly one: a start already in flight must not be "
+                    + "re-issued: " + JSON.stringify(app.startLog));
+        }
+
+        /// A refused automatic start is reported as a refusal, not more quietly
+        /// for having been automatic — and it is NOT retried unasked, which
+        /// would loop against a backend that refuses every time.
+        function test_a_refused_automatic_start_is_reported_and_not_retried() {
+            app.embeddedEncrypted = false;
+            list.reload();
+            compare(app.startLog.length, 1, "precondition");
+
+            // The refusal lands.
+            app.embeddedStartPending = false;
+            app.embeddedStartError = "the passphrase did not unlock keys/radicle";
+            list.reload();
+
+            compare(list.embedded.current, "startFailed",
+                    "a refused start is the start-failed state");
+            verify(note().text.indexOf("did not unlock") !== -1,
+                   "with the backend's own words, got: " + note().text);
+            compare(app.startLog.length, 1,
+                    "and no second start may be issued unasked: "
+                    + JSON.stringify(app.startLog));
+        }
+
+        // ---- the passphrase, where one is needed ---------------------------
+
+        /// **An encrypted identity is asked for its passphrase on THIS
+        /// surface**, with a field and a control, rather than being sent to a
+        /// flow whose other steps are already done.
+        function test_an_encrypted_identity_is_offered_a_passphrase_field() {
+            list.reload();
+            compare(list.embedded.current, "stopped", "precondition");
+
+            var f = passphrase();
+            verify(f !== null && f.visible,
+                   "a field to type the passphrase into must be present");
+            verify(f.echoMode !== TextInput.Normal,
+                   "and must not display what is typed");
+            compare(app.startLog.length, 0,
+                    "nothing is started until it is submitted: "
+                    + JSON.stringify(app.startLog));
+
+            // The control: an unencrypted key offers no field, because there is
+            // nothing to ask for.
+            app.embeddedEncrypted = false;
+            list.reload();
+            verify(!passphrase().visible,
+                   "an unencrypted key has nothing to ask for");
+        }
+
+        /// The typed passphrase is the one submitted, and it does not outlive
+        /// the call it was taken for.
+        function test_the_typed_passphrase_is_submitted_and_not_retained() {
+            list.reload();
+            passphrase().text = "correct horse battery";
+
+            action().clicked();
+
+            compare(app.startLog.length, 1,
+                    "exactly one start: " + JSON.stringify(app.startLog));
+            compare(app.startLog[0], "correct horse battery",
+                    "carrying what was typed, not an empty string");
+            compare(passphrase().text, "",
+                    "and the field must not go on holding it: the call already "
+                    + "has the value, and this module's dev Basecamp ships a "
+                    + "QML inspector that reads live object properties");
+        }
+
+        /// A refused passphrase can be corrected: the field survives the
+        /// refusal, and a second submission carries the second value.
+        function test_a_refused_passphrase_can_be_corrected() {
+            list.reload();
+            passphrase().text = "wrong one";
+            action().clicked();
+            compare(app.startLog[0], "wrong one", "precondition");
+
+            app.embeddedStartError = "the passphrase did not unlock keys/radicle";
+            list.reload();
+
+            compare(list.embedded.current, "startFailed", "precondition");
+            verify(passphrase().visible,
+                   "the field must still be present so a mistyped passphrase "
+                   + "can be corrected");
+            verify(note().text.indexOf("did not unlock") !== -1,
+                   "with the refusal displayed as the backend worded it, got: "
+                   + note().text);
+
+            passphrase().text = "the right one";
+            action().clicked();
+            compare(app.startLog.length, 2,
+                    "a second start goes out: " + JSON.stringify(app.startLog));
+            compare(app.startLog[1], "the right one",
+                    "carrying the SECOND value — a panel holding the first "
+                    + "would retry what was already refused");
+        }
+
+        // ---- a node this surface started is not one in the way -------------
+
+        /// **The defect the setup flow shipped, through the rendered panel.**
+        ///
+        /// Both legs report `serving:true` with an identical node status; only
+        /// `embeddedStartSucceeded` differs, which is the one fact the status
+        /// cannot carry.
+        function test_a_node_this_surface_started_is_not_rendered_as_contention() {
+            app.embeddedEncrypted = false;
+            app.embeddedStartSucceeded = true;
+            app.embeddedRunning = true;
+            app.embeddedServing = true;
+            list.reload();
+            app.deliverEmpty();
+
+            verify(note().text.indexOf("already answering") === -1,
+                   "nothing may warn about a node this surface started: "
+                   + note().text);
+            verify(note().text.indexOf("contend") === -1,
+                   "nor about contending for its socket: " + note().text);
+
+            // The control: a serving node this surface did NOT start IS
+            // reported, because that one is somebody else's.
+            app.embeddedStartSucceeded = false;
+            list.reload();
+            app.deliverEmpty();
+            verify(note().text.indexOf("already answering") !== -1,
+                   "a node found serving that this surface did not start must "
+                   + "be reported as such, got: " + note().text);
         }
     }
 }

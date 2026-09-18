@@ -97,6 +97,121 @@ tests and every reviewer row need re-running against all of this**; the runner
 owns re-dispatching them, and the rows are left as they are for the same
 one-row-per-stage reason as above.
 
+## Implementation — the collapsed setup flow (eighth pass)
+
+Acting on the third reopening of the spec, from the user dogfooding the built
+app. No stage row is ticked or added: `design + code` was already ticked and the
+block is one row per stage, so concurrent cherry-picks do not conflict.
+
+**This is the pass that is not QML-only.** Two commits: the backend field, then
+the flow that consumes it.
+
+### The backend — `getEmbeddedIdentity().encrypted`
+
+- [x] `profileinit::key_encrypted(home)` — wraps the `Keystore::is_encrypted()`
+      probe `cobwrite::signer` already uses. Answers
+      `{"encrypted":bool,"problem":""}` rather than a bare bool, because there
+      are THREE answers: sealed, not sealed, and could not tell. Collapsing the
+      third into `false` is the dangerous direction.
+- [x] `radicle_local_key_encrypted` through `guarded`, a `LocalReader::keyEncrypted`
+      wrapper, and both `getEmbeddedIdentity()` JSON build sites.
+- [x] Asked only where `exists` is true: the probe opens the SECRET key file, so
+      an empty home would report a missing-key `problem` for a key that is
+      legitimately not there.
+- [x] `radicle_impl.h`'s `createEmbeddedIdentity` paragraph corrected — it told
+      callers to read `canWriteLocal` for this question, which probes the mode in
+      force and conflates encryption with three other causes.
+- [x] Five Rust tests and one C++ test, every one reading a home some OTHER call
+      created with the creating reply DISCARDED — so an implementation echoing
+      what it was told has nothing to echo. `can_write` is the control that
+      proves the probe unlocks nothing.
+- [x] **Mutation:** the `Err` flattened to `encrypted:false, problem:""` — 2 red,
+      both named. Reverted.
+- [x] `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, and the full
+      `cargo test` green. `nix build '.#checks.x86_64-linux.unit-tests'` green.
+
+### The Embedded surface — starting, and the passphrase
+
+- [x] `EmbeddedState` gains `encrypted`, `startSucceeded` and `restartHosted`
+      as inputs; `wantsAutoStart`, `wantsPassphrase` and `foundForeignNode` as
+      derivations. `encrypted` defaults TRUE and `startSucceeded` FALSE — both
+      the direction where a missing reply costs a dismissal rather than an
+      unasked-for start or a suppressed warning.
+- [x] `wantsAutoStart` is a DECISION; `RepoList` issues the call. "Issued once
+      per arrival" is then an edge on a derived boolean rather than a counter.
+- [x] `Component.onCompleted` beside the `Connections`, because a change signal
+      fires on a CHANGE and a list built already stopped never sees one. See
+      "Not covered" below — deleting it reddened nothing until a test existed.
+- [x] The passphrase is ONE FIELD on the panel, cleared as the call is issued so
+      its lifetime is the call. A refusal empties it, which is correct: the
+      passphrase that was refused is not the one to retry with.
+- [x] `startHosted` / `restartHosted` SPLIT. One flag would have made hosting a
+      start silently enable a restart reaching nobody.
+- [x] `Main.qml` — `embeddedEncrypted`, `embeddedStartSucceeded`,
+      `startEmbeddedNode()`, `embeddedStartHosted: true`,
+      `embeddedRestartHosted: false`, and `routesEmbeddedAction` reading both.
+
+### The header — the DID
+
+- [x] `SourceState.modeHasIdentity`, ONE rule keyed on whether the mode reads a
+      home of its own. `Main.qml:950`'s `mode === "local"` becomes it.
+      `NodeIdentity.qml` is untouched: it already renders a full, copyable,
+      clipboard-verified DID in the slot.
+- [x] `tst_source.qml`'s slot fixture now instantiates the REAL `SourceState`
+      rather than reproducing the comparison, or the list-shaped rule could come
+      back with that file green.
+
+### The wizard — four steps
+
+- [x] `steps` loses `start` and `confirm`. `startNode`, `canStartNode`,
+      `startBlockedReason`, `nodeStarted`, `listening`, `nodeServing`,
+      `startPending`, `nodeId`, `allowCommand`, `submitStart` and
+      `refreshNodeStatus` are REMOVED rather than left unread — so "issues no
+      startNode in any step" is a property of the object.
+- [x] `resumeIndex` stops reading `alreadyServing`; `onLastStep` added, derived
+      from the index rather than naming `network`.
+- [x] The embedded step gains the allow-is-not-enough sentence; the passphrase
+      trade gains what the choice decides about every later opening; the last
+      step's forward control finishes.
+- [x] Both test fakes dropped their `start` functions, so a future edit wiring a
+      start back in cannot stay green.
+
+### Tests and mutations
+
+- [x] Full suite green: `sh radicle-ui/tests/run-qml-tests.sh` — 31 files, zero
+      failures. Count the tests with `grep -c "function test_"` rather than
+      reading a number here.
+- [x] `sh radicle-ui/tests/check-qml-syntax.sh` green.
+- [x] `lgs basecamp build --variant lgx --module radicle_ui` green, run from this
+      worktree's root (`pwd` checked).
+- [x] **Mutations run and reverted, each reddening NAMED tests:** the `Err`
+      flattened (2 red); `wantsAutoStart` keyed on the key alone (1 red, all
+      seven rows wrong); `foundForeignNode` dropping `!startSucceeded` (3 red
+      across two layers, the third reproducing the user's screenshot);
+      `modeHasIdentity` back to a mode list (3 red, one reporting `embedded:no`).
+- [x] **One mutation that reddened NOTHING, and the test written for it:**
+      deleting `Component.onCompleted: autoStartIfWanted()`. Recorded in
+      `design.md` rather than quietly fixed.
+
+### Not covered, and stated rather than implied
+
+- [ ] **No end-to-end coverage of the node actually starting.** `local.yaml`
+      runs against an embedded home with NO identity, so it reaches the
+      no-identity state and stops — nothing there starts a node, and a spec that
+      provisioned one would leave a real embedded home and a running node behind
+      on every CI run. So "the node genuinely starts itself" is proven at the
+      component layer, against an injected host, and the real
+      `Main.startEmbeddedNode` is covered nowhere. Its shape is reproduced in two
+      fixtures; a divergence between them and the real file is invisible to both.
+- [ ] **The header's DID in Embedded has no end-to-end assertion either**, for
+      the same reason: `local.yaml`'s Embedded leg has no identity, so the slot
+      is correctly empty there. `root.nodeIdentity === ''` in that leg is now
+      about the backend rather than about the gate, which is stated in the spec's
+      own comment.
+- [ ] **`Main.qml` still has no component test**, unchanged from earlier passes.
+      `startEmbeddedNode`, the two new reply fields and the split hosting flags
+      are covered at that layer only as a reproduction.
+
 ## Implementation — the respecced identity step (seventh pass)
 
 Acting on the second reopening of the identity step, from the user dogfooding

@@ -6,11 +6,20 @@ import "Theme.js" as Theme
 /*
  * The embedded node's guided setup, rendered.
  *
- * Six steps — preflight, embedded, identity, network, start, confirm — over
- * module methods that already exist. This file is the SCREEN; `SetupFlow.qml`
- * beside it is the state, the blocking rules and the calls. Read that first:
- * every "why" about ordering, gating and staleness is there, and nothing here
- * decides any of it.
+ * Four steps — preflight, embedded, identity, network — over module methods
+ * that already exist. This file is the SCREEN; `SetupFlow.qml` beside it is the
+ * state, the blocking rules and the calls. Read that first: every "why" about
+ * ordering, gating and staleness is there, and nothing here decides any of it.
+ *
+ * ## It sets a node up and then ends
+ *
+ * It does not start the node and does not display the DID. Both were steps of
+ * this flow and both are now elsewhere, for the same reason: neither is a thing
+ * done once at setup time. Starting is what the mode does whenever it is
+ * opened, so a flow is the wrong shape for it — the Embedded surface owns it.
+ * The DID is wanted at arbitrary later moments and mostly when this flow is
+ * long closed, so a screen that shows it once and is dismissed is the worst
+ * place to keep it — the header owns it.
  *
  * ## What this screen is for
  *
@@ -23,9 +32,13 @@ import "Theme.js" as Theme
  * each is cheapest to state where the choice is made rather than discovered
  * afterwards. This screen exists to state them at those three moments:
  *
- *  - **the passphrase trade**, at the identity step, where the control is;
- *  - **that this is a NEW identity**, at the embedded step BEFORE anything is
- *    created, and again at confirm with the DID that now exists;
+ *  - **the passphrase trade**, at the identity step, where the control is — and
+ *    it now also states what the choice decides about every LATER opening of
+ *    Embedded, which is the consequence the user actually lives with;
+ *  - **that this is a NEW identity**, at the embedded step, BEFORE anything is
+ *    created, in full. It used to be split between that step and a terminal
+ *    screen that restated it with the DID; that screen is gone, and a
+ *    consequence stated in half is one a user acts on without;
  *  - **that the node accepts no inbound connections**, at the network step, as
  *    the setting in force rather than as a choice.
  *
@@ -79,7 +92,6 @@ Item {
     /// "is the way out offered" and "what will it do".
     readonly property bool identityForwardEnabled: setupFlow.canAdvanceIdentity
     readonly property string identityState: setupFlow.identityState
-    readonly property bool startEnabled: setupFlow.canStartNode
     readonly property string errorShown: setupFlow.lastError
 
     SetupFlow {
@@ -99,23 +111,20 @@ Item {
     /// `restart()` rather than `runPreflight()`: the landing step is derived
     /// from the replies this preflight is about to collect.
     ///
-    /// **The passphrase field is cleared here, and this is the only place it
-    /// can be.** `setupFlow.restart()` resets every flow property, but the
-    /// field lives in the view, so `reset()` cannot reach it. Without this, a
-    /// passphrase typed into a showing the user abandoned before starting the
-    /// node outlives that showing — the overlay is never destroyed — and the
-    /// next showing resumes at the start step holding it, handing a stale
-    /// secret to `startNode()` with no re-entry by the user.
-    ///
-    /// **Here rather than in the start button's `onClicked`**: that handler
-    /// runs before the reply, so clearing there would destroy the passphrase a
-    /// retry needs after a refusal
-    /// (`test_a_refused_start_keeps_the_passphrase_for_the_retry`). Keying on
-    /// the showing instead makes the lifetime exactly one showing, which covers
-    /// the abandoned case the `nodeStarted` clearing below cannot see.
+    /// **The passphrase field is cleared here**, which is the outer of two
+    /// clearings and the one that covers an ABANDONED showing.
+    /// `setupFlow.restart()` resets every flow property, but the field lives in
+    /// the view, so `reset()` cannot reach it. Without this, a passphrase typed
+    /// into a showing the user closed part way outlives that showing — the
+    /// overlay is never destroyed — and sits readable in a live object for the
+    /// rest of the module's life. This repo's dev Basecamp ships the QML
+    /// inspector compiled in, which reads live object properties, so "resident"
+    /// means "readable".
     ///
     /// The switch goes back to its default with it: leaving it checked over a
-    /// cleared field would offer a start whose passphrase is silently empty.
+    /// cleared field would submit a creation whose passphrase is silently empty
+    /// — an unencrypted key the user believed they had sealed, which is the one
+    /// outcome here that cannot be undone.
     ///
     /// Deleting either line turns
     /// `test_a_passphrase_does_not_outlive_an_abandoned_showing` red.
@@ -125,13 +134,32 @@ Item {
         setupFlow.restart();
     }
 
-    // The passphrase the identity step took, held here because the START step
-    // needs it: the node is handed an already-decrypted signing key when it is
-    // built, so there is no later point at which one could be supplied.
+    // The passphrase the identity step takes. **It has exactly one consumer
+    // now** — `createEmbeddedIdentity` — because this flow starts no node, so
+    // there is no second call with a use for it.
     //
     // Read from the field rather than stored separately, so there is one copy.
     readonly property string passphrase:
         passphraseSwitch.checked ? passphraseField.text : ""
+
+    // Cleared once the creation it was taken for has been ANSWERED, which is
+    // the inner of the two clearings and makes the ordinary lifetime exactly
+    // one call rather than one showing.
+    //
+    // Keyed on `identityCreatedHere` — set only by a reply reporting the
+    // identity created — rather than done in the button's handler, because the
+    // handler runs before the reply and clearing there would destroy the
+    // passphrase a retry needs after a refused creation.
+    //
+    // It has to be explicit because the field is never destroyed: StackLayout
+    // instantiates every child eagerly, so nothing goes away when the step
+    // changes.
+    Connections {
+        target: setupFlow
+        function onIdentityCreatedHereChanged() {
+            if (setupFlow.identityCreatedHere) passphraseField.text = "";
+        }
+    }
 
     ScrollView {
         id: scroller
@@ -324,6 +352,26 @@ Item {
                             + "as a new identity this module creates — separate "
                             + "from any Radicle node you already run and from "
                             + "any identity you already hold."
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSm
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // What FOLLOWS from that separateness, and **this step is
+                    // now the only place the flow says it.** The deleted
+                    // confirm step carried half of it, beside the DID; a
+                    // consequence stated in half is one a user acts on without.
+                    //
+                    // Said here rather than after creation on its own terms
+                    // too: a statement made only once the identity exists is
+                    // made after the decision it informs.
+                    Text {
+                        objectName: "embeddedConsequence"
+                        width: body.width
+                        text: "So the repositories in your existing Radicle "
+                            + "home are not in this node's storage, and a "
+                            + "private repository reaches this node only once "
+                            + "a delegate authorises this DID."
                         color: Theme.text
                         font.pixelSize: Theme.fontSm
                         wrapMode: Text.WordWrap
@@ -524,6 +572,16 @@ Item {
 
                     // BOTH halves, and visible for BOTH settings of the switch.
                     // See the file header for why neither is conditional.
+                    //
+                    // **The second sentence is what this choice now decides**,
+                    // and it was not stated at all while the flow started the
+                    // node itself. The choice made here is no longer about one
+                    // start the user is about to ask for; it is about every
+                    // subsequent opening of Embedded, for the life of the mode.
+                    // An unencrypted key means the node starts by itself when
+                    // the mode is opened; an encrypted one means a passphrase
+                    // is asked for each time. That is the consequence the user
+                    // lives with, and it is chosen here and nowhere else.
                     Text {
                         objectName: "passphraseTrade"
                         visible: setupFlow.identityState === "none"
@@ -533,7 +591,11 @@ Item {
                             + "already-decrypted key when it is built, so one "
                             + "cannot be supplied later. Without a passphrase, "
                             + "the node starts with no prompt, at the cost of "
-                            + "a secret stored in plaintext on disk."
+                            + "a secret stored in plaintext on disk.\n\n"
+                            + "This decides what happens every time you open "
+                            + "Embedded from now on: an unencrypted key lets "
+                            + "the node start without a prompt, and an "
+                            + "encrypted one is asked for each time."
                         color: Theme.textDim
                         font.pixelSize: Theme.fontSm
                         wrapMode: Text.WordWrap
@@ -632,149 +694,26 @@ Item {
                     }
                 }
 
-                // ---- 5. start ------------------------------------------------
-                Column {
-                    spacing: Theme.gapSm
-
-                    Text {
-                        objectName: "startWaiting"
-                        visible: setupFlow.startPending
-                        width: body.width
-                        text: "Starting the node — waiting for its control "
-                            + "socket to answer…"
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontSm
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                        objectName: "startBlocked"
-                        visible: setupFlow.startBlockedReason !== ""
-                        width: body.width
-                        text: setupFlow.startBlockedReason
-                        color: Theme.warn
-                        font.pixelSize: Theme.fontSm
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Button {
-                        objectName: "startNode"
-                        text: "Start the node"
-                        enabled: setupFlow.canStartNode
-                        onClicked: setupFlow.submitStart(wizard.passphrase)
-                    }
-
-                    // The passphrase is cleared once the node has started,
-                    // which is the moment both calls that need it have been
-                    // made — createEmbeddedIdentity at the identity step and
-                    // startNode here.
-                    //
-                    // It has to be cleared explicitly because the field is
-                    // never destroyed: StackLayout instantiates every child
-                    // eagerly, so nothing goes away when the step changes and
-                    // a plaintext secret would stay resident for the rest of
-                    // the wizard's life. This repo's dev Basecamp ships the
-                    // QML inspector compiled in, which reads live object
-                    // properties — so "resident" means readable.
-                    //
-                    // Keyed on `nodeStarted` rather than done inside the click
-                    // handler: the handler runs before the reply, and clearing
-                    // there would destroy the passphrase a retry needs after a
-                    // refusal.
-                    Connections {
-                        target: setupFlow
-                        function onNodeStartedChanged() {
-                            if (setupFlow.nodeStarted)
-                                passphraseField.text = "";
-                        }
-                    }
-
-                    Text {
-                        objectName: "startedNodeId"
-                        visible: setupFlow.nodeStarted
-                        width: body.width
-                        text: "Running as " + setupFlow.nodeId
-                        color: Theme.good
-                        font.pixelSize: Theme.fontSm
-                        font.family: Theme.mono
-                        wrapMode: Text.WrapAnywhere
-                    }
-
-                    // EMPTY is the expected value and is displayed as such: it
-                    // is what confirms the outbound-only default the network
-                    // step described. Omitting it when empty would hide exactly
-                    // the case worth showing.
-                    Text {
-                        objectName: "startListening"
-                        visible: setupFlow.nodeStarted
-                        width: body.width
-                        text: setupFlow.listening.length === 0
-                              ? "Listening on no address — peers cannot fetch "
-                                + "from this node."
-                              : "Listening on "
-                                + setupFlow.listening.join(", ")
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontSm
-                        wrapMode: Text.WordWrap
-                    }
-
-                    // `serving`, not `running`: a node whose threads have died
-                    // leaves `running` true while `serving` goes false, and
-                    // that is the state a user cannot otherwise account for.
-                    Text {
-                        objectName: "startServing"
-                        visible: setupFlow.nodeStarted
-                        width: body.width
-                        text: setupFlow.nodeServing
-                              ? "The control socket is answering."
-                              : "The node is not answering its control socket."
-                        color: setupFlow.nodeServing ? Theme.good : Theme.bad
-                        font.pixelSize: Theme.fontSm
-                        wrapMode: Text.WordWrap
-                    }
-                }
-
-                // ---- 6. confirm ----------------------------------------------
-                Column {
-                    spacing: Theme.gapSm
-
-                    // Restated, not stated for the first time: the embedded
-                    // step said it before anything was created, and this says
-                    // it again with the DID that now exists.
-                    Text {
-                        objectName: "confirmSeparateIdentity"
-                        width: body.width
-                        text: "This is a new identity, separate from any "
-                            + "Radicle node you already run. The repositories "
-                            + "in your existing home are not in this node's "
-                            + "storage, and a private repository reaches this "
-                            + "node only once a delegate authorises this DID."
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSm
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                        objectName: "confirmNodeId"
-                        visible: setupFlow.nodeId !== ""
-                        width: body.width
-                        text: setupFlow.nodeId
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSm
-                        font.family: Theme.mono
-                        wrapMode: Text.WrapAnywhere
-                    }
-
-                    CopyableCommand {
-                        objectName: "confirmAllowCommand"
-                        width: body.width
-                        caption: "A delegate runs this on a repository to let "
-                               + "this node fetch it:"
-                        // The DID that was reported, never a placeholder — so
-                        // the line as shown is the line to run.
-                        command: setupFlow.allowCommand
-                    }
-                }
+                // **No step 5 and no step 6.** Start moved to the Embedded
+                // surface and confirm was deleted; `SetupFlow.steps` carries
+                // the reasoning. What stood here is worth recording, because
+                // both screens were defects rather than merely redundant:
+                //
+                //  - the START step rendered an amber "a node is already
+                //    answering on the resolved socket. Starting a second one
+                //    would contend for it" directly above its own green
+                //    "Running as did:key:…" and "The control socket is
+                //    answering." Both were derived from true readings, and the
+                //    node warned about was the one this wizard had just
+                //    started. Only a surface that knows whether IT started the
+                //    node can tell those apart — see
+                //    `EmbeddedState.foundForeignNode`.
+                //  - the CONFIRM step's only act was to be dismissed. Its DID
+                //    is in the header now, always reachable rather than shown
+                //    once; its allow line went with it; and its
+                //    separate-identity statement moved UP to the embedded step,
+                //    where it is made before the decision it informs rather
+                //    than after.
             }
 
             // ---- navigation -----------------------------------------------
@@ -797,17 +736,34 @@ Item {
                 // work was never done. Hidden rather than disabled: a disabled
                 // Next beside an enabled "Create identity and continue" would
                 // still read as two ways out, one of them broken.
+                //
+                // **On the LAST step it finishes rather than advancing**, and
+                // is the same control rather than a second one beside it: the
+                // forward control is where a user's hand already is, and a
+                // separate Finish would be two ways out of one step. It issues
+                // NO call — the steps made every write this flow makes, and
+                // ending is the surface coming down. What the user sees
+                // afterwards is the Embedded surface, which reports the node's
+                // state and starts it where it can.
                 Button {
                     objectName: "wizardNext"
                     visible: setupFlow.step !== "identity"
-                    text: "Next"
-                    enabled: setupFlow.canAdvance
-                    onClicked: setupFlow.advance()
+                    text: setupFlow.onLastStep ? "Finish" : "Next"
+                    enabled: setupFlow.onLastStep || setupFlow.canAdvance
+                    onClicked: {
+                        if (setupFlow.onLastStep) wizard.closed();
+                        else setupFlow.advance();
+                    }
                 }
 
                 Button {
                     objectName: "wizardClose"
-                    text: setupFlow.step === "confirm" ? "Done" : "Cancel"
+                    // Always "Cancel" now. It read "Done" on the confirm step,
+                    // which is gone — and on the last step the forward control
+                    // is what finishes, so a second button reading "Done" beside
+                    // it would be two ways out with one of them the giving-up
+                    // one, spelled as if it were the finishing one.
+                    text: "Cancel"
                     onClicked: wizard.closed()
                 }
             }

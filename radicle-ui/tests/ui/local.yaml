@@ -503,6 +503,15 @@ steps:
   # in Local — so an empty one HERE can only mean the mode stopped reporting that
   # profile's key, which is the property under test. Against a build with the
   # fall-through bug this is non-empty and fails.
+  #
+  # **This assertion got sharper when the header started showing Embedded's own
+  # DID.** It used to hold partly for a reason that had nothing to do with
+  # isolation: the header's identity was gated on `mode === "local"`, so Embedded
+  # showed nothing whatever the backend reported. `root.nodeIdentity` reads
+  # `caps.nodeId` rather than the rendered slot, so it was never the gate that
+  # made this pass — but the two failures would have been indistinguishable on
+  # screen. Now the slot renders whatever this reports, so an emptiness here is
+  # visibly an emptiness the backend stated.
   - name: and carries no identity from it
     expect:
       state:

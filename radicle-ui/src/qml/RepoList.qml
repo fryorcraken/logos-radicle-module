@@ -98,16 +98,82 @@ Item {
         pathsProblem:   app ? (app.embeddedPathsProblem || "") : ""
         home:           app ? (app.embeddedHome || "") : ""
         identityExists: !!app && app.embeddedIdentityExists === true
+        // Defaults TRUE when there is no app, unlike every other field here,
+        // and the asymmetry is deliberate: a missing reply then asks for a
+        // passphrase nobody needs, which is visible and costs one dismissal,
+        // rather than starting a node unasked on a reply nobody supplied.
+        encrypted:      !app || app.embeddedEncrypted === true
         running:        !!app && app.embeddedRunning === true
         serving:        !!app && app.embeddedServing === true
         startPending:   !!app && app.embeddedStartPending === true
         startError:     app ? (app.embeddedStartError || "") : ""
+        startSucceeded: !!app && app.embeddedStartSucceeded === true
         // Which requests the host actually routes. Absent means false, which is
         // the inert direction: a named but disabled action, never an enabled
         // one reaching nobody.
         setupHosted:    !!app && app.embeddedSetupHosted === true
         startHosted:    !!app && app.embeddedStartHosted === true
+        restartHosted:  !!app && app.embeddedRestartHosted === true
     }
+
+    /// Issue the automatic start, exactly once per arrival in the stopped state.
+    ///
+    /// **The "once" is an edge, not a counter.** `wantsAutoStart` is a pure
+    /// derivation that is true only in `stopped` with an unencrypted key, and
+    /// issuing the start makes it false immediately — `startPending` moves the
+    /// state to `starting`, and the reply moves it on again. So the handler
+    /// cannot fire twice for one arrival however many times the backend reports
+    /// the same status, and it fires again only after the state has genuinely
+    /// left `stopped` and come back. A surface re-issuing on every reading would
+    /// start a node repeatedly against a backend that is slow to answer.
+    ///
+    /// `Connections` on the derived property rather than a call from wherever a
+    /// reply lands: the trigger is the ANSWER moving, not an input to it, which
+    /// is the same rule `Main.qml`'s `embeddedSettled` follows. Three replies
+    /// feed this state and any of them can be the one that completes it.
+    ///
+    /// **And `Component.onCompleted` beside it, which is not belt and braces.**
+    /// A change signal fires on a CHANGE, so a `RepoList` built against a
+    /// backend already reporting a stopped unencrypted node would never see
+    /// one — `wantsAutoStart` is true from its first evaluation. That is the
+    /// module starting up with Embedded already the mode in force, which is the
+    /// ordinary case for anyone who has used it before, and the one a live mode
+    /// change cannot reproduce. `design.md` records the same asymmetry biting
+    /// the setup host's own tests.
+    ///
+    /// An empty passphrase, which is what an unencrypted key takes — and the
+    /// only secret this surface can supply without asking for one.
+    function autoStartIfWanted() {
+        if (embedded.wantsAutoStart && app) app.startEmbeddedNode("");
+    }
+
+    /// Start the node with whatever was typed into the passphrase field.
+    ///
+    /// **The field is cleared as the call is issued, not when it is answered.**
+    /// The call already holds the value it needs, so clearing here makes the
+    /// secret's lifetime exactly the call rather than the call plus however
+    /// long the backend takes — and this repo's dev Basecamp ships the QML
+    /// inspector compiled in, which reads live object properties, so "resident"
+    /// means "readable".
+    ///
+    /// A refusal therefore empties the field, which is correct: the passphrase
+    /// that was refused is not the one to retry with, and `wantsPassphrase`
+    /// keeps the field on screen through `startFailed` so a corrected one can be
+    /// typed. Keeping the refused value would offer a user a filled field whose
+    /// contents are known wrong.
+    function submitEmbeddedPassphrase() {
+        if (!app || !embedded.actionEnabled) return;
+        var typed = passphraseField.text;
+        passphraseField.text = "";
+        app.startEmbeddedNode(typed);
+    }
+
+    readonly property Connections embeddedAutoStart: Connections {
+        target: page.embedded
+        function onWantsAutoStartChanged() { page.autoStartIfWanted(); }
+    }
+
+    Component.onCompleted: autoStartIfWanted()
 
     /// Whether the Embedded state panel is the thing standing where a repository
     /// list would be.
@@ -550,20 +616,50 @@ Item {
             textFormat: Text.PlainText
         }
 
+        // ---- the passphrase, where one is needed --------------------------
+        //
+        // **One field on this surface, not a step of a flow.** A passphrase is
+        // one answer to one question asked at one moment; routing it through the
+        // guided setup would make the user walk steps whose work is already done
+        // to reach the only one that is not.
+        //
+        // Shown for an encrypted key in `stopped` and in `startFailed`, which
+        // `wantsPassphrase` decides: a mistyped passphrase is the likeliest
+        // refusal, and the field has to survive one so it can be corrected.
+        TextField {
+            id: passphraseField
+            objectName: "embeddedPassphrase"
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(parent.width, 280)
+            visible: page.embedded.wantsPassphrase
+            // Never displayed as it is typed.
+            echoMode: TextInput.Password
+            placeholderText: "passphrase"
+            // Enter submits, because a single field with a button below it is a
+            // form and a user will press it.
+            onAccepted: page.submitEmbeddedPassphrase()
+        }
+
         // The state's own action. Absent — not disabled-and-unexplained — where
         // the state offers none: `blocked` offers nothing that would write,
         // because nothing could succeed, and the sentence above already names
-        // the obstacle.
+        // the obstacle; and a stopped node with an unencrypted key offers none
+        // because this surface has already started it.
         Button {
             objectName: "embeddedStateAction"
             anchors.horizontalCenter: parent.horizontalCenter
             visible: page.embedded.actionKind !== ""
             enabled: page.embedded.actionEnabled
             text: page.embedded.actionLabel
-            // Requests the act; performs none of it. A state panel that acted
-            // because it was displayed would act without being asked, so nothing
-            // here creates an identity, starts a node or writes the mode — the
-            // signal leaves and the host decides.
+            // Requests the act; performs none of it — EXCEPT a start, which
+            // this capability now hosts and which carries the passphrase typed
+            // above. The field is on this surface, so the value cannot be
+            // handed to the host through a signal without the host holding a
+            // plaintext secret it has no other use for.
+            //
+            // Everything else still leaves as a request. A state panel that
+            // acted because it was displayed would act without being asked, so
+            // nothing here creates an identity or writes the mode.
             //
             // Guarded on `actionEnabled` as well as by `enabled`, so an act
             // whose request reaches nobody cannot be requested by a test or a
@@ -573,6 +669,10 @@ Item {
             // property of the mouse.
             onClicked: {
                 if (!page.embedded.actionEnabled) return;
+                if (page.embedded.actionKind === "start") {
+                    page.submitEmbeddedPassphrase();
+                    return;
+                }
                 page.embeddedActionTaken(page.embedded.actionKind);
             }
 

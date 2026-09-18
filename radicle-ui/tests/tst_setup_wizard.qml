@@ -23,7 +23,7 @@ import "../src/qml" as Ui
  *    is red" cannot pass against a flow that reddens everything;
  *  - the refusal messages are distinct sentences, so "a message is displayed"
  *    cannot pass against one that displays the first refusal for ever;
- *  - the two DIDs in the confirm tests differ, and the second assertion checks
+ *  - the two DIDs in the identity-state tests differ, and the assertions check
  *    the FIRST is absent as well as the second present.
  *
  * ## Why the state object is driven directly
@@ -74,11 +74,6 @@ Item {
         property string createRefusal: ""
         property string createdNodeId: "did:key:z6MkCREATED"
 
-        property string startRefusal: ""
-        property bool startStarted: true
-        property var startListening: []
-        property string startNodeId: "did:key:z6MkSTARTED"
-
         property string settingRefusal: ""
 
         property var seedItems: [
@@ -93,12 +88,16 @@ Item {
         /// late", which is exactly the requirement being pinned.
         property var held: null
 
-        /// Clears what was OBSERVED, and the node state the fake mutates.
+        /// Clears what was OBSERVED, and the node state.
         ///
-        /// `serving` is in here because `start()` now sets it — a started node
-        /// answers its socket. Everything else is a scenario the test sets
-        /// itself, and is deliberately left alone so a mid-test `reset()` does
-        /// not silently undo the scenario the test just established.
+        /// `serving` was in here because the fake's own `start()` set it — a
+        /// started node answers its socket. That function is gone with the
+        /// start step, so `serving` is now purely a scenario value; it stays
+        /// cleared because every multi-leg test below sets its scenario AFTER
+        /// calling this, and a leftover `serving:true` from a previous leg
+        /// would be a scenario nobody asked for. Everything else is left alone
+        /// so a mid-test `reset()` does not silently undo what the test just
+        /// established.
         function reset() {
             callLog = [];
             held = null;
@@ -193,30 +192,16 @@ Item {
                  alias: alias, encrypted: passphrase !== "" });
         }
 
-        function start(passphrase, cb) {
-            callLog.push("startNode:" + passphrase);
-            if (startRefusal !== "") { cb({ error: startRefusal }); return; }
-            // A started node is one the socket answers for: the real
-            // `startNode` returns only once the control socket responds, so a
-            // fake that reported `started:true` while `getNodeStatus` kept
-            // saying `serving:false` would be modelling a state the backend
-            // cannot produce — and a test written against it would be asserting
-            // about a node that does not exist.
-            if (startStarted) serving = true;
-            cb({ started: startStarted, home: home,
-                 socket: "/run/u/radicle.sock",
-                 nodeId: startNodeId, listening: startListening });
-        }
-
-        /// Holds its reply instead of delivering it. Used only where the
-        /// requirement is about a reply arriving after the user moved on.
-        function startHeld(passphrase, cb) {
-            callLog.push("startNode:" + passphrase);
-            held = function () {
-                cb({ started: true, home: home, socket: "/run/u/radicle.sock",
-                     nodeId: startNodeId, listening: startListening });
-            };
-        }
+        // **No `start` and no `startHeld`.** The flow has no `startNode`
+        // property to wire them to: starting moved to the Embedded surface,
+        // where it is what the mode does every time it is opened rather than a
+        // thing done once at setup time. A fake that could still answer a start
+        // would be modelling a call this flow has no way to make, and would let
+        // a test assert about a path that does not exist.
+        //
+        // The `startNode` entries the call-log assertions look for are
+        // therefore unreachable rather than merely absent, which is what makes
+        // "no step of the setup starts a node" structural.
 
         function deliverHeld() {
             if (held === null) return false;
@@ -245,13 +230,18 @@ Item {
         fetchNodeStatus: function (cb) { fake.nodeStatus(cb); }
         fetchSeeds: function (cb) { fake.seeds(cb); }
         createIdentity: function (a, p, cb) { fake.create(a, p, cb); }
-        startNode: function (p, cb) { fake.start(p, cb); }
         saveSetting: function (k, v, cb) { fake.setting(k, v, cb); }
     }
 
-    /// A second flow whose start call HOLDS its reply. Separate instance rather
-    /// than a mutable property on the first, so the late-reply tests cannot
-    /// leave the ordinary ones depending on which ran first.
+    /// A second flow, wired identically. It existed because the first had a
+    /// start call that delivered and this one a start call that HELD its reply;
+    /// with no start call left, the reply a staleness test holds is the
+    /// PREFLIGHT's identity probe (`fake.holdIdentity`), which the shared fake
+    /// already provides.
+    ///
+    /// Kept as a separate instance rather than folded into `flow` for the
+    /// original reason: a test that leaves a reply in flight must not leave the
+    /// ordinary tests depending on which ran first.
     Ui.SetupFlow {
         id: heldFlow
         fetchCapabilities: function (cb) { fake.capabilities(cb); }
@@ -259,11 +249,10 @@ Item {
         fetchNodeStatus: function (cb) { fake.nodeStatus(cb); }
         fetchSeeds: function (cb) { fake.seeds(cb); }
         createIdentity: function (a, p, cb) { fake.create(a, p, cb); }
-        startNode: function (p, cb) { fake.startHeld(p, cb); }
         saveSetting: function (k, v, cb) { fake.setting(k, v, cb); }
     }
 
-    /// Walk the flow to a named step, so a test about the start step does not
+    /// Walk the flow to a named step, so a test about a later step does not
     /// re-assert the navigation rules on its way there.
     function advanceTo(f, stepName) {
         for (var i = 0; i < 10 && f.step !== stepName; i++) {
@@ -290,9 +279,6 @@ Item {
             fake.serving = false;
             fake.createRefusal = "";
             fake.createdNodeId = "did:key:z6MkCREATED";
-            fake.startRefusal = "";
-            fake.startStarted = true;
-            fake.startListening = [];
             fake.settingRefusal = "";
             fake.holdIdentity = false;
             fake.holdSeeds = false;
@@ -305,7 +291,7 @@ Item {
             fake.reset();
         }
 
-        // ---- six steps in a fixed order -------------------------------------
+        // ---- four steps in a fixed order ------------------------------------
 
         function test_the_flow_opens_on_preflight() {
             compare(flow.step, "preflight");
@@ -322,7 +308,7 @@ Item {
         /// MUST require that `getCapabilities().mode` reports `embedded`", and
         /// an unanswered backend has not reported embedded. Pinned
         /// deliberately, because the tempting "fix" is to treat an empty mode
-        /// as permission to continue, which would let the four node steps run
+        /// as permission to continue, which would let the node steps run
         /// against a module in explore.
         function test_an_unanswered_mode_does_not_advance() {
             compare(flow.modeInForce, "",
@@ -330,30 +316,33 @@ Item {
             verify(flow.advance(), "preflight -> embedded is always permitted");
             compare(flow.step, "embedded");
             compare(flow.canAdvance, false,
-                    "an unknown mode in force must not continue into the four "
-                    + "steps that are about an embedded node");
+                    "an unknown mode in force must not continue into the steps "
+                    + "that are about an embedded node");
         }
 
-        /// Both halves matter: the sequence is walked in order AND a sixth
-        /// advance is a no-op. Without the second, a flow that ran off the end
-        /// of the array would pass — `steps[6]` is undefined, which is not a
-        /// step but is also not obviously wrong from one assertion.
+        /// Both halves matter: the sequence is walked in order AND an advance
+        /// past the last step is a no-op. Without the second, a flow that ran
+        /// off the end of the array would pass — `steps[4]` is undefined, which
+        /// is not a step but is also not obviously wrong from one assertion.
         function test_advancing_walks_the_sequence_without_skipping() {
             // The preflight has to have answered, because the embedded step
             // will not advance until capabilities report `embedded` in force —
             // the scenario's default. Without this the walk stalls there,
             // which is the flow being right rather than the walk being wrong.
             flow.runPreflight();
-            var want = ["embedded", "identity", "network", "start", "confirm"];
+            var want = ["embedded", "identity", "network"];
             for (var i = 0; i < want.length; i++) {
                 verify(flow.advance(), "advance " + i + " must be permitted");
                 compare(flow.step, want[i],
                         "step " + i + " must be " + want[i]);
             }
             compare(flow.advance(), false,
-                    "a sixth advance must not be permitted");
-            compare(flow.step, "confirm",
-                    "and must leave the step in force at confirm");
+                    "a fourth advance must not be permitted");
+            compare(flow.step, "network",
+                    "and must leave the step in force at network");
+            verify(flow.onLastStep,
+                   "which is the last step, whose forward control ends the "
+                   + "setup rather than moving to a further one");
         }
 
         function test_going_back_returns_to_the_previous_step() {
@@ -496,14 +485,37 @@ Item {
 
         /// The backend's sentence is shown unaltered, because it names the path
         /// that was tried and the limit that was exceeded.
+        ///
+        /// Asserted through `createBlockedReason`, which is the one blocking
+        /// sentence this flow still renders. It used to be asserted through
+        /// `startBlockedReason` and the git problem; with no start step there
+        /// is no such property, and a missing `git` now blocks nothing — the
+        /// git PROBLEM is still carried as a finding, which
+        /// `test_one_failing_check_is_distinguishable_from_another` covers.
+        ///
+        /// Both legs use a distinctive sentence and the second asserts the
+        /// first is gone, so a flow latching whichever it saw first fails.
         function test_a_backend_sentence_is_available_unaltered() {
-            fake.gitFound = false;
-            fake.gitProblem = "no git: tried /nix/store/xyz/bin/git";
+            fake.home = "";
+            fake.identityProblem = "no data directory: tried /nonexistent/xdg";
             flow.runPreflight();
-            compare(flow.startBlockedReason,
-                    "no git: tried /nix/store/xyz/bin/git",
+            compare(flow.createBlockedReason,
+                    "no data directory: tried /nonexistent/xdg",
                     "the backend's own sentence must be what is shown, not a "
                     + "generic replacement");
+
+            flow.reset();
+            fake.reset();
+            fake.home = "";
+            fake.identityProblem = "";
+            fake.pathsProblem = "socket path 131 bytes exceeds the 108 cap";
+            flow.runPreflight();
+            compare(flow.createBlockedReason,
+                    "socket path 131 bytes exceeds the 108 cap",
+                    "a different backend sentence must be what is shown");
+            verify(flow.createBlockedReason.indexOf("data directory") === -1,
+                   "and the first must be gone, got: "
+                   + flow.createBlockedReason);
         }
 
         /// **The preflight writes nothing.** Asserted on the call log, because
@@ -527,20 +539,39 @@ Item {
 
         // ---- blocking -------------------------------------------------------
 
-        /// **git blocks start and NOT identity.** The single most tempting
-        /// mistake is one `preflightPassed` boolean gating both.
-        function test_a_missing_git_blocks_start_but_not_identity() {
+        /// **A missing `git` blocks NO step**, and that is a change: it used to
+        /// block the start step, which no longer exists.
+        ///
+        /// Identity creation writes key material and spawns no `git`, and no
+        /// step here starts a node — so there is nothing in this flow a missing
+        /// `git` makes impossible. The finding is still REPORTED, because it
+        /// makes the *node* unable to fetch and the user is better told now
+        /// than at the first fetch; reporting a fact and blocking a step are
+        /// different acts, and a step blocked for work it does not do is a step
+        /// a user cannot get past for no reason.
+        ///
+        /// The single most tempting mistake remains one `preflightPassed`
+        /// boolean gating everything, which would block identity creation here.
+        function test_a_missing_git_blocks_no_step() {
             fake.gitFound = false;
-            fake.gitProblem = "no git found";
+            fake.gitProblem = "no git found, tried /usr/bin/git";
             flow.runPreflight();
 
+            compare(flow.gitFound, false,
+                    "the git finding must be reported as failed");
+            verify(flow.gitProblem.indexOf("git") !== -1,
+                   "carrying the backend's own sentence, got: "
+                   + flow.gitProblem);
+
+            verify(harness.advanceTo(flow, "embedded"));
+            compare(flow.canAdvance, true,
+                    "advancing from the embedded step must be permitted");
+
+            verify(harness.advanceTo(flow, "identity"));
             compare(flow.canCreateIdentity, true,
                     "identity creation writes key material and spawns no git");
-            compare(flow.canStartNode, false,
-                    "the node cannot start without git");
-            verify(flow.startBlockedReason.indexOf("git") !== -1,
-                   "the displayed reason must name the git finding, got: "
-                   + flow.startBlockedReason);
+            compare(flow.canAdvanceIdentity, true,
+                    "and advancing from the identity step must be permitted");
         }
 
         /// **An occupied home blocks the CALL and not the STEP.** The two used
@@ -750,33 +781,59 @@ Item {
                     "and the flow must not report the identity as created");
         }
 
-        function test_a_node_already_serving_blocks_start() {
+        /// **A node already serving blocks NO step either**, for the same
+        /// reason a missing `git` does not: this flow starts nothing, so a
+        /// socket in use stops none of its work.
+        ///
+        /// The finding is still reported, because it tells the user something
+        /// else is already using the socket this node would want.
+        function test_a_node_already_serving_blocks_no_step() {
             fake.serving = true;
             flow.runPreflight();
 
-            compare(flow.canStartNode, false);
-            verify(flow.startBlockedReason.indexOf("already answering") !== -1,
-                   "the reason must state a node is already answering on the "
-                   + "socket, got: " + flow.startBlockedReason);
+            compare(flow.alreadyServing, true,
+                    "the socket finding must be reported");
+
+            verify(harness.advanceTo(flow, "identity"));
+            compare(flow.canAdvanceIdentity, true,
+                    "advancing from the identity step must be permitted");
+
+            verify(harness.advanceTo(flow, "network"));
+            compare(flow.step, "network",
+                    "and the network step must be reachable");
+            verify(flow.onLastStep,
+                   "which is the last, so its forward control ends the setup "
+                   + "rather than being blocked by a socket this flow never "
+                   + "asked for");
         }
 
         /// **A block lifts when its finding passes**, with nothing else
         /// changed. This is what proves the block is keyed on the finding
         /// rather than on some remembered verdict.
+        ///
+        /// Re-pointed at the one block that survives — an unresolvable home,
+        /// which blocks the identity step itself. It used to assert this
+        /// through `canStartNode` and the git finding, and neither exists or
+        /// blocks anything now.
         function test_a_block_lifts_when_its_finding_passes() {
-            fake.gitFound = false;
-            fake.gitProblem = "no git found";
+            fake.home = "";
+            fake.pathsProblem = "socket path exceeds the 108-byte cap";
             flow.runPreflight();
-            compare(flow.canStartNode, false, "precondition: start is blocked");
+            compare(flow.canCreateIdentity, false,
+                    "precondition: there is nowhere to write");
+            compare(flow.canAdvanceIdentity, false,
+                    "precondition: so the step's forward control is withheld");
 
             flow.reset();
             fake.reset();
-            fake.gitFound = true;          // the ONLY change
-            fake.gitProblem = "";
+            fake.home = "/home/u/.local/share/basecamp/radicle";  // the ONLY
+            fake.pathsProblem = "";                               // change
             flow.runPreflight();
-            compare(flow.canStartNode, true,
+            compare(flow.canCreateIdentity, true,
                     "a backend reporting the finding as passing must remove "
                     + "the block with nothing else changed");
+            compare(flow.canAdvanceIdentity, true,
+                    "and the forward control must be offered again");
         }
 
         // ---- the embedded step ----------------------------------------------
@@ -1118,189 +1175,73 @@ Item {
                     "a subsequent successful call must clear the refusal");
         }
 
-        // ---- the start step -------------------------------------------------
+        // ---- the setup starts nothing ----------------------------------------
+        //
+        // **The start and confirm sections stood here, and both steps are
+        // gone.** What they tested went with them, and neither moved to a step
+        // of something else:
+        //
+        //  - START moved to the Embedded surface (`embedded-state`), because
+        //    starting is not a thing done once at setup time. It is what the
+        //    mode does every time it is opened, for the life of the mode, so a
+        //    flow a user walks once is the wrong shape for it. The screen it
+        //    left behind was also wrong in its own right: it rendered an amber
+        //    "a node is already answering on the resolved socket" above its own
+        //    green "Running as did:key:…", warning about the node it had just
+        //    started. Only a surface that knows whether IT started the node can
+        //    tell those apart, which the setup never could.
+        //  - CONFIRM was deleted. Its DID is in the header now, where it is
+        //    reachable at the arbitrary later moments a DID is wanted rather
+        //    than shown once and dismissed; its allow line went with it; and
+        //    what remained was a screen whose only act was to be dismissed.
+        //
+        // What replaces those tests is the one below: the absence of a start
+        // path, asserted structurally rather than by walking to a step.
 
-        function test_a_started_node_is_reported_only_on_a_success_reply() {
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-
-            verify(flow.submitStart("pw"));
-            compare(flow.nodeStarted, true);
-            compare(flow.nodeId, fake.startNodeId,
-                    "the reported node id must be the one in the reply");
-        }
-
-        /// A reply that merely ARRIVED is not a started node. `started:false`
-        /// with no error must not be reported as success.
-        function test_a_reply_without_started_true_is_not_a_started_node() {
-            fake.startStarted = false;
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-
-            flow.submitStart("pw");
-            compare(flow.nodeStarted, false,
-                    "success must follow `started:true`, never the call having "
-                    + "been issued");
-            verify(flow.lastError !== "",
-                   "and the flow must say something rather than look started");
-        }
-
-        function test_an_error_reply_is_displayed_and_does_not_advance() {
-            fake.startRefusal = "the node refused: a distinctive sentence";
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-
-            flow.submitStart("pw");
-            compare(flow.lastError, "the node refused: a distinctive sentence");
-            compare(flow.nodeStarted, false);
-            compare(flow.step, "start",
-                    "the step in force must still be the start step");
-        }
-
-        /// The start control is withheld while a start is outstanding, so a
-        /// second node is not started over the first.
-        function test_the_start_control_is_withheld_while_a_start_is_outstanding() {
-            heldFlow.runPreflight();
-            verify(harness.advanceTo(heldFlow, "start"));
-            compare(heldFlow.canStartNode, true, "precondition");
-
-            verify(heldFlow.submitStart("pw"));
-            compare(heldFlow.startPending, true,
-                    "the waiting state must be observable");
-            compare(heldFlow.canStartNode, false,
-                    "the start control must not be offered again");
-
-            verify(fake.deliverHeld());
-            compare(heldFlow.startPending, false,
-                    "and must be released when the reply lands");
-        }
-
-        /// **A successful start withdraws the start control.** The spec makes
-        /// start non-reversible through this flow ("a step that has performed
-        /// one MUST report what it did when it is returned to, rather than
-        /// offering to do it again"), and `startBlockedReason` already names
-        /// the contention for the case the PREFLIGHT detected. The same
-        /// contention is reachable through this flow's own start button after
-        /// its own successful start, which is what this pins.
+        /// **No step of this setup starts a node**, and the flow has no way to.
         ///
-        /// The second half is the one that makes the first mean something: a
-        /// flow that withdrew the control unconditionally would pass the
-        /// `canStartNode === false` assertion while being broken. So a start
-        /// that FAILED must leave the control offered, because retrying is the
-        /// correct response to a refusal.
-        function test_a_successful_start_withdraws_the_start_control() {
+        /// Walked from preflight to the last step, submitting every control
+        /// offered on the way, against a backend that accepts everything — and
+        /// no `startNode` entry may appear in the call log.
+        ///
+        /// The call-log half alone would be satisfied by a flow that simply had
+        /// no start wired in this harness, so `flow.startNode === undefined` is
+        /// asserted too: the property is gone from `SetupFlow`, so a step that
+        /// wanted to start a node would have to reintroduce it first, which is
+        /// a visible act rather than a silent one.
+        function test_no_step_of_the_setup_starts_a_node() {
+            compare(typeof flow.startNode, "undefined",
+                    "the flow must hold no startNode function at all — with "
+                    + "nothing to call, 'MUST NOT issue startNode in any step' "
+                    + "holds structurally rather than by inspection");
+
             flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-            compare(flow.canStartNode, true, "precondition: start is offered");
-
-            verify(flow.submitStart("pw"));
-            compare(flow.nodeStarted, true, "precondition: it started");
-            compare(flow.canStartNode, false,
-                    "a node this flow started is a node already answering on "
-                    + "the socket — starting a second would contend for it");
-            verify(flow.startBlockedReason !== "",
-                   "and the reason must be stated rather than left as a "
-                   + "disabled control with no explanation");
-
-            // The other direction, so the assertion above cannot pass against
-            // a flow that simply never offers start twice.
-            flow.reset();
             fake.reset();
-            fake.startRefusal = "the node refused to start";
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-            flow.submitStart("pw");
-            compare(flow.nodeStarted, false, "precondition: it did not start");
-            compare(flow.canStartNode, true,
-                    "a start that FAILED must leave the control offered — "
-                    + "retrying is the correct response to a refusal");
-        }
 
-        /// An EMPTY listening list is the expected value and must be rendered
-        /// as one, because it is what confirms the outbound-only default.
-        function test_an_empty_listening_list_is_carried_rather_than_dropped() {
-            fake.startListening = [];
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
+            // preflight -> embedded, whose control puts Embedded in force. The
+            // scenario already reports `embedded`, so the control is withheld;
+            // submitting it anyway is what a walk that pressed everything does.
+            verify(flow.advance());
+            compare(flow.step, "embedded");
+            flow.confirmEmbedded();
 
-            flow.submitStart("pw");
-            compare(flow.nodeStarted, true);
-            compare(flow.listening.length, 0,
-                    "an empty listening array is the state to display, not to "
-                    + "omit");
+            // embedded -> identity, whose one forward control creates and
+            // advances in the same act.
+            verify(flow.advance());
+            compare(flow.step, "identity");
+            verify(flow.submitIdentityStep("tester", "pw"));
+            compare(flow.step, "network",
+                    "creating advanced in the same act");
+            verify(flow.onLastStep,
+                   "precondition: the walk reached the last step");
 
-            // And a non-empty one is carried through, so the assertion above
-            // cannot pass against a flow that ignores the field entirely.
-            flow.reset();
-            fake.reset();
-            fake.startListening = ["0.0.0.0:8776"];
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-            flow.submitStart("pw");
-            compare(flow.listening.length, 1,
-                    "a reported address must be carried through");
-            compare(flow.listening[0], "0.0.0.0:8776");
-        }
-
-        /// **`serving`, not `running`.** A node whose threads have died leaves
-        /// `running` true while `serving` goes false.
-        function test_a_node_that_stops_serving_is_shown_as_not_serving() {
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-            flow.submitStart("pw");
-            compare(flow.nodeStarted, true, "precondition: it started");
-
-            fake.serving = false;
-            flow.refreshNodeStatus();
-            compare(flow.nodeServing, false,
-                    "a node reporting running:true with serving:false must not "
-                    + "be displayed as serving");
-
-            fake.serving = true;
-            flow.refreshNodeStatus();
-            compare(flow.nodeServing, true,
-                    "and must be shown as serving when it is");
-        }
-
-        // ---- the confirm step -----------------------------------------------
-
-        /// The allow line carries the DID that was reported, and the second
-        /// assertion checks the FIRST DID is gone — without which a flow that
-        /// concatenated both would pass.
-        function test_the_allow_line_carries_the_reported_did() {
-            fake.createdNodeId = "did:key:z6MkFIRSTDID";
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "identity"));
-            flow.submitIdentity("tester", "");
-            verify(harness.advanceTo(flow, "confirm"));
-
-            verify(flow.allowCommand.indexOf("rad id update --allow") === 0,
-                   "an allow line must be displayed, got: "
-                   + flow.allowCommand);
-            verify(flow.allowCommand.indexOf("did:key:z6MkFIRSTDID") !== -1,
-                   "carrying the reported DID, got: " + flow.allowCommand);
-
-            flow.reset();
-            fake.reset();
-            fake.createdNodeId = "did:key:z6MkSECONDDID";
-            flow.runPreflight();
-            verify(harness.advanceTo(flow, "identity"));
-            flow.submitIdentity("tester", "");
-            verify(harness.advanceTo(flow, "confirm"));
-
-            verify(flow.allowCommand.indexOf("did:key:z6MkSECONDDID") !== -1,
-                   "the line must carry the second DID");
-            verify(flow.allowCommand.indexOf("did:key:z6MkFIRSTDID") === -1,
-                   "and must NOT still carry the first");
-        }
-
-        /// No DID means no half-formed command on screen. `--allow ` with
-        /// nothing after it is a line a user could copy and run.
-        function test_no_did_means_no_allow_line() {
-            compare(flow.nodeId, "", "precondition: nothing reported yet");
-            compare(flow.allowCommand, "",
-                    "a placeholder allow line is a command a user can copy and "
-                    + "run against nothing");
+            for (var i = 0; i < fake.callLog.length; i++)
+                verify(String(fake.callLog[i]).indexOf("startNode") !== 0,
+                       "no step of the setup may issue a start, got: "
+                       + JSON.stringify(fake.callLog));
+            verify(fake.callLog.length > 0,
+                   "precondition: the walk really did call something: "
+                   + JSON.stringify(fake.callLog));
         }
 
         // ---- staleness ------------------------------------------------------
@@ -1308,36 +1249,53 @@ Item {
         /// **A late reply does not repopulate a step the user has left.**
         /// Only a fake that holds its reply can express this; a synchronous one
         /// settles before the step changes and the requirement cannot fail.
+        ///
+        /// The held reply is the PREFLIGHT's identity probe. It used to be a
+        /// held `startNode`, which no longer exists — and the identity probe is
+        /// the better subject anyway, because what it populates (`identityExists`
+        /// and the node id) is what a step the user has since left would display.
+        ///
+        /// The scenario reports an identity so the reply carries something
+        /// distinguishable: a flow that applied it would report `exists:true`
+        /// with a distinctive DID, and one that dropped it reports neither.
         function test_a_late_reply_does_not_repopulate_a_step_the_user_left() {
-            heldFlow.runPreflight();
-            verify(harness.advanceTo(heldFlow, "start"));
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkLATEREPLY";
+            fake.holdIdentity = true;
 
-            verify(heldFlow.submitStart("pw"));
-            verify(heldFlow.held !== null || fake.held !== null,
-                   "precondition: the reply is being held");
+            heldFlow.runPreflight();
+            verify(fake.held !== null,
+                   "precondition: the identity reply is being held");
 
             // The user moves on before the reply lands.
-            verify(heldFlow.back());
-            compare(heldFlow.step, "network");
+            verify(heldFlow.advance());
+            compare(heldFlow.step, "embedded");
 
             verify(fake.deliverHeld(), "the held reply now arrives");
-            compare(heldFlow.nodeStarted, false,
-                    "a reply issued from the start step must not repopulate "
-                    + "the step now in force");
+            compare(heldFlow.identityExists, false,
+                    "a reply issued under the previous step must not "
+                    + "repopulate the step now in force");
+            compare(heldFlow.identityNodeId, "",
+                    "carrying none of what it reported");
         }
 
         /// The other direction: without the step change, the SAME reply does
         /// land. Without this, a flow that dropped every reply would pass the
         /// test above.
         function test_a_reply_arriving_on_the_same_step_does_land() {
-            heldFlow.runPreflight();
-            verify(harness.advanceTo(heldFlow, "start"));
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkLATEREPLY";
+            fake.holdIdentity = true;
 
-            verify(heldFlow.submitStart("pw"));
+            heldFlow.runPreflight();
+            verify(fake.held !== null, "precondition: the reply is held");
+
             verify(fake.deliverHeld());
-            compare(heldFlow.nodeStarted, true,
+            compare(heldFlow.identityExists, true,
                     "a reply arriving with the user still on the step that "
                     + "issued it must be applied");
+            compare(heldFlow.identityNodeId, "did:key:z6MkLATEREPLY",
+                    "carrying what it reported");
         }
 
         // ---- re-entry -------------------------------------------------------
@@ -1352,33 +1310,69 @@ Item {
         ///
         /// The whole requirement in one test, and the input-dependence rule
         /// applied at the level that matters: a `restart()` that always returned
-        /// step 3 would satisfy any single-scenario assertion here. Four
-        /// scenarios, four different answers.
+        /// the last step would satisfy any single-scenario assertion here.
+        ///
+        /// Three scenarios now rather than four. The fourth distinguished a
+        /// serving node from a stopped one, and the node's state no longer
+        /// decides anything here — see
+        /// `test_the_node_state_does_not_change_where_a_reopened_flow_lands`,
+        /// which pins that as a requirement rather than leaving it as a gap.
         function test_different_backend_states_resume_to_different_steps() {
             var landed = [];
 
-            function raiseAgainst(mode, exists, serving) {
+            function raiseAgainst(mode, exists) {
                 fake.mode = mode;
                 fake.capabilitiesMode = "";
                 fake.identityExists = exists;
                 fake.identityNodeId = exists ? "did:key:z6MkEXISTING" : "";
-                fake.serving = serving;
                 flow.restart();
                 landed.push(flow.step);
             }
 
             // Mode not yet embedded: the mode write is the work left.
-            raiseAgainst("local", false, false);
+            raiseAgainst("local", false);
             // Embedded, no identity: creating it is.
-            raiseAgainst("embedded", false, false);
-            // An identity, node not serving: starting it is.
-            raiseAgainst("embedded", true, false);
-            // An identity and a serving node: nothing is, so confirm.
-            raiseAgainst("embedded", true, true);
+            raiseAgainst("embedded", false);
+            // An identity: nothing the backend can report as done is left, so
+            // the last step, which has no such work.
+            raiseAgainst("embedded", true);
 
-            compare(landed.join(" "), "embedded identity start confirm",
+            compare(landed.join(" "), "embedded identity network",
                     "the landing step must follow the replies, so a flow given "
                     + "different replies lands on different steps");
+        }
+
+        /// **The node's state does not change where a reopened flow lands.**
+        ///
+        /// This flow neither starts nor stops a node, so whether one is running
+        /// says nothing about which of its steps still has work — and a flow
+        /// that landed differently for a running node than for a stopped one
+        /// would be reporting the node's state through the step it chose, which
+        /// is `embedded-state`'s job and not a step's.
+        ///
+        /// `resumeIndex` used to read `alreadyServing` to choose between the
+        /// start and confirm steps. Both are gone; this is the test that fails
+        /// if it starts reading it again.
+        function test_the_node_state_does_not_change_where_a_reopened_flow_lands() {
+            fake.mode = "embedded";
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkEXISTING";
+
+            fake.serving = false;
+            flow.restart();
+            compare(flow.alreadyServing, false,
+                    "precondition: the finding reports a stopped node");
+            compare(flow.step, "network",
+                    "an existing identity lands at the last step");
+
+            // Identical but for the node, which is now running and serving.
+            fake.serving = true;
+            flow.restart();
+            compare(flow.alreadyServing, true,
+                    "precondition: the finding now reports a serving node");
+            compare(flow.step, "network",
+                    "and the landing must be unchanged — the node's state is "
+                    + "not a step's work");
         }
 
         /// **The step reached last time does not decide where it reopens.**
@@ -1406,13 +1400,20 @@ Item {
 
             // And with the backend now further along, it lands further along —
             // which is what a remembered index could never do.
+            //
+            // The user is walked BACK to the embedded step first, so the new
+            // landing is somewhere they were not: a leg whose landing happened
+            // to be where the previous showing was left cannot tell a
+            // re-derivation from a remembered index.
+            verify(flow.back());
+            compare(flow.step, "embedded", "precondition: left one step back");
+
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkEXISTING";
-            fake.serving = true;
             flow.restart();
-            compare(flow.step, "confirm",
-                    "an identity created and a node started elsewhere must move "
-                    + "the landing step, with nothing here remembering anything");
+            compare(flow.step, "network",
+                    "an identity created elsewhere must move the landing step, "
+                    + "with nothing here remembering anything");
         }
 
         /// **The flow waits at preflight rather than resuming from defaults.**
@@ -1424,7 +1425,6 @@ Item {
         /// next line of test code runs.
         function test_the_flow_waits_at_preflight_rather_than_resuming_from_defaults() {
             fake.mode = "embedded";
-            fake.serving = true;
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkEXISTING";
             fake.holdIdentity = true;
@@ -1437,7 +1437,7 @@ Item {
                     + "from replies that have not arrived");
 
             verify(fake.deliverHeld(), "the withheld reply now arrives");
-            compare(flow.step, "confirm",
+            compare(flow.step, "network",
                     "and only then does it land, on the step the replies chose");
         }
 
@@ -1461,11 +1461,10 @@ Item {
             fake.mode = "embedded";
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkDISTINCTIVE";
-            fake.serving = false;
 
             flow.restart();
 
-            compare(flow.step, "start", "precondition: it landed at start");
+            compare(flow.step, "network", "precondition: it landed at network");
             compare(flow.identityExists, true,
                     "the identity finding must survive the landing");
             compare(flow.identityNodeId, "did:key:z6MkDISTINCTIVE",
@@ -1500,7 +1499,6 @@ Item {
             fake.mode = "embedded";
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkEXISTING";
-            fake.serving = false;
             fake.seedItems = [
                 { url: "https://seed.one.example", alias: "one" },
                 { url: "https://seed.two.example", alias: "two" }
@@ -1509,7 +1507,7 @@ Item {
 
             flow.restart();
 
-            compare(flow.step, "start",
+            compare(flow.step, "network",
                     "precondition: it landed, while the seed reply was held");
             verify(fake.heldSeeds !== null,
                    "precondition: the seed reply is still in flight");
@@ -1527,48 +1525,67 @@ Item {
         /// A resumed step behaves exactly as one reached by advancing. Walked to
         /// the same step by hand, the flow answers the same questions the same
         /// way — so "resumed" is not a second kind of state.
+        ///
+        /// The questions asked are the identity step's gates rather than the
+        /// start step's, which no longer exist. They are the right ones anyway:
+        /// an identity that already exists is the state a resume lands PAST,
+        /// and a resumed flow that had lost the finding would offer creation
+        /// for an identity that is already there.
         function test_a_resumed_step_behaves_as_one_reached_by_advancing() {
             fake.mode = "embedded";
             fake.identityExists = true;
             fake.identityNodeId = "did:key:z6MkEXISTING";
-            fake.serving = false;
 
             flow.restart();
-            compare(flow.step, "start", "precondition: resumed to start");
-            var resumedCanStart = flow.canStartNode;
+            compare(flow.step, "network", "precondition: resumed to network");
             var resumedCanCreate = flow.canCreateIdentity;
+            var resumedCanAdvanceIdentity = flow.canAdvanceIdentity;
+            var resumedLabel = flow.identityActionLabel;
 
             // The same backend, reached by walking instead.
             flow.reset();
             flow.runPreflight();
-            verify(harness.advanceTo(flow, "start"));
-            compare(flow.canStartNode, resumedCanStart,
-                    "a resumed start step must gate a start exactly as a walked "
-                    + "one does");
+            verify(harness.advanceTo(flow, "network"));
             compare(flow.canCreateIdentity, resumedCanCreate,
-                    "and must refuse creation for the same reason");
+                    "a resumed flow must refuse creation for the same reason a "
+                    + "walked one does");
+            compare(flow.canAdvanceIdentity, resumedCanAdvanceIdentity,
+                    "and offer the identity step's forward control the same way");
+            compare(flow.identityActionLabel, resumedLabel,
+                    "and name the same act on it");
         }
 
         /// The resume happens ONCE per showing, not on every later reply.
         ///
         /// `preflightDone` goes true once, but a flow that re-derived its step
         /// whenever the findings moved would yank a user off a step they walked
-        /// to — a node that stops serving while the user is reading the confirm
-        /// step must not throw them back to start.
+        /// to.
+        ///
+        /// The later reply is a capabilities re-read, which is what
+        /// `confirmEmbedded()` issues and therefore the one a user genuinely
+        /// provokes after the landing. It used to be `refreshNodeStatus()`,
+        /// which went with the start step.
+        ///
+        /// The user is walked BACKWARDS to a step the resume would not have
+        /// chosen, so "the step did not move" is distinguishable from "the step
+        /// was re-derived to the same place".
         function test_a_later_reply_does_not_move_a_step_the_user_walked_to() {
             fake.mode = "embedded";
-            fake.identityExists = false;
+            fake.identityExists = true;
+            fake.identityNodeId = "did:key:z6MkEXISTING";
 
             flow.restart();
-            compare(flow.step, "identity", "precondition");
+            compare(flow.step, "network", "precondition: it landed at network");
 
-            verify(harness.advanceTo(flow, "network"));
-            compare(flow.step, "network");
+            verify(flow.back());
+            compare(flow.step, "identity",
+                    "precondition: the user walked to a step the resume would "
+                    + "not have chosen");
 
-            // A later reading of the node's state lands, as `refreshNodeStatus`
-            // does after a start. The step in force must not move.
-            flow.refreshNodeStatus();
-            compare(flow.step, "network",
+            // A later reply lands, as it does after `confirmEmbedded()`. The
+            // step in force must not move.
+            flow.refreshCapabilities();
+            compare(flow.step, "identity",
                     "a reply arriving after the landing must not re-derive the "
                     + "step the user has since walked to");
         }

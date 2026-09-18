@@ -2,13 +2,22 @@
 
 ## Context
 
-The spec (`specs/embedded-setup/spec.md`) defines a six-step flow — preflight,
-embedded, identity, network, start, confirm — over module methods that all already
-exist in `radicle_ui.rep`. No transport change, no core-module change, no new
-slot. What is being decided here is therefore entirely about **shape in QML**:
-where the flow's state lives, how "which step is in force" and "what blocks
-what" are represented, and how a step's call is kept from repopulating a step
-the user has left.
+The spec (`specs/embedded-setup/spec.md`) defines a **four**-step flow —
+preflight, embedded, identity, network — over module methods that already exist
+in `radicle_ui.rep`. It was six; start and confirm are gone, and where each went
+is in the Decisions below rather than here.
+
+**This is no longer a QML-only change, and exactly one thing made it not one.**
+The autostart rule needs to know whether an existing identity's key is sealed,
+and no reply carried that. `getEmbeddedIdentity()` now reports `encrypted`,
+observed from the key on disk — one Rust function, one FFI entry point, two JSON
+keys. `radicle_ui.rep` is still unchanged: every slot on it returns an opaque
+JSON string, so a new key needs no transport change.
+
+Everything else is still about **shape in QML**: where the flow's state lives,
+how "which step is in force" and "what blocks what" are represented, how a step's
+call is kept from repopulating a step the user has left, and — new here — where
+the decision to start a node lives versus where the call is issued.
 
 ## Decisions
 
@@ -642,44 +651,65 @@ surface* later — and that surface is getting one (`embedded-node-config`'s
 `node-config`). So the boundary that matters is setup-versus-durable-panel, which
 this change respects, not host-versus-flow.
 
-### Start and restart route nowhere, rather than into the wizard's start step
+### Restart routes nowhere; start did, and the decisive reason fell
 
 The state panel names a start for **stopped** and **start failed**, and a restart
-for **not serving**. Routing those into this setup was considered and is wrong on
-four counts, three structural and one decisive:
+for **not serving**. Routing either into this setup was considered and rejected
+on four counts. **Three were about the start step, which no longer exists, and
+the fourth — the decisive one — was a gap in the backend that this change
+closed.** So the conclusion split: start is hosted, restart is not.
 
-- **The start step is gated on no node answering the socket.** `canStartNode` is
-  `gitFound && !alreadyServing && !startPending`, and a restart's node is
-  answering it — that is what makes it a restart. So the flow would raise, run
-  its preflight, and land on a start step with its control disabled and
-  `startBlockedReason` explaining that a node is already there. The user asked to
-  restart and was shown a refusal to start.
-- **It offers no stop**, so a restart's two calls cannot be sequenced from it.
-  `stopNode` and `startNode` compose, but nothing in this flow reports the pair,
-  and the two refusals are different sentences a user should see separately.
-- **It starts the node with the passphrase its own identity step took, in the
-  same showing.** A later showing does not have it, and the field is deliberately
-  cleared once `nodeStarted` goes true.
-- **Decisively: nothing can tell whether a passphrase is needed at all.**
-  `getEmbeddedIdentity()` reports `home`, `exists`, `nodeId` and `problem` — and
-  no `encrypted` field. Only `createEmbeddedIdentity`'s reply carries one
-  (`radicle/src/radicle_impl.h:275`), which is the reply a later session by
-  definition does not have. So a host that wanted to prompt for a passphrase
-  cannot know whether to, and one that wanted to skip the prompt cannot know
-  whether it may.
+The original four, kept because three of them still explain why starting did not
+simply move into the flow:
 
-This last point is the one worth writing down, because a future reader will
-otherwise re-derive it from the header — and the natural conclusion from reading
-`createEmbeddedIdentity` alone is that the field exists. It does, on the wrong
-reply.
+- **The start step was gated on no node answering the socket.** `canStartNode`
+  was `gitFound && !alreadyServing && !startPending`, and a restart's node is
+  answering it — that is what makes it a restart. The flow would have raised, run
+  its preflight, and landed on a start step with its control disabled and
+  `startBlockedReason` explaining that a node was already there. The user asked
+  to restart and was shown a refusal to start.
+- **It offered no stop**, so a restart's two calls could not be sequenced from
+  it. `stopNode` and `startNode` compose, but nothing in the flow reported the
+  pair, and the two refusals are different sentences a user should see
+  separately.
+- **It started the node with the passphrase its own identity step took, in the
+  same showing.** A later showing does not have it.
+- **Decisively: nothing could tell whether a passphrase was needed at all.**
+  `getEmbeddedIdentity()` reported `home`, `exists`, `nodeId` and `problem` — and
+  no `encrypted` field. Only `createEmbeddedIdentity`'s reply carried one, which
+  is the reply a later session by definition does not have. So a host that wanted
+  to prompt could not know whether to, and one that wanted to skip the prompt
+  could not know whether it may.
 
-So both acts belong to the durable settings surface, which is where a passphrase
-can be asked for, and until it exists the panel **names them without enabling
-them** and says starting is not yet available from here. The wording is careful
-about three claims it could have made and does not: not that a start *failed*
-(none was attempted), not that the node *cannot be started* (it can, from a
-command line), but that it is not yet available *from here*. That turns a dead
-end into a wait, and names the surface it is waiting on.
+**That fourth point is now false, and making it false is most of this change.**
+`getEmbeddedIdentity()` reports `encrypted`, observed from the key on disk. See
+*`encrypted` is a probed field on the identity reply* below for why that reply
+and not another, and why the answer travels with a `problem`.
+
+With it, the first three stop being reasons to route a start into the flow and
+become reasons to put starting somewhere else entirely — which is where it went:
+the Embedded surface, every time the mode is opened. A surface that knows whether
+a passphrase is needed can ask for one where it must and start without asking
+where it need not, and it needs no step of a flow to do either.
+
+**Restart still routes nowhere**, and the second point above is why: it is a stop
+followed by a start whose two refusals are different sentences, and nothing
+sequences the pair. It belongs to the configuration panel. The panel **names it
+without enabling it** and says restarting is not yet available from here. The
+wording is careful about three claims it could have made and does not: not that a
+restart *failed* (none was attempted), not that the node *cannot be restarted*
+(it can, from a command line), but that it is not yet available *from here*. That
+turns a dead end into a wait, and names the surface it is waiting on.
+
+**The two hosting flags split, and that split is load-bearing.** `startHosted`
+and `restartHosted` were one flag, on the stated grounds that "a host able to
+carry out one is able to carry out the other" — true while both were blocked by
+the same missing field, false the moment one was unblocked. Left as one flag,
+hosting a start would silently have enabled a restart reaching nobody, which is
+the dead end `embedded-state` exists to remove, re-created one state along.
+`test_start_and_restart_are_hosted_independently` holds `startHosted` true in
+both legs and moves only the restart flag, so a component reading one flag for
+both answers the same in each and fails.
 
 **Keyed on hosted-ness, not on the state.** `EmbeddedState` takes `setupHosted`
 and `startHosted` as inputs and derives `actionHosted` from `actionKind`;
@@ -1020,15 +1050,305 @@ So the alias goes to the backend as typed, and the refusal is displayed
 verbatim. Same reasoning as `SettingsPanel`'s git path, which is validated on
 write for the same reason.
 
+### `encrypted` is a probed field on the identity reply, not a bare boolean
+
+The autostart rule needs one fact no reply carried: whether an existing
+identity's signing key is sealed. Three candidates were weighed.
+
+**`createEmbeddedIdentity`'s `encrypted`** — rejected twice over. It is computed
+from the passphrase argument rather than observed from the key that landed, so it
+says what was asked for; and it rides a reply that, by definition, no later
+session holds. It is the field a reader naturally finds first, which is why
+`radicle_impl.h` now carries a cross-reference rather than leaving the next
+person to re-derive that it exists on the wrong reply.
+
+**`getCapabilities().canWriteLocal`** — rejected, and the header used to
+recommend it for exactly this question. It probes the home of the **mode in
+force**, so it says nothing about the embedded home from any other mode; and it
+conflates an encrypted key with a missing one, an unreadable one and an
+ssh-agent that is simply not running. A caller cannot recover "encrypted" from it
+without matching on prose. `getEmbeddedIdentity()` always reads the embedded home
+whatever mode is in force and answers this one question, which is what makes it
+the right reply to carry the field.
+
+**A fourth option that was never real: attempt a start and read the failure.**
+That is a destructive probe rather than a question — it leaves a node running, or
+a refusal in the log, to learn something the key already states.
+
+**The probe itself already existed.** `Keystore::is_encrypted()` is what
+`cobwrite::signer` has always used to choose between loading a key and reaching
+for an agent. So what is new is exposing it, not obtaining it — which is why a
+change described as "a core change" is one function and two JSON keys.
+
+**It returns `{"encrypted":bool,"problem":""}`, not a `bool`**, because there are
+three answers and not two: sealed, not sealed, and *could not tell*. Collapsing
+the third is the dangerous direction — `false` is indistinguishable from a
+plaintext key, and a caller reading it starts the node with an empty passphrase
+against a key it cannot read. **Flattening the `Err` to `false` reddens
+`an_unreadable_key_reports_a_problem_rather_than_unencrypted` and
+`a_home_with_no_key_reports_a_problem_rather_than_unencrypted`**; verified by
+mutation.
+
+One consequence worth recording because it breaks a stated invariant:
+`is_encrypted()` opens the **secret** key file, where every other read on this
+path touches only `keys/radicle.pub`. It parses the envelope rather than
+unlocking it — no passphrase, no agent, nothing written back, and
+`reporting_encryption_leaves_the_key_untouched` compares the file's bytes before
+and after. But a home holding `radicle.pub` without its secret half reaches an
+`Err` here rather than a `false`, which is the `problem` case above and the
+second reason the error is not flattened.
+
+### The node starts itself, overturning a decision made before it was dogfooded
+
+`user-flow.md` §6 recorded the opposite rule — **the node does not start
+automatically, in any configuration** — and the reasoning is migrated here
+because it is what this decision overturned.
+
+The original argument was that `Runtime::init` takes an already-decrypted key, so
+an encrypted profile *cannot* start unattended — still true — and that an
+**unencrypted** one should not either, on three grounds:
+
+1. it makes the passphrase choice silently change startup behaviour along an axis
+   never stated at the control;
+2. an autostart failing at module init has nowhere to report — the view is not
+   up, and Basecamp swallows QML errors;
+3. it splits the stopped state into two indistinguishable states.
+
+**Each fell, and for a different reason.** (1) is answered by *stating* it: the
+identity step now says an unencrypted key lets the node start without a prompt
+and an encrypted one is asked for each time. That is the axis, named at the
+control where the choice is made, which is what the objection asked for. (2)
+describes an autostart at *module init*, and this is not one — the start is
+issued from the Embedded surface once it is rendering, so it has exactly the
+place to report that the starting and start-failed states already are. (3) is
+answered by the new field: `encrypted` is what distinguishes the two stopped
+states, and its absence was what made them indistinguishable in the first place.
+
+**What the argument never weighed is the cost of the rule**, which dogfooding
+made plain: a user who has set a node up is told, every time they open the mode,
+to press a button the module could have pressed itself, with one possible answer.
+
+Two things the overturn does **not** license, both still rejected:
+
+- **A "start automatically" setting** — a module setting whose only legal value
+  for the secure default is off, and whose question is now answered by whether
+  the key is encrypted.
+- **Prompting at Basecamp startup** — an unasked-for modal on launch, in a module
+  the user may not be looking at. The passphrase prompt is a field on the
+  Embedded surface, shown when the user is looking at Embedded.
+
+### The decision to start is a derived property; the issuing is the view's
+
+`EmbeddedState.wantsAutoStart` is a pure function of the state and the key;
+`RepoList` watches it and issues the call. The split buys two things a single
+imperative would not.
+
+**"Started by itself" becomes a question about values**, answerable with no
+backend anywhere — which is what `tst_embedded_state.qml` asks, walking all seven
+states with `encrypted:false` held so that an over-eager derivation says yes
+everywhere and fails.
+
+**"Issued once per arrival" becomes an edge rather than a counter.** Issuing the
+start makes `wantsAutoStart` false immediately — `startPending` moves the state
+to `starting` — so the handler cannot fire twice for one arrival however many
+times the backend reports the same status, and fires again only after the state
+has genuinely left `stopped` and returned. Nothing maintains a "have I started
+yet" flag, so nothing can get it wrong.
+
+**The `Component.onCompleted` beside the `Connections` is not belt and braces,
+and this is the entry worth reading before deleting it.** A change signal fires
+on a *change*; a `RepoList` built against a backend already reporting a stopped
+unencrypted node never sees one, because `wantsAutoStart` is true from its first
+evaluation. That is the module starting up with Embedded already in force — the
+ordinary case for anyone who has used the mode before.
+
+**Deleting it reddened nothing**, and that is measured rather than feared. Every
+test in `tst_embedded_panel.qml` built its `RepoList` once and reached each state
+by mutating the harness, which is a live change by construction. The fix is the
+same one `design.md` already records for the setup host: a `Component` that
+builds a *second* list against a harness already in the state.
+`test_a_list_built_already_stopped_starts_its_node` is that test, and it is the
+only thing in any layer that can see this path.
+
+One trap it cost, worth not re-learning: `destroy()` is deferred to the next
+event-loop turn, so a fresh list left merely scheduled goes on watching the
+harness and the *next* test's single expected start arrives twice. Three
+unrelated tests reported two calls before `wait(0)` was added. A second one:
+`app: app` inside the `Component` resolves to the `RepoList`'s own `app`
+property rather than the outer id — QML puts the item's properties in front of
+the file's ids — so the fresh list came up with a null host and derived
+`blocked`. Both were caught by preconditions rather than by reading.
+
+### The passphrase is a field on the surface, and it is cleared by the call
+
+An encrypted key gets one field and one control on the Embedded surface, not a
+step of the guided setup. A passphrase is one answer to one question asked at one
+moment; routing it through a multi-step flow would make the user walk steps whose
+work is already done to reach the only one that is not.
+
+**The prompt is derived from `encrypted`, never from a start having failed.** A
+prompt keyed on an error would be a consequence of something going wrong rather
+than of the identity being what it is — so it would not appear on the first
+opening, where it is needed, and would appear after an unrelated refusal on an
+unencrypted key, where there is nothing to ask for.
+`test_the_passphrase_prompt_does_not_follow_a_failed_start` holds `encrypted`
+fixed in each leg and moves the refusal.
+
+**It is cleared as the call is issued, not when the call is answered.** The call
+already holds the value it needs, so clearing at issue makes the secret's
+lifetime exactly the call rather than the call plus however long the backend
+takes. A refusal therefore empties the field, which is correct: the passphrase
+that was refused is not the one to retry with, and the field stays on screen
+through `startFailed` so a corrected one can be typed. Keeping the refused value
+would offer a user a filled field whose contents are known wrong.
+
+**This is the opposite of the wizard's rule, deliberately.** There the clearing
+is keyed on the *reply*, because a refused creation must leave the passphrase in
+place — the alias was wrong, not the secret, and the retry is the same secret.
+Here a refused start means the secret itself was wrong. Two surfaces, two
+lifetimes, and the tests are the pair that pins each:
+`test_a_refused_creation_keeps_the_passphrase_for_the_retry` and
+`test_a_refused_passphrase_can_be_corrected`.
+
+**The start does not travel through `embeddedActionTaken(kind)`.** That signal
+carries a kind and nothing else; widening it to carry a plaintext secret, or
+making the host hold one it has no other use for, are both worse than
+`RepoList` calling `app.startEmbeddedNode(passphrase)` directly. The hosting flag
+still governs the panel's enablement, and `routesEmbeddedAction` still answers
+for any caller that does route a kind — so the table stays honest without the
+secret crossing it.
+
+### A node this module started is not a node in the way
+
+`getNodeStatus()` reports the same two fields for a node this module started and
+one it found, so the surface holds the one fact the reply cannot carry: whether a
+`startNode` it issued was answered with a success.
+
+This is the defect the user photographed. Step 5 rendered an amber "a node is
+already answering on the resolved socket. Starting a second one would contend for
+it" directly above its own green "Running as did:key:…" and "The control socket
+is answering." Both sentences were derived from true readings, and together they
+described a conflict that did not exist, because the node warned about was the
+one the wizard had just started.
+
+**A correct fact rendered as a hazard when it describes the user's own success is
+worse than no fact**, because it sends them looking for a second node that is not
+there. So `foundForeignNode` is `serving && !startSucceeded`, and **dropping the
+second term reddens three named tests across two layers**, the third reporting
+the contention sentence rendered over the surface's own success — which is the
+screenshot, reproduced by a test. Verified by mutation.
+
+`startSucceeded` latches and is never cleared. It answers "did this module put a
+node on that socket", and the node stopping afterwards does not make the answer
+no — while clearing it would make the surface warn about contention with a node
+it started itself, which is the whole defect.
+
+**The two requirements it sits between are both live, and collapsing them was the
+first thing tried.** The running-and-empty state must say this node lists what it
+is seeding — so an empty list reads as a node with nothing seeded rather than one
+that has lost something — *and* a foreign node must be reported. Written as
+alternatives, the seeding sentence vanished for a foreign node, which is the
+state where "what is listed is not this module's storage" matters most. The
+existing `test_a_serving_node_that_holds_nothing_may_say_so` caught it; the
+sentences are appended rather than chosen.
+
+### The header's identity is one rule, and the list version is what shipped
+
+`SourceState.modeHasIdentity` is `current === "local"` — a mode has an identity
+exactly when it reads a Radicle home of its own, which is what routing to the
+`local*` methods means. Explore is the fall-through rather than a named
+exception: it resolves no home and proxies to a seed, so there is nobody to be.
+
+**It was `mode === "local"`, and that list is what cost Embedded its DID.** The
+slot showed nothing in the mode where a user is *most* likely to believe they are
+operating as their existing DID — its identity is one the module created rather
+than one they made — while `radicle_impl.h` required a view to always show `mode`
+and `nodeId`. A list has to be noticed and extended by somebody; the rule is
+right for a fourth mode before anyone writes one.
+
+**Rewriting it back to `mode === "local"` reddens three named tests**, one
+reporting `embedded:no` where it must report `embedded:yes`. Verified by
+mutation.
+
+**`NodeIdentity.qml` is untouched, and that is the point.** It already renders a
+full, copyable, clipboard-verified DID and already sits in the header's
+mode-detail slot. This is one condition, not a component — which is why the
+`embedded-header` capability's requirements are met by a change of a single
+binding plus the derivation it reads.
+
+The test fixture changed with it: `tst_source.qml`'s slot now instantiates the
+real `SourceState` and reads `modeHasIdentity`, where it previously reproduced
+`slotMode === "local"` inline. A reproduced comparison would have let the same
+list-shaped rule come back with that file still green.
+
+### The last step finishes, and there is no terminal screen
+
+The network step's forward control ends the setup, and it is the *same* control
+rather than a second one beside it: the forward control is where a user's hand
+already is, and a separate Finish would be two ways out of one step. It issues no
+call — the steps made every write this flow makes.
+
+`onLastStep` is derived from the index rather than from naming `network`, so the
+last step is whatever `steps` ends with. That is not fussiness: this list has just
+lost two entries, and a rule naming the step would have gone on naming `confirm`,
+leaving the flow with no way out at all.
+
+The deleted confirm step is worth one line of epitaph, because "delete a screen"
+reads as a simplification and this was a correction: **its only act was to be
+dismissed.** A step that states what already happened and offers one control that
+closes it asks the user for an act that changes nothing — and each fact it
+carried is better placed where it is wanted. The DID is in the header, reachable
+at any later moment. Its allow-is-not-enough sentence went *up* to the embedded
+step, where it is now the only place the flow states the separateness, and where
+it is made before the decision it informs rather than after it.
+
+### What the wizard stopped holding, and why absence is the requirement
+
+`SetupFlow` no longer has a `startNode` property, a `canStartNode`, a
+`startBlockedReason`, a `nodeStarted`, a `listening`, a `nodeServing`, a
+`startPending`, a `nodeId` or an `allowCommand`. Each could have been left in
+place and simply unread.
+
+They were removed because **"this setup MUST NOT issue `startNode`, in any step,
+for any reason" is then a property of the object rather than of what the screen
+happens to draw.** There is nothing to call. A future edit that wanted to start a
+node from a step would have to reintroduce the property first, which is a visible
+act in a diff; an unread property left lying there is an invitation nobody
+reviews. The fakes in both test files dropped their `start` functions for the
+same reason — a fake offering one would let that edit land and stay green.
+
+`alreadyServing` survives and is still populated, because it is still a *finding*:
+the preflight reports that something else is using the socket this node would
+want. It now blocks nothing, which is a consequence of the flow starting nothing,
+and `test_a_node_already_serving_blocks_no_step` is what says so.
+
+`resumeIndex` stopped reading it for the same reason. A resume that landed
+differently for a running node than for a stopped one would be reporting the
+node's state through the step it chose, which is `embedded-state`'s job and not a
+step's. `test_the_node_state_does_not_change_where_a_reopened_flow_lands` moves
+only the node status between its two legs.
+
 ## Risks / Trade-offs
 
-- **The flow reads capabilities but does not poll them.** `getNodeStatus` is
-  re-read on demand at the start step rather than on a timer. A node that dies
-  between the reply and the user reading the screen shows as serving until
-  something asks again. Polling is the panel's job, where node control lives.
-- **Six steps is a lot of screen for a one-time task.** Accepted because each
-  step exists to state a consequence at the moment a decision is made, which is
-  the whole reason the wizard is preferred to a single form.
+- **Four steps is still a lot of screen for a one-time task.** Accepted because
+  each step exists to state a consequence at the moment a decision is made, which
+  is the whole reason the wizard is preferred to a single form. It was six, and
+  the two that went were the two that stated nothing a user had to decide.
+- **The node starts without being asked, which is a behaviour change a user
+  cannot decline in the moment.** They decline it at the identity step by setting
+  a passphrase, which is the only place the choice exists and is now stated as
+  such — but a user who chose an unencrypted key months ago and has forgotten
+  will see a node start when they open the mode. Accepted: the alternative is a
+  control with one possible answer, pressed every time, for the life of the mode.
+  The start is reported through the same states as one they asked for, so it is
+  visible rather than silent.
+- **`embeddedStartSucceeded` latches for the life of the module.** A node this
+  surface started, which then stopped and was replaced by somebody else's, reads
+  as "ours" until the module restarts. The alternative — clearing it on a stop —
+  makes the surface warn about contention with a node it started itself the
+  moment a poll lands between a start and its status refresh, which is the defect
+  this field exists to prevent. The failure this accepts is a missing warning in
+  a case that needs two node lifetimes to reach; the one it avoids shipped.
 - **The Embedded state is read on mode-settle and on backend-ready, not
   polled.** `getNodeStatus` probes a control socket, and the panel is a state a
   user acts on rather than a live monitor — so a node that dies while the panel

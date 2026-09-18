@@ -72,15 +72,35 @@ QtObject {
     property var fetchSeeds: null
     /// createEmbeddedIdentity(alias, passphrase, cb) -> cb(replyObject)
     property var createIdentity: null
-    /// startNode(passphrase, cb) -> cb(replyObject)
-    property var startNode: null
     /// setSetting(key, value, cb) -> cb(settingsObject|{error})
     property var saveSetting: null
 
+    // **No `startNode` here, and its absence is the requirement.** This flow
+    // sets a node up and then ends; starting is the Embedded surface's, every
+    // time the mode is opened. Not holding the function is what makes "the
+    // setup MUST NOT issue startNode, in any step, for any reason" a property
+    // of this object rather than of what the screen happens to draw — there is
+    // nothing here to call.
+
     // ---- the step in force -----------------------------------------------
 
+    /// **Four steps, and it was six.** Start and confirm are gone, and neither
+    /// became a step of anything else:
+    ///
+    ///  - **Start** moved to the Embedded surface (`embedded-state`), because
+    ///    starting is not something done once at setup time. It is what the mode
+    ///    does whenever it is opened, for the life of the mode, so a flow a user
+    ///    walks once is the wrong shape for it. The screen it left behind was
+    ///    also wrong in its own right: it rendered an amber "a node is already
+    ///    answering on the resolved socket" above its own green "Running as
+    ///    did:key:…", warning about the node it had just started.
+    ///  - **Confirm** was deleted. Its DID is in the header, where it is wanted
+    ///    at arbitrary later moments and mostly when this flow is long closed;
+    ///    its allow-is-not-enough sentence went to the embedded step, which is
+    ///    now the only place the flow states the separateness; and what remained
+    ///    was a screen whose only act was to be dismissed.
     readonly property var steps: ["preflight", "embedded", "identity",
-                                  "network", "start", "confirm"]
+                                  "network"]
 
     /// Which step is in force, as an index. See the header for why an index.
     property int stepIndex: 0
@@ -148,13 +168,19 @@ QtObject {
     /// Whether a node is answering on the resolved socket, from
     /// getNodeStatus().serving.
     ///
-    /// **Updated by every reading of the node's state, not only by the
-    /// preflight's** — including the one that follows this flow's own
-    /// successful start. A node this flow started is just as much a node
-    /// answering on the socket as one it found there, and the contention from
-    /// starting a second is identical. Holding this as a preflight-only memory
-    /// left `canStartNode` true after a success, so the start button stayed
-    /// enabled and a second node could be started over the first.
+    /// **A finding now, and nothing more.** It used to gate the start step, and
+    /// was written by every reading of the node's state so a node this flow
+    /// started would withdraw its own start control. With no start step there is
+    /// nothing for it to gate: this flow starts nothing, so a socket in use
+    /// stops none of its work. It is still REPORTED, because it tells the user
+    /// something else is using the socket this node would want.
+    ///
+    /// That is also why the contention sentence went with the step. Rendered
+    /// here it could only ever describe a node somebody else started — this flow
+    /// cannot start one — but it was the wording that, on the start step,
+    /// warned about the node the wizard had just started. The surface that can
+    /// tell those apart is the one that does the starting; see
+    /// `EmbeddedState.foundForeignNode`.
     property bool alreadyServing: false
 
     /// Whether a home could be resolved to write into at all: a non-empty
@@ -183,23 +209,6 @@ QtObject {
 
     /// The seeds listKnownSeeds() reported.
     property var seeds: []
-
-    /// Whether the node has been reported started, from a `started:true` reply
-    /// — never from the start call having been made.
-    property bool nodeStarted: false
-    /// The addresses the node reports binding. EMPTY IS THE EXPECTED VALUE and
-    /// is displayed as such: it is what confirms the outbound-only default.
-    property var listening: []
-    /// getNodeStatus().serving after a start, which is the field that notices a
-    /// node whose threads have died while `running` stays true.
-    property bool nodeServing: false
-    /// The DID to show at confirm: whatever createEmbeddedIdentity reported,
-    /// falling back to what the node reported and then to capabilities.
-    property string nodeId: ""
-
-    /// True between issuing a start and its reply. Withholds the control so a
-    /// second node cannot be started over the first.
-    property bool startPending: false
 
     /// The most recent backend refusal, verbatim. One string rather than one
     /// per step: only the step in force can have issued the call that produced
@@ -261,24 +270,16 @@ QtObject {
         return "";
     }
 
-    /// `git` is needed to start a node and NOT to create an identity, which is
-    /// why this is a separate rule rather than a shared preflight verdict.
-    readonly property bool canStartNode:
-        gitFound && !alreadyServing && !startPending
+    // **No `canStartNode` and no `startBlockedReason`.** Both were the start
+    // step's, and neither has anything left to gate: a missing `git` makes the
+    // NODE unable to fetch, which is reported as a finding and blocks nothing
+    // here, and a node already on the socket stops none of this flow's work.
+    //
+    // Removing them rather than leaving them unread is what stops the start
+    // step growing back: a step that wanted to gate on either would have to
+    // reintroduce the property first, which is a visible act.
 
-    readonly property string startBlockedReason: {
-        if (!gitFound)
-            return problemFor(gitProblem,
-                              "No git executable could be resolved. Radicle "
-                            + "spawns git to read and write storage, so the "
-                            + "node cannot start without it.");
-        if (alreadyServing)
-            return "A node is already answering on the resolved socket. "
-                 + "Starting a second one would contend for it.";
-        return "";
-    }
-
-    /// Only Embedded continues past the embedded step: the four steps after it
+    /// Only Embedded continues past the embedded step: the two steps after it
     /// are about a node no other mode runs. Read from capabilities rather than
     /// from what the flow asked for.
     readonly property bool modeIsEmbedded: modeInForce === "embedded"
@@ -302,6 +303,22 @@ QtObject {
         if (step === "embedded") return modeIsEmbedded;
         return true;
     }
+
+    /// Whether the step in force is the last one, whose forward control ENDS
+    /// the setup rather than moving to a further step.
+    ///
+    /// Derived from the index rather than from naming `network`, so the last
+    /// step is whatever `steps` ends with. That matters because this list has
+    /// just lost two entries: a rule naming the step would have gone on naming
+    /// `confirm` and the flow would have had no way out at all.
+    ///
+    /// The setup deliberately has no terminal screen whose only act is to be
+    /// dismissed. A step that states what already happened and offers one
+    /// control that closes it asks the user for an act that changes nothing —
+    /// and the facts such a screen would carry are each better placed where they
+    /// are wanted: the DID in the header, the node's state on the surface the
+    /// user returns to.
+    readonly property bool onLastStep: stepIndex === steps.length - 1
 
     /// Why advancing is refused, or "" when it is not.
     ///
@@ -401,8 +418,6 @@ QtObject {
                 flow.identityNodeId = reply.nodeId || "";
                 flow.identityProblem = reply.problem || "";
                 flow.embeddedHome = reply.home || "";
-                if (flow.identityExists && flow.nodeId === "")
-                    flow.nodeId = reply.nodeId || "";
                 flow.identityAnswered = true;
             });
         }
@@ -494,17 +509,31 @@ QtObject {
     ///
     ///   mode not `embedded`                      -> embedded
     ///   mode `embedded`, no identity             -> identity
-    ///   identity, node not serving               -> start
-    ///   identity, node serving                   -> confirm
+    ///   mode `embedded`, an identity exists      -> network
     ///
-    /// A pure function of the four reply-derived values, so a flow given
-    /// different replies answers differently — which is what makes "it derived
-    /// the resume point" distinguishable from "it always returned step 3".
+    /// A pure function of two reply-derived values, so a flow given different
+    /// replies answers differently — which is what makes "it derived the resume
+    /// point" distinguishable from "it always returned the last step".
+    ///
+    /// **`alreadyServing` is deliberately NOT read here, and it once was.** It
+    /// chose between the start and confirm steps, and both are gone: this flow
+    /// neither starts nor stops a node, so whether one is running says nothing
+    /// about which of its steps still has work. A resume that landed differently
+    /// for a running node than for a stopped one would be reporting the node's
+    /// state through the step it chose, which is `embedded-state`'s job.
+    ///
+    /// The network step is the landing for an existing identity because it is
+    /// the last and has no work the backend can report as done. The identity
+    /// step is deliberately NOT it: its forward control advances rather than
+    /// creating when an identity is already there, but that is about what the
+    /// step does when a user REACHES it — by going back, or with an identity
+    /// that appeared between the preflight and the step — and a resume landing
+    /// there would present a step whose only act is already done as the first
+    /// step with work left.
     readonly property int resumeIndex: {
         if (!modeIsEmbedded) return steps.indexOf("embedded");
         if (!identityExists) return steps.indexOf("identity");
-        if (!alreadyServing) return steps.indexOf("start");
-        return steps.indexOf("confirm");
+        return steps.indexOf("network");
     }
 
     /// Put `resumeIndex` in force, **as a single assignment**.
@@ -599,15 +628,18 @@ QtObject {
     /// field each time. A third caller now inherits the mapping instead of
     /// re-deriving it.
     ///
-    /// `nodeId` is the one conditional assignment: capabilities carries it only
-    /// as a fallback, so a DID already reported by `createEmbeddedIdentity` or
-    /// `startNode` — both more specific — is not overwritten by it.
+    /// **No `nodeId` any more.** It existed for the confirm step, and
+    /// capabilities were its last fallback behind `createEmbeddedIdentity` and
+    /// `startNode`. The identity step reads `identityNodeId`, which comes from
+    /// the two replies that describe the embedded home specifically —
+    /// `getEmbeddedIdentity()` and the creation — and never from capabilities,
+    /// which report the mode in force and would be a different home's DID in any
+    /// other mode.
     function applyCapabilities(caps) {
         gitFound = caps.gitFound === true;
         gitProblem = caps.gitProblem || "";
         pathsProblem = caps.pathsProblem || "";
         modeInForce = caps.mode || "";
-        if (nodeId === "") nodeId = caps.nodeId || "";
     }
 
     function refreshCapabilities() {
@@ -681,7 +713,6 @@ QtObject {
             // is what keeps "created" and "was already there" two renderings
             // rather than one.
             flow.identityCreatedHere = reply.created === true;
-            if (reply.nodeId) flow.nodeId = reply.nodeId;
             if (reply.home) flow.embeddedHome = reply.home;
             // Created and advanced in one act. Guarded on the created flag
             // rather than on the call having returned, so a reply that is not a
@@ -691,86 +722,16 @@ QtObject {
         return true;
     }
 
-    // ---- the start step ---------------------------------------------------
-
-    /// Start the node, reporting success only on `started:true`.
-    ///
-    /// The passphrase is the one the identity step took: the node is handed an
-    /// already-decrypted signing key when it is built, so there is no later
-    /// point at which one could be supplied.
-    function submitStart(passphrase) {
-        if (!startNode || !canStartNode) return false;
-        var issuedAt = epoch;
-        lastError = "";
-        startPending = true;
-        startNode(passphrase, function (reply) {
-            if (!isCurrent(issuedAt)) {
-                flow.startPending = false;
-                return;
-            }
-            flow.startPending = false;
-            if (!reply || reply.error) {
-                flow.lastError = (reply && reply.error)
-                                 ? reply.error : "the node did not start";
-                flow.nodeStarted = false;
-                return;
-            }
-            // Only a `started:true` reply counts. A reply that merely arrived
-            // is not a started node.
-            flow.nodeStarted = reply.started === true;
-            if (!flow.nodeStarted) {
-                flow.lastError = "the node did not report itself started";
-                return;
-            }
-            flow.listening = reply.listening || [];
-            if (reply.nodeId) flow.nodeId = reply.nodeId;
-            // A started node is serving by the backend's own contract —
-            // startNode returns only once the control socket answers — but the
-            // flow still asks, because `serving` is the field that notices a
-            // node whose threads die afterwards.
-            flow.nodeServing = true;
-            // A node this flow just started is a node answering on the socket.
-            // Withdrawing the start control here is what stops a second node
-            // being started over the first — the same contention
-            // `startBlockedReason` names for the case the preflight found. Set
-            // before the refresh rather than waiting for it, so the control is
-            // not offered during the window where that reply is outstanding.
-            flow.alreadyServing = true;
-            flow.refreshNodeStatus();
-        });
-        return true;
-    }
-
-    /// Re-read what the node is doing.
-    ///
-    /// Reads `serving`, not `running`: a node whose threads have died leaves
-    /// `running` true indefinitely while `serving` goes false, and that is the
-    /// state a user cannot otherwise account for. The Rust panic guard reaches
-    /// the FFI boundary, not the threads a running node spawns.
-    function refreshNodeStatus() {
-        if (!fetchNodeStatus) return;
-        var issuedAt = epoch;
-        fetchNodeStatus(function (reply) {
-            if (!isCurrent(issuedAt) || !reply) return;
-            flow.nodeServing = reply.serving === true;
-            // One question, one answer: "is a node answering on the socket" is
-            // the same question the preflight asked, so a later reading of it
-            // updates the same value rather than a second copy that can
-            // disagree. A node whose threads have since died therefore offers
-            // the start control again, which is correct.
-            flow.alreadyServing = reply.serving === true;
-        });
-    }
-
-    // ---- the confirm step -------------------------------------------------
-
-    /// The command a delegate runs elsewhere to authorise this node.
-    ///
-    /// Carries the DID that actually exists rather than a placeholder, so the
-    /// line as displayed is the line to run. "" when there is no DID yet,
-    /// which is what keeps a `--allow ` with nothing after it off the screen.
-    readonly property string allowCommand:
-        nodeId !== "" ? "rad id update --allow " + nodeId : ""
+    // **No start and no confirm.** `submitStart`, `refreshNodeStatus` and
+    // `allowCommand` were theirs and are gone with them, along with the
+    // `nodeId` that only the confirm step read — the identity step has its own
+    // `identityNodeId`, and the header now shows the DID that a confirm screen
+    // used to show once and then be dismissed.
+    //
+    // The absence of a start path is a requirement rather than a consequence of
+    // deleting a screen: with no `startNode` property and no function that
+    // could call one, "this flow MUST NOT issue startNode, in any step, for any
+    // reason" holds structurally.
 
     // ---- reset ------------------------------------------------------------
 
@@ -803,11 +764,6 @@ QtObject {
         pathsProblem = "";
         modeInForce = "";
         seeds = [];
-        nodeStarted = false;
-        listening = [];
-        nodeServing = false;
-        nodeId = "";
-        startPending = false;
         lastError = "";
         stepMoved();
     }

@@ -267,42 +267,13 @@ Each placed where the decision it affects is made. The repetition is the point.
 ## 6. Restart of Basecamp
 
 > ~~**The node does not start automatically, in any configuration.**~~
-> **Overturned.** The rule below was written before the flow was dogfooded, and
-> it is now the opposite: an unencrypted key starts its node when Embedded is
-> opened, and an encrypted one gets a passphrase prompt on the Embedded surface.
-> The requirements are `embedded-state`'s. What follows is kept as the record of
-> what was decided and why it did not survive contact with the built app; the
-> reasoning for the new rule belongs in `design.md`, not here.
-
-The original argument was that `Runtime::init` takes an already-decrypted key, so
-an encrypted profile *cannot* start unattended — which is still true — and that
-an **unencrypted** one should not either, on three grounds:
-
-1. It makes the passphrase choice silently change startup behaviour along an
-   axis never stated at the control.
-2. An autostart failing at module init has nowhere to report — the view is not
-   up, and Basecamp swallows QML errors.
-3. It splits E2 into two indistinguishable states.
-
-**Why each of those fell.** (1) is answered by stating it: the identity step now
-has to say that an unencrypted key starts the node without a prompt and an
-encrypted one is asked for each time, which is the axis, said at the control
-where the choice is made. (2) describes an autostart at *module init*, and this
-is not one — the start is issued from the Embedded surface once it is rendering,
-so it has exactly the place to report that E3 and E5 already are. (3) is
-answered by the new field: `encrypted` distinguishes the two E2s, which is what
-made them indistinguishable in the first place.
-
-What the argument never weighed is the cost of the rule, which dogfooding made
-plain: a user who has set up a node is told, every time they open the mode, to
-press a button the module could have pressed itself, with one possible answer.
-
-**Still rejected: a "start automatically" setting** — a module setting whose
-only legal value for the secure default is off, and whose question is now
-answered by whether the key is encrypted. **Still rejected: prompting at Basecamp
-startup** — an unasked-for modal on launch, in a module the user may not be
-looking at. The passphrase prompt is a field on the Embedded surface, shown when
-the user is looking at Embedded.
+> **Overturned**, and the reasoning has moved. An unencrypted key starts its node
+> when Embedded is opened; an encrypted one gets a passphrase prompt on the
+> Embedded surface. The requirements are `embedded-state`'s, and the argument —
+> the three original grounds, why each fell, and the two things the overturn does
+> not license — is `design.md`'s *The node starts itself, overturning a decision
+> made before it was dogfooded*. It is not repeated here, because two copies
+> drift and the wrong one gets read.
 
 ## 7. Components
 
