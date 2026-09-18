@@ -1453,6 +1453,30 @@ widen the match, not to conclude the gate is worthless.
   cannot (a start request that no control offers), and the spec can see the
   wiring the component file reproduces. The component suite being green still
   says nothing about `Main.qml` itself.
+- **`RepoList` carries two jobs: listing repositories, and the Embedded node's
+  lifecycle surface.** It holds the `EmbeddedState` instantiation,
+  `autoStartIfWanted()`, the `Connections` that issues the autostart,
+  `submitEmbeddedPassphrase()` and the panel itself — and E0–E6 are facts about
+  the *module*, not about a list of repositories. `RepoView` has the same
+  question one level down: open a repo in E2 and what happens is not traced.
+
+  Accepted deliberately rather than refactored now. The panel stands where the
+  list would be, so it is what a user of that screen sees, and there is exactly
+  one host for it today — a shared component extracted for a second consumer
+  that does not exist yet is the speculative refactor this repo's `IssuesTab` /
+  `PatchesTab` pair is the standing argument against. Nothing binds the
+  placement either: the `embedded-state` spec is written host-agnostically and
+  never names `RepoList`, so moving the panel later costs a QML relocation and
+  no spec rewrite.
+
+  **The trap to avoid when this does move** is copying `RepoList`'s shape into
+  `RepoView` — that is the fourth-copy-of-a-guard pattern, and this piece has
+  already paid for it once: the autostart path was wired straight to
+  `startEmbeddedNode` instead of through the hosting gate the manual path used,
+  and the two disagreed silently because `embeddedStartHosted` was hardcoded
+  true. The fix put the gate in `EmbeddedState.wantsAutoStart`, where one
+  derivation answers for every host. A second host should inherit
+  `EmbeddedState` the same way, not re-derive anything from it.
 - **Nothing exercises the wizard against the real backend.** `local.yaml` raises
   the setup and lowers it again without walking a step, deliberately: the steps
   after preflight write — an identity, a mode, a node — and a spec that ran them

@@ -143,6 +143,14 @@ Item {
     ///
     /// An empty passphrase, which is what an unencrypted key takes — and the
     /// only secret this surface can supply without asking for one.
+    ///
+    /// **No hosting check here, and that is deliberate rather than missing.**
+    /// `wantsAutoStart` carries the `startHosted` term itself, so this function
+    /// inherits the same gate the rendered control goes through instead of
+    /// re-deriving it — one place answering "may a start go out", not two that
+    /// can drift. Writing the check here instead would be the fourth copy of a
+    /// guard this repo keeps paying for, and it is the shape that let the
+    /// automatic path ignore the flag while the manual path honoured it.
     function autoStartIfWanted() {
         if (embedded.wantsAutoStart && app) app.startEmbeddedNode("");
     }
@@ -638,6 +646,35 @@ Item {
             // Enter submits, because a single field with a button below it is a
             // form and a user will press it.
             onAccepted: page.submitEmbeddedPassphrase()
+
+            // **Emptied the moment the field stops being shown.**
+            //
+            // The third instance in this piece of a passphrase outliving the
+            // showing it was typed for, and the one with no lifecycle event to
+            // hang a fix on: `SetupWizard.qml` is recreated per opening and
+            // clears in `show()`, but this `TextField` is a permanent object in
+            // `RepoList`'s tree, so nothing was ever told "a showing ended".
+            // `visible` IS that event — it is bound to `wantsPassphrase`, so it
+            // goes false exactly when the surface stops asking.
+            //
+            // Clearing on the way OUT rather than on the way in, deliberately.
+            // Both close the reviewer's cycle (type, let the field hide, let it
+            // return pre-filled), but hiding is the earlier moment: clearing on
+            // re-show would leave the secret resident for the whole span the
+            // field is hidden, and this module's dev Basecamp ships the QML
+            // inspector compiled in, so "resident" means "readable".
+            //
+            // Nothing legitimate is lost. `submitEmbeddedPassphrase()` already
+            // empties the field as the call is issued, so the `startFailed`
+            // showing — the one case that must survive, so a refused passphrase
+            // can be corrected — arrives at an empty field either way, and
+            // `wantsPassphrase` holds `visible` true across that transition
+            // regardless.
+            //
+            // Removing this line turns
+            // `test_an_abandoned_passphrase_does_not_survive_the_showing` red
+            // with the typed value coming back on the re-showing.
+            onVisibleChanged: if (!visible) text = "";
         }
 
         // The state's own action. Absent — not disabled-and-unexplained — where

@@ -724,6 +724,44 @@ Item {
                     + JSON.stringify(app.startLog));
         }
 
+        /// **With start unhosted, the module issues no start of its own.**
+        ///
+        /// The other file holds the decision; this one proves no CALL goes out,
+        /// which is the half that was wrong. `autoStartIfWanted()` reached
+        /// `app.startEmbeddedNode("")` on the node's state and the key alone,
+        /// so a host declaring start unrouted was ignored by the one path the
+        /// user never presses — and the reviewer's mutation (declaring
+        /// `embeddedStartHosted = false` and watching the start still fire) is
+        /// exactly this assertion, written down.
+        ///
+        /// `embeddedStartHosted` is the ONLY field moved between the legs: the
+        /// stopped unencrypted status is identical in both, so a surface that
+        /// starts on the node's state regardless answers the same in each.
+        function test_an_unhosted_start_is_not_issued_by_the_module_either() {
+            // Unhosted FIRST, then the key. `wantsAutoStart` is watched on its
+            // change edge, so unsealing the key while start is still hosted
+            // fires the very start this test is about — the order is the test,
+            // not tidiness.
+            app.embeddedStartHosted = false;
+            app.embeddedEncrypted = false;
+            list.reload();
+
+            compare(app.startLog.length, 0,
+                    "a start the host does not route must not be issued "
+                    + "automatically: an act whose request reaches nobody is "
+                    + "not one the module may take on the user's behalf: "
+                    + JSON.stringify(app.startLog));
+
+            // The control: the same status with start hosted does start, so
+            // this is the flag doing the work and not a list that never starts.
+            app.reset();
+            app.embeddedStartHosted = true;
+            list.reload();
+            compare(app.startLog.length, 1,
+                    "and with start hosted the same stopped unencrypted node "
+                    + "is started: " + JSON.stringify(app.startLog));
+        }
+
         /// **A module that BECOMES READY already stopped starts its node too.**
         ///
         /// This is the case a live mode change cannot reach, and the one an
@@ -858,6 +896,51 @@ Item {
                     "and the field must not go on holding it: the call already "
                     + "has the value, and this module's dev Basecamp ships a "
                     + "QML inspector that reads live object properties");
+        }
+
+        /// **A typed-but-never-submitted passphrase does not survive the field
+        /// being hidden and shown again.**
+        ///
+        /// The reviewer's cycle, exactly: type into the field, let it go
+        /// invisible by a route that is NOT a submit — the node starts serving
+        /// through an external event, e.g. someone starting it from a command
+        /// line while the panel is open — then let it come back when the node
+        /// stops again. The only clearing point used to be inside
+        /// `submitEmbeddedPassphrase()`, which never ran here, so the field
+        /// returned pre-filled with a secret the user had abandoned.
+        ///
+        /// `app.startLog` is asserted empty at the hide, which is what makes
+        /// this a test about the SHOWING rather than about submission: a panel
+        /// that cleared by quietly submitting would fail that assertion.
+        function test_an_abandoned_passphrase_does_not_survive_the_showing() {
+            list.reload();
+            verify(passphrase().visible, "precondition: the field is offered");
+            passphrase().text = "leaked-secret";
+
+            // The node starts serving without this surface asking — the field's
+            // visibility condition changes by a route other than submit.
+            app.embeddedServing = true;
+            app.embeddedRunning = true;
+            list.reload();
+            verify(!passphrase().visible,
+                   "precondition: the field is no longer shown");
+            compare(app.startLog.length, 0,
+                    "precondition: nothing was submitted — the field went away "
+                    + "on its own: " + JSON.stringify(app.startLog));
+
+            // The node stops again and the same field is shown once more.
+            app.embeddedServing = false;
+            app.embeddedRunning = false;
+            list.reload();
+            verify(passphrase().visible,
+                   "precondition: the field is offered again");
+
+            compare(passphrase().text, "",
+                    "the abandoned passphrase must not come back with the "
+                    + "field: it outlived the showing it was typed for, and "
+                    + "this module's dev Basecamp ships a QML inspector that "
+                    + "reads live object properties, so resident means "
+                    + "readable");
         }
 
         /// A refused passphrase can be corrected: the field survives the

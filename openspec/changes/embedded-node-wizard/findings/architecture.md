@@ -7,7 +7,7 @@ derivation, the hosted-ness flags, the foreign-node distinction, and
 
 ## Findings
 
-- [ ] **`dev-writer`** — `radicle-ui/src/qml/SetupFlow.qml:12-24` — the file-header
+- [x] **`dev-writer`** — `radicle-ui/src/qml/SetupFlow.qml:12-24` — the file-header
       doc comment is stale relative to this round's own change: it says "Six
       steps in a fixed order" and credits "the confirm-step clamp" as something
       that "falls out of the representation," but `steps` (line 102) now has
@@ -28,7 +28,26 @@ derivation, the hosted-ness flags, the foreign-node distinction, and
       "confirm-step clamp" claims (lines 14, 17, 22) — the two disagree within
       one file.
 
-- [ ] **`dev-writer`** — `radicle-ui/src/qml/RepoList.qml` (whole-file scope) —
+      **Fixed.** The header no longer states a count at all: "Six steps in a
+      fixed order" became "The steps run in a fixed order", and it now points
+      at `steps` below as the one place the count lives, with a line saying
+      this header said "six" for a round after the deletion and that is what
+      sent a reader hunting for a screen that no longer existed. Deleting the
+      number rather than correcting it to "four" is the same discipline the
+      readability findings asked for elsewhere in this round — a corrected
+      number rots on the next step change; a pointer does not.
+
+      The "confirm-step clamp" reference became "the clamp at either end",
+      which is what `canGoBack` and `onLastStep` actually derive and does not
+      name a mechanism that no longer exists. The illustrative "identity went
+      straight to start" also became "identity went straight to network", since
+      the start step is gone.
+
+      Doc-only, so no test covers it; `check-qml-syntax.sh` and the full
+      component suite are green, which is all a comment change can be asked to
+      show.
+
+- [x] **`dev-writer`** — `radicle-ui/src/qml/RepoList.qml` (whole-file scope) —
       `RepoList` now owns two jobs: listing/paging repositories (its original
       one) and the Embedded node's lifecycle surface — `EmbeddedState`
       instantiation, `autoStartIfWanted()`, the `Connections` that issues the
@@ -59,6 +78,28 @@ derivation, the hosted-ness flags, the foreign-node distinction, and
       wizard's own authors had already asked and answered "not yet."
       **Measured:** `grep -n "RepoView\|belongs in RepoList" design.md` returns
       nothing; the question exists only in `user-flow.md` §9.
+
+      **Fixed as recorded, not refactored** — which is what you asked for.
+      `design.md`'s Risks / Trade-offs gained an entry naming the two jobs
+      `RepoList` carries, the `RepoView` question one level down, why it is
+      accepted now (one host, and the `IssuesTab`/`PatchesTab` pair as this
+      repo's standing argument against extracting for a consumer that does not
+      exist), and what does not bind it (the `embedded-state` spec is
+      host-agnostic and never names `RepoList`, so a move costs a QML
+      relocation and no spec rewrite).
+
+      It also names the trap you predicted — copying `RepoList`'s shape into
+      `RepoView` — and anchors it to something concrete rather than leaving it
+      abstract: this same round's security finding was exactly that pattern,
+      the autostart path wired straight to `startEmbeddedNode` instead of
+      through the gate the manual path used. The entry says a second host
+      should inherit `EmbeddedState` rather than re-derive from it.
+
+      `user-flow.md` §9's bullet is struck through and now points at
+      `design.md` instead of restating the reasoning, so there is one copy and
+      the two cannot drift — `user-flow.md` is the pre-implementation scratch
+      document its own header says it is, and the durable record is
+      `design.md`.
 
 ## What is clean
 

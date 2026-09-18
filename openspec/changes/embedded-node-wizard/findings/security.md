@@ -43,7 +43,7 @@ closed findings.
 
 ## Findings
 
-- [ ] **`dev-writer`** — `RepoList.qml:147` (`autoStartIfWanted`) — the automatic
+- [x] **`dev-writer`** — `RepoList.qml:147` (`autoStartIfWanted`) — the automatic
       start bypasses the capability-hosting gate every other Embedded action
       goes through
       **Scenario:** `EmbeddedState.wantsAutoStart` (`current === "stopped" &&
@@ -80,7 +80,39 @@ closed findings.
       `startEmbeddedNode`. Mutation reverted; `git status` / `git diff
       --stat` on the test file show no changes afterward.
 
-- [ ] **`dev-writer`** — `RepoList.qml:602-641` (the `passphraseField`
+      **Fixed.** `startHosted` is now a term of
+      `EmbeddedState.wantsAutoStart` (`EmbeddedState.qml`), so the automatic
+      path inherits the same gate the rendered control goes through.
+
+      Placed in the derivation rather than in `autoStartIfWanted()`
+      deliberately: `wantsAutoStart` is the decision, and a caller-side check
+      would be a second place encoding "may a start go out" — the
+      fourth-copy-of-a-guard shape that produced this divergence in the first
+      place. `RepoList.autoStartIfWanted()` is unchanged in behaviour and its
+      doc comment now says why there is no hosting check there.
+
+      Two tests, both of which fail without the term:
+      `test_an_unhosted_start_is_not_issued_automatically`
+      (`tst_embedded_state.qml`) pins the decision, and
+      `test_an_unhosted_start_is_not_issued_by_the_module_either`
+      (`tst_embedded_panel.qml`) pins that no CALL goes out — the latter is
+      your mutation written down. Verified by removing the term: the panel test
+      fails with `startLog` length 1 against an expected 0, which is exactly
+      the measurement in this finding. Both tests move `embeddedStartHosted`
+      as the only field, with the stopped/unencrypted status held in both legs,
+      so a surface ignoring hosting answers the same in each.
+
+      Two existing tests needed `startHosted` armed
+      (`test_an_unencrypted_stopped_node_wants_a_start` and
+      `test_no_autostart_outside_the_stopped_state`), since the shared fixture
+      resets it to false in `init()`; both now hold it true throughout so their
+      own subject — the key, and the state — remains the only thing moving.
+
+      **No behaviour change today**, since `embeddedStartHosted` is hardcoded
+      `true` in `Main.qml`. It changes behaviour the moment piece 3 makes that
+      flag conditional, which is what this finding was about.
+
+- [x] **`dev-writer`** — `RepoList.qml:602-641` (the `passphraseField`
       `TextField`) — a typed-but-never-submitted passphrase survives the
       field going invisible and becoming visible again by any route other
       than submit
@@ -118,6 +150,36 @@ closed findings.
       (32/32 passed, including the scratch test). Test added and then removed
       in the same edit; `git status` / `git diff --stat` on the test file
       show no changes afterward.
+
+      **Fixed.** `passphraseField` gained
+      `onVisibleChanged: if (!visible) text = "";`. You asked for a "showing
+      began" event or for one to be made — `visible` is already that event: it
+      is bound to `page.embedded.wantsPassphrase`, so it moves exactly when the
+      surface starts and stops asking, and no new lifecycle plumbing is needed
+      for a permanent object.
+
+      Cleared on the way OUT rather than on the way in. Both close the cycle
+      you measured, but hiding is the earlier moment: clearing on re-show would
+      leave the secret resident for the whole span the field is hidden, and per
+      this diff's own threat model resident means inspector-readable. Clearing
+      at the hide makes the value's lifetime the showing it was typed for.
+
+      Nothing legitimate is lost. `submitEmbeddedPassphrase()` already empties
+      the field as the call is issued, so the `startFailed` showing — the one
+      that must survive, so a refused passphrase can be corrected — arrives at
+      an empty field either way, and `wantsPassphrase` holds `visible` true
+      across `stopped`→`startFailed` regardless.
+      `test_a_refused_passphrase_can_be_corrected` still passes unchanged,
+      which is what says the correction path is intact.
+
+      `test_an_abandoned_passphrase_does_not_survive_the_showing`
+      (`tst_embedded_panel.qml`) is your scenario as a test: type
+      `"leaked-secret"`, drive the node to serving so the field hides by a
+      route that is not a submit, assert `startLog` is empty at that point (so
+      the test is about the showing and not about a quiet submission), then
+      stop the node and assert the field returns empty. Verified by removing
+      the handler: the test fails reporting `leaked-secret` where `""` was
+      expected — the same residue you measured.
 
 Both findings are about the same root cause from two angles: the passphrase
 and the act it unlocks are handled correctly along the one path this round
