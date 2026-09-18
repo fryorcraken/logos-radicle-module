@@ -1,164 +1,164 @@
-# Architecture review — `embedded-node-wizard`
+# Architecture review — `embedded-node-wizard`, piece 2 (hosting the setup wizard)
 
 Scope: architecture only, per dispatch (correctness, security and readability
-are held by other instances).
+are held by other instances). Reviewing `git diff 90ec3b9..b802335` — the
+overlay hosting, `SetupFlow`'s re-entry, and `EmbeddedState`'s `hosted` inputs.
 
-Read: `SetupFlow.qml`, `SetupWizard.qml`, `CopyableCommand.qml`,
-`tst_setup_wizard.qml`, `tst_setup_wizard_view.qml`,
-`openspec/changes/embedded-node-wizard/{spec.md,design.md,tasks.md,proposal.md}`,
-`radicle_ui.rep`, `ModePicker.qml`, `NodeIdentity.qml`, `SettingsPanel.qml`,
-`CommitsTab.qml` (for the staleness-guard comparison CLAUDE.md names).
+Read: `design.md`, `specs/embedded-setup/spec.md`, `specs/embedded-state/spec.md`,
+`user-flow.md` §2/§7, `Main.qml`, `SetupFlow.qml`, `EmbeddedState.qml`,
+`RepoList.qml`, `SetupWizard.qml`, `tst_setup_host.qml`, `tst_setup_wizard.qml`,
+`tst_embedded_state.qml`, `tst_embedded_panel.qml`, `local.yaml`, `PLAN.md`.
+Verified findings by mutation with `/usr/lib64/qt6/bin/qmltestrunner -import
+radicle-ui/src/qml` against `tst_setup_wizard.qml` (50 tests),
+`tst_embedded_state.qml` (21 tests) and `tst_setup_host.qml` (10 tests), all
+green on the unmutated tree.
+
+`tasks.md` marks this row `[x]` from piece 1's pass; the header block says the
+spec was reopened for the host and every reviewer row needs re-running — this
+review is that re-run for architecture.
 
 ## Findings
 
-- [x] **`dev-writer`** — `SetupFlow.qml:330-335` — `preflightDone` flips on a
-      bare literal (`3`) that is not derived from anything, and is one line
-      away from the four `if (fetch...)` blocks it is supposed to summarise.
-      **Scenario:** `runPreflight()` has four `if (fetchX)` blocks
-      (capabilities, identity, nodeStatus, seeds), and three of them call
-      `flow.notePreflightAnswer()` — seeds deliberately doesn't, since it isn't
-      one of the four *findings* the spec names. `notePreflightAnswer()` then
-      compares `preflightAnswers` against a hand-written `3`. A future change
-      that adds a fifth preflight question (or turns the `seeds` fetch into a
-      counted one, or splits `fetchCapabilities`'s reply into two calls) has
-      to remember to update this literal in a function several lines away from
-      the thing that should determine it, with nothing tying the two together.
-      Get it wrong and `preflightDone` either fires early (reports an unasked
-      question as answered — the exact failure `design.md`'s "Open questions"
-      section says was designed against) or never fires at all if a wired probe
-      is later made optional. This is the same class of bug the repo's
-      `wantRid`/`syncEpoch` write-up warns about: a fact that should hold by
-      construction (`preflightDone` should be true iff every counted probe has
-      answered) is instead asserted as a magic number nobody re-derives.
-      **Measured:** `design.md` and `tasks.md` document `preflightDone` as a
-      deliberate decision (the "unanswered ≠ failure" naming) but never mention
-      `preflightAnswers` or the threshold at all — it is an implementation
-      detail that slipped in unexamined, not a decision that was weighed. A
-      cheap fix in the same shape the rest of the file already uses: three
-      named booleans (`capsAnswered`, `identityAnswered`, `nodeStatusAnswered`)
-      with `preflightDone` as their conjunction, the same "structure carries
-      the invariant" move `stepIndex` and the four separate finding properties
-      already make elsewhere in this file. Severity: low likelihood today
-      (nothing in this change adds a fifth probe), but it is exactly the kind
-      of drift CLAUDE.md's "put the complexity in the data structure" section
-      calls out, and it sits right next to code that otherwise follows that
-      rule carefully.
-
-      **Fixed** in `f471999`, taking the cheap fix in the shape you proposed
-      almost exactly. `preflightAnswers` and `notePreflightAnswer()` are gone,
-      replaced by three named booleans — `capabilitiesAnswered`,
-      `identityAnswered`, `nodeStatusAnswered` — each set by its own callback,
-      with `preflightDone` driven from their conjunction:
-
-          readonly property bool allProbesAnswered:
-              capabilitiesAnswered && identityAnswered && nodeStatusAnswered
-
-          onAllProbesAnsweredChanged: {
-              if (allProbesAnswered) preflightDone = true;
-          }
-
-      (I used `capabilitiesAnswered` rather than your `capsAnswered`, matching
-      `fetchCapabilities`/`refreshCapabilities` elsewhere in the file. The one
-      addition to your sketch is the intermediate `allProbesAnswered`, so the
-      invariant has a name a reader can find rather than being spelled out
-      inside a handler.)
-
-      Your framing that this "slipped in unexamined rather than being weighed"
-      is accurate and is why it is now a recorded decision: `design.md` gains
-      "The preflight's gating probes are named flags, not a counter", naming
-      the failure mode you identified — a fifth probe leaves a threshold to be
-      found separately, and getting it wrong fires `preflightDone` early,
-      reporting an unasked question as answered, which is precisely what the
-      "unanswered ≠ failure" decision exists to prevent.
-
-      The related readability finding on the same lines (three nouns for three
-      counts) is answered in `readability.md`: `runPreflight()`'s header now
-      states all three counts and why they differ, and the `fetchSeeds` block
-      carries an inline note that it is the one call marking no answer.
-
-      Severity assessment shared — nothing here adds a fifth probe today. It
-      was worth doing now because the reshape cost about ten lines and the
-      surrounding code already holds its invariants this way.
+- [ ] **`dev-writer`** — `Main.qml:200,320-322` and `PLAN.md:113-115` —
+      "hosting a start is one property" is true for `EmbeddedState`'s
+      enablement but false for `Main.qml`'s routing, and nothing ties the two
+      together.
+      **Scenario:** `embeddedStartHosted` is the single input that
+      `EmbeddedState.actionHosted`/`actionEnabled` derive from, and `RepoList`
+      passes it through unconditionally — so flipping `Main.qml:200`'s
+      `embeddedStartHosted: false` to `true` alone makes the panel render an
+      **enabled** "Start the node" / "Restart the node" control. But
+      `takeEmbeddedAction(kind)` at `Main.qml:320-322` is `if (kind === "setup")
+      openSetup();` with no branch for `"start"`/`"restart"` — so a user who
+      clicks that now-enabled control gets `embeddedActionTaken("start")`
+      emitted, routed into `takeEmbeddedAction`, and silently dropped. That is
+      exactly the failure mode `embedded-state`'s spec names as the reason
+      this whole capability exists: "A control that is enabled, looks ordinary
+      and does nothing when taken is worse than no control at all… the dead
+      end this capability was written to remove." `PLAN.md:113-115` states
+      "Hosting them is one property… the panel needs no edit" as settled fact,
+      which is the exact half-truth that would let this ship: a future
+      implementer flips the one flag PLAN.md points at, runs the existing
+      suite (which never arms `embeddedStartHosted` end-to-end — see below),
+      sees green, and ships the dead click.
+      **Measured:** `grep -n "embeddedStartHosted\|startHosted"` across
+      `radicle-ui/src/qml/` shows exactly one write site
+      (`Main.qml:200`) and confirms `RepoList.qml:109` passes it straight into
+      `EmbeddedState.startHosted` with no second gate. `grep -n "startHosted"`
+      over `tst_setup_host.qml` shows only `harness.embeddedStartHosted =
+      false;` in `init()` and the two calls in
+      `test_a_start_request_does_not_raise_the_setup` that assert a start
+      request does *not* raise the setup while unhosted — no test in that
+      file, `tst_embedded_state.qml`, or `tst_embedded_panel.qml` arms
+      `startHosted = true` and then exercises `takeEmbeddedAction("start")`
+      through to a routing outcome. `tst_embedded_state.qml:320,507` do arm
+      `st.startHosted = true`, but only on the bare `EmbeddedState` component
+      to check `actionEnabled` flips — never through `RepoList`'s signal into
+      a host's `takeEmbeddedAction`. So the gap is invisible to every test
+      layer that exists today, and would stay invisible after the flag flips,
+      because nothing forces `takeEmbeddedAction`'s branch list to grow with
+      it. The fix is the same shape `actionKind`/`actionHosted` already use one
+      layer down — route `takeEmbeddedAction` on a table keyed by kind rather
+      than an `if` for one kind, or at minimum have `takeEmbeddedAction` assert
+      (dev build) on an unrecognised-but-enabled kind — but the concrete ask
+      here is narrower: correct `PLAN.md:113-115`'s claim, or land the routing
+      change in the same commit as the day the flag flips, so "one property"
+      does not quietly become "one property, plus remembering the other file."
+      Severity: not a bug today (`embeddedStartHosted` is `false`, so the
+      branch is unreachable), but it is exactly the kind of documented-as-safe
+      trap CLAUDE.md's "put the complexity in the data structure" section
+      warns about — a claim of "one flip" that is actually two, with only one
+      of them structurally enforced.
 
 ## What was clean
 
-- **The step-as-index shape holds.** `stepIndex` into `steps` genuinely makes
-  "advance never skips" true by construction — `advance()` can only ever
-  produce `stepIndex + 1`, clamped by `canAdvance`'s `stepIndex >= steps.length
-  - 1` check. `canGoBack` (`stepIndex > 0`) falls out of the same
-  representation rather than being a second condition to get right. This is a
-  real instance of the pattern the repo's own `wantRid`/`syncEpoch` write-up
-  asks for, not just an appeal to it.
+- **The overlay pattern's exclusion, for the two surfaces that exist.**
+  `openSetup()` (`Main.qml:300-304`) and `toggleSettings()`
+  (`Main.qml:331-338`) are two hand-written pairs (`settingsOpen = false;
+  setupOpen = true` and its mirror), not a data shape that is correct by
+  construction the way `stepIndex` or `epoch` are elsewhere in this same
+  piece — a third overlay would need every existing raiser edited by hand to
+  clear its flag too, which is the `wantRid`/`syncEpoch`-shaped risk CLAUDE.md
+  warns about. But `docs/PLAN.md`'s "durable settings surface" (Phase 2 step
+  4, the node-config panel) is described as an extension of the existing
+  `SettingsPanel`/`settingsPane`, not a third opaque overlay — confirmed by
+  `design.md:554` ("the durable settings surface", singular, referenced
+  throughout as what `SettingsPanel` becomes) and no mention anywhere in
+  `PLAN.md` or `design.md` of a third raised surface. Per the
+  no-speculative-refactoring rule, this is not a finding: nothing concrete
+  needs the general shape yet, and the two-surface hand-written exclusion is
+  exactly proportionate to the two surfaces that exist and are planned.
 
-- **The four findings staying four values is correct, not decorative.**
-  `canCreateIdentity` reads `homeResolved && !identityExists` and
-  `canStartNode` reads `gitFound && !alreadyServing && !startPending` —
-  independently, from findings, never from a folded verdict. Collapsing them
-  into one `preflightPassed` would have the exact failure the design doc
-  names (a missing `git` blocking identity creation, which spawns no `git`),
-  and the tests exercise the independence directly
-  (`test_a_missing_git_blocks_start_but_not_identity`).
+- **The seven injected call functions are the established convention, not a
+  second one.** `SettingsPanel.qml:45-46` already has `property var
+  fetchSettings: null` / `saveSetting: null`, injected by `Main.qml` exactly
+  the way `setupWizard`'s seven (`flow.fetchCapabilities`, `flow.fetchIdentity`,
+  `flow.fetchNodeStatus`, `flow.fetchSeeds`, `flow.createIdentity`,
+  `flow.startNode`, `flow.saveSetting`, at `Main.qml:1137-1158`) are. Each of
+  the seven is a one-line pass-through into the pre-existing `callPlain`/
+  `callSettings` helpers with no duplicated JSON-parsing or staleness logic —
+  confirmed by reading the block directly. This is the same shape scaled to
+  more calls, which is what a bigger flow needs, not new machinery.
 
-- **The epoch guard is a single shape, not a fifth hand-written copy.** One
-  `epoch` integer, bumped by every `advance()`/`back()`/`reset()`, captured
-  once per issued call as `issuedAt`, checked once via `isCurrent()`. Compared
-  directly against `CommitsTab.fetch()` (read in this review), which
-  hand-rolls the equivalent guard as two separate captured locals (`wantRid`,
-  `wantBranch`) compared at each callback — a different, per-field shape that
-  is exactly the kind of copy CLAUDE.md says gets a capture dropped from it
-  eventually. `SetupFlow` does not add a fifth variant of that guard; it uses
-  the one-counter version the file's own header argues for.
+- **The landing/resume rule makes the wrong version hard to write, and the
+  test that proves it is the one design.md names, not the obvious one.**
+  Verified by mutation: replacing `landOnFirstUnfinishedStep()`'s single
+  `stepIndex = resumeIndex` with a loop that calls the equivalent of
+  `advance()` step-by-step (bumping `epoch` each time) reddens **exactly one**
+  test in the 50-test `tst_setup_wizard.qml` suite —
+  `test_the_landing_does_not_discard_a_reply_still_in_flight` — and no other.
+  `test_the_resumed_steps_findings_are_populated`, the assertion a reader would
+  expect to catch this, stays green under the loop (confirmed), because the
+  harness is synchronous and all three gating replies have already landed by
+  the time the loop runs — exactly as design.md's "I got it wrong first"
+  section describes. The mutation was reverted after the run. This is a case
+  where the design shape (single assignment, epoch not bumped) makes the
+  correct implementation the only one that passes, and the accompanying
+  analysis of *why* the obvious test can't tell the difference is itself part
+  of what makes the shape trustworthy — a future editor reading only the test
+  file would reach for the loop and see it pass.
 
-- **No interface widening.** `radicle_ui.rep` shows every slot this flow
-  calls (`getCapabilities`, `getEmbeddedIdentity`, `createEmbeddedIdentity`,
-  `startNode`, `getNodeStatus`, `listKnownSeeds`, `setSetting`) already
-  existed before this change, with a comment noting they were "plumbed
-  through now, ahead of the wizard that calls them" specifically so this
-  change stays QML-only. Confirmed by `proposal.md`'s Impact section and by
-  there being no diff to `radicle/` or the Rust staticlib in this piece.
+- **`hosted`-ness as a concept is an invariant by construction, one layer
+  down from the finding above.** `EmbeddedState.actionHosted` (lines 246-253)
+  is a pure function of `actionKind` and the two `setupHosted`/`startHosted`
+  inputs — there is no per-state hard-coded "setup is enabled, start is not"
+  to find and edit. The `false` defaults on both flags (documented at
+  `EmbeddedState.qml:108-110`) mean a caller that forgets to wire one gets a
+  named-but-disabled action rather than a silently-reachable one, which is the
+  safe direction. This part of the claim holds; my finding above is that the
+  claim as stated in `PLAN.md` extends one layer further than the code
+  actually reaches.
 
-- **`ModePicker` reuse is reuse, not coupling.** The wizard's mode step wires
-  `current`, `startableModes` and `unavailableReason` into `ModePicker`
-  exactly the way `SettingsPanel.qml` already does — `ModePicker` already had
-  a second consumer before this change existed, so this is not an abstraction
-  invented for a caller that doesn't need it yet; it is the established
-  pattern picking up a third caller. The `embedded` blurb's "separate
-  identity" wording is asserted through the real component in
-  `tst_setup_wizard_view.qml`, so a future edit to that wording cannot
-  silently desync from what the spec requires here.
+- **`root.setupShown`/`root.settingsShown` read the pane's own `visible`
+  consistently with the rest of the file.** `Main.qml:534-535` follows the
+  same shape as `reposEmbeddedPanel` (`repoList.embeddedPanelShown`, itself
+  `embeddedState.visible` in `RepoList.qml:191`) and `identityCopied`
+  (`nodeIdentity.confirmShown`) — none of the test-observable properties in
+  this piece recompute a copy of the flag an item is keyed on. `newIssueOpen`
+  is a pre-existing pass-through outside this piece's diff and not a
+  regression to flag here.
 
-- **Not reusing `NodeIdentity`'s clipboard component was the right call, and
-  it is not a missed extraction.** The payload differs (a bare DID vs. a full
-  `rad id update --allow <DID>` shell command) and the chrome differs (a
-  header label with hover/elision rules vs. a command block in a wizard
-  body). `CopyableCommand.qml` copies the *pattern* (write to a hidden
-  `TextEdit`, verify via a second, separate paste-back editor) rather than
-  the component, which duplicates roughly a dozen lines of verification logic
-  between the two files. Under CLAUDE.md's own counter-pressure — do not
-  refactor for a caller that doesn't need it — extracting a shared
-  `ClipboardVerifier` component now would be speculative: there is no third
-  caller, and the two existing ones differ enough in payload and layout that
-  a shared component would need parameters for both, which is exactly the
-  kind of interface creep CLAUDE.md's "make the easy change" section warns
-  against manufacturing pre-emptively. Not a finding, but flagged here since
-  the dispatch asked the question directly: this is a judgment call the
-  design doc already made and defended, and rereading it did not turn up
-  a second caller that would change the answer.
-
-- **The `SetupFlow`/`SetupWizard` split puts the testable decisions in the
-  right place.** Every ordering, blocking and staleness assertion in
-  `tst_setup_wizard.qml` (34 assertions) is made against `SetupFlow` directly,
-  with no window and no rendered element in sight — the same shape
-  `NavState.qml`/`SourceState.qml` established. `tst_setup_wizard_view.qml`
-  is a genuinely separate 14-assertion file for what only rendering can
-  answer (three consequence statements, the seed list, the clipboard round
-  trip), and it does not re-assert anything the state-level file already
-  covers. This is the split CLAUDE.md's "make the change easy" section holds
-  up as the fix for `Main.qml`'s `nav.busy`/`nav.error` tangle, applied
-  correctly here rather than invoked as a label.
+- **The reproduction in `tst_setup_host.qml` is honest about its limit, and
+  structured so a divergence would at least be plausible to notice, though not
+  guaranteed.** `openSetup()`, `takeEmbeddedAction()`, `toggleSettings()`, and
+  the `onClosed` handler are copied into the test harness (lines 140-157,
+  200-203) verbatim against `Main.qml`'s versions (lines 300-338, 1172-1175) —
+  confirmed by direct line-for-line comparison; they match today. The file's
+  own header (lines 5-24) and `design.md`'s "Risks/Trade-offs" section both
+  name this as a reproduction rather than an instantiation, and say
+  `local.yaml` is what closes the gap for the real file. Confirmed:
+  `local.yaml:585-619` drives the real `embeddedStateAction` button through the
+  real `Main.qml` and asserts `root.setupShown`/`root.settingsShown` on it —
+  so the two layers together do cover what neither can alone. The residual
+  risk (a hand-edit to `Main.qml`'s functions not mirrored in the test file)
+  is exactly what the header says it is: real, acknowledged, and not something
+  this review can close either, since it is the same class of gap as any
+  reproduced fixture. Not a new finding — flagging as reviewed and clean given
+  the acknowledgment and the `local.yaml` backstop.
 
 ## Not reviewed here
 
-Correctness of the individual blocking rules, security of the DID/clipboard
-handling, and QML readability/naming are out of scope for this pass — see the
-sibling `correctness.md`, `security.md` and `readability.md` findings files.
+Correctness of the individual blocking/staleness rules, security of the
+DID/passphrase/clipboard handling, and QML naming/readability are out of scope
+for this pass — see the sibling `correctness.md`, `security.md` and
+`readability.md` findings files.
