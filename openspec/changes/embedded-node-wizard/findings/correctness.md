@@ -1,182 +1,185 @@
-# Correctness review — piece 2: hosting the setup wizard
+# Correctness review — piece 3 (identity `encrypted`, setup collapse to four steps, qmllint gate repair)
 
-Scope: correctness only (security, readability, architecture are other
-instances' lanes), for the diff `90ec3b9..b802335` — spec commit `7a39ade` plus
-implementation commit `b802335`. Piece 1 (the state panel) was reviewed
-separately; this file replaces piece 1's stale correctness notes, which
-referenced an earlier version of the flow (`chooseMode`, a `ModePicker`-based
-mode step) not present in this diff.
+Scope: everything since `b802335` (state panel / wizard host findings already
+closed), through `b036ad8`. Reviewed `SetupFlow.qml`, `SetupWizard.qml`,
+`EmbeddedState.qml`, `RepoList.qml`, the `Main.qml` host wiring, the Rust
+`profileinit::key_encrypted` probe and its C++/FFI wiring, and
+`lint-qml.sh`. Cross-checked against `embedded-setup`, `embedded-state`,
+`embedded-header` and `embedded-identity` specs.
 
-Read: `specs/embedded-setup/spec.md` (six-step flow, preflight, re-entry),
-`specs/embedded-state/spec.md` (the one added requirement), `design.md`'s
-"the resume sets `stepIndex` once" section, `user-flow.md` §2–3,
-`SetupFlow.qml`, `SetupWizard.qml`, `Main.qml`, `EmbeddedState.qml`,
-`RepoList.qml`, `tst_setup_wizard.qml`, `tst_setup_host.qml`,
-`tst_embedded_state.qml`, `tst_embedded_panel.qml`, `local.yaml`.
+Verification method: ran the full Rust FFI suite (`cargo test`, all green,
+including the new `key_encrypted` tests) and every relevant QML component
+test file (`tst_embedded_state.qml`, `tst_embedded_panel.qml`,
+`tst_setup_wizard.qml`, `tst_setup_wizard_view.qml`, `tst_setup_host.qml`,
+`tst_source.qml` — all green), then made targeted mutations to check that
+claimed test coverage actually reddens, restoring each afterward and
+confirming `git status` clean.
 
-Method: read every handler in `SetupFlow.qml` for the binding-update trap and
-the epoch/staleness guard, then reproduced the five mutations the dev-writer's
-report named by actually applying them, running the suite, and reverting
-before moving to the next. All mutations were made and reverted in this
-worktree only; `git status` is clean and no mutation is left in place. Full
-suite baseline (`sh radicle-ui/tests/run-qml-tests.sh`, all 31 `tst_*.qml`
-files): **31 files, 533 passed, 0 failed** both before and after this review —
-confirmed by summing every file's own `Totals:` line, not assumed from the
-prompt's claim.
+## One real defect found
 
-## The re-entry hazard — reproduced exactly as claimed
+- [ ] **`dev-writer`** — `radicle-ui/src/qml/SetupFlow.qml:701-702`, function
+      `submitIdentity` — the `createIdentity(...)` reply handler's staleness
+      guard (`if (!isCurrent(issuedAt)) return;`) is present and correct, but
+      **no test in `tst_setup_wizard.qml` or `tst_setup_wizard_view.qml`
+      exercises it** for this specific call. Deleting that one guard line
+      leaves the entire 50-test `tst_setup_wizard.qml` suite green.
+      **Scenario:** user is on the identity step with no identity yet,
+      submits creation against a slow backend, then presses `back()` before
+      the reply lands (this bumps `epoch` per the file's own staleness
+      contract). The stale `createEmbeddedIdentity` reply then arrives
+      reporting success. Without the guard, `flow.identityExists`,
+      `flow.identityNodeId`, `flow.identityCreatedHere` and `flow.embeddedHome`
+      are all overwritten from a call issued under a step the user has left —
+      exactly the "reply issued before the user moved must not repopulate the
+      step now in force" property `embedded-setup/spec.md`'s "The flow reads
+      the backend and keeps no second opinion" requirement states, and which
+      the file's own header comment calls out as the reason every call
+      carries an epoch. (The guarded branch also reads `flow.step ===
+      "identity"` before auto-advancing, so in some interleavings this could
+      additionally fire an unwanted `advance()` on whatever step the user has
+      since reached — e.g. if they returned to "identity" via `back()`/`
+      advance()` for an unrelated reason before the stale reply landed.)
+      **Measured:** removed the `if (!isCurrent(issuedAt)) return;` line at
+      `SetupFlow.qml:702` — `qmltestrunner -input tst_setup_wizard.qml`
+      reported 50 passed, 0 failed. Restored the line and re-ran to confirm
+      the green baseline is unaffected (50/50 again). This is the same class
+      of gap the file's own header names as this repo's standing failure mode
+      (`wantRid`/`syncEpoch` guards each hand-written slightly differently and
+      each missing a test for at least one dropped capture) — here the guard
+      itself was *not* dropped, but no test exists that would notice if it
+      were. A test asserting "a stale identity-creation reply does not
+      overwrite the step the user has since left" (parallel to the existing
+      `test_a_late_reply_does_not_repopulate_a_step_the_user_left`, which
+      covers the *preflight* calls only) would close this.
 
-**Mutated `landOnFirstUnfinishedStep()` in `SetupFlow.qml` from a single
-assignment into a loop over `advance()`:**
+## Claims verified
 
-```qml
-function landOnFirstUnfinishedStep() {
-    while (stepIndex < resumeIndex) {
-        if (!advance()) break;
-    }
-}
-```
+- **Autostart (`wantsAutoStart: current === "stopped" && !encrypted`,
+  `EmbeddedState.qml:256`).** Deleting the `current === "stopped" &&` term
+  (leaving only `!encrypted`) reddens `test_no_autostart_outside_the_stopped_state`
+  with all seven of its rows wrong, exactly as the file's own comment claims.
+  Restored and reconfirmed green.
+- **`test_a_list_built_already_stopped_starts_its_node`
+  (`tst_embedded_panel.qml:738`)** genuinely builds a *fresh* `RepoList`
+  already in the stopped/unencrypted state rather than mutating an existing
+  harness — closing the gap named in the review brief. Confirmed by deleting
+  `RepoList.qml`'s `Component.onCompleted: autoStartIfWanted()`: this
+  specific test failed, plus three others that depend on the same
+  construction-time path (`test_an_unencrypted_stopped_node_is_started_without_being_asked`,
+  `test_the_automatic_start_is_issued_once_not_on_every_reading`,
+  `test_a_refused_automatic_start_is_reported_and_not_retried`). Restored and
+  reconfirmed green (30/30 in that file, plus the 30/30 in
+  `tst_embedded_state.qml`).
+- **`foundForeignNode: serving && !startSucceeded`
+  (`EmbeddedState.qml:293`).** Deleting the `!startSucceeded` term reddens
+  exactly the three tests the code comment names:
+  `test_a_node_this_surface_started_is_not_reported_as_contention` and
+  `test_a_node_the_surface_did_not_start_is_still_reported` in
+  `tst_embedded_state.qml`, and
+  `test_a_node_this_surface_started_is_not_rendered_as_contention` in
+  `tst_embedded_panel.qml` — the last failing with the message text being
+  exactly the contention sentence rendered over the surface's own success
+  sentence, i.e. the reproduction of the user's photographed screenshot.
+  Restored and reconfirmed green (30/30 and 30/30 respectively).
+- **The Rust `encrypted` probe (`profileinit::key_encrypted`,
+  `radicle/rust-ffi/src/profileinit.rs:216`).** Read the implementation and
+  its five new tests in `radicle/rust-ffi/tests/profile_init.rs`. It correctly
+  distinguishes "unencrypted" from "unreadable": on `Keystore::new(...).is_encrypted()`
+  returning `Err`, it reports `{"encrypted": false, "problem": "<non-empty>"}`,
+  never `{"encrypted": false, "problem": ""}` — verified structurally (the
+  `Err` arm always constructs a non-empty `problem` string) and by the test
+  suite, including a case where the key file is replaced by a directory
+  (`an_unreadable_key_reports_a_problem_rather_than_unencrypted`) and a case
+  with no key at all (`a_home_with_no_key_reports_a_problem_rather_than_unencrypted`).
+  The C++ wiring in `radicle_impl.cpp`'s `getEmbeddedIdentity()` correctly
+  only calls this probe when `exists` is true (avoiding a spurious "no key"
+  problem on an ordinary empty home), and on a JSON-parse failure of the
+  probe's own reply falls back to a synthesized non-empty `problem` rather
+  than silently defaulting `encrypted` to `false` with an empty `problem`.
+  All Rust FFI tests pass (`cargo test --manifest-path
+  radicle/rust-ffi/Cargo.toml`): 10+9+18+6+8+15+13+13+7+19 = 118 tests, 0
+  failed. C++ unit test additions in `test_radicle_impl.cpp` round-trip both
+  directions (plain and sealed) through a **fresh** `RadicleImpl` instance
+  that never saw the creating call's reply, which is the right shape to prove
+  "observed from disk" rather than "echoed from the creating call."
+- **The orphaned `flow.startNode` injection (defect fix, `6407072`).**
+  Confirmed genuinely removed from `Main.qml` — grepped for all
+  `startNode`/`confirmStep`/`allowCommand`/`submitStart`/`refreshNodeStatus`
+  references across `SetupFlow.qml`, `SetupWizard.qml` and `Main.qml`; the
+  only remaining hits are comments/tests documenting the absence. Re-added
+  the exact orphaned line (`flow.startNode: function (passphrase, cb) {
+  root.callSettings("startNode", [passphrase], cb); }`) to `Main.qml` and ran
+  `lint-qml.sh`: `qmllint` reports `Could not find property "startNode".` at
+  the exact injection line, the script's grep for that literal string fires,
+  and the script exits non-zero (verified both through the wrapper script and
+  directly via `qmllint -I <qml_dir> Main.qml`). The gate does catch a
+  reintroduction of this exact defect. Restored and reconfirmed `git status`
+  clean.
+- **`landOnFirstUnfinishedStep` deliberately not bumping `epoch`
+  (`SetupFlow.qml:559-562`).** Added `epoch = epoch + 1;` to the function —
+  this reddens `test_the_landing_does_not_discard_a_reply_still_in_flight`,
+  confirming the comment's claim that bumping the epoch here would discard a
+  still-in-flight preflight reply (e.g. the seed list) arriving after the
+  resume landing. Restored and reconfirmed green.
+- **`SourceState.modeHasIdentity: current === "local"`
+  (`SourceState.qml`)**, and its use in `Main.qml` gating the header's
+  `NodeIdentity` visibility. Read the diff; this is a single rule derived
+  from `current` (which already folds `local`/`embedded` → `"local"`) rather
+  than a per-mode list, so a future mode with an identity inherits correct
+  behaviour without an edit here. `tst_source.qml`'s
+  `ModeDetailSlot`/`NodeIdentity` suites (30 tests) all pass, including
+  `test_embedded_shows_its_identity_as_local_does` and
+  `test_having_an_identity_is_derived_rather_than_listed`.
+- **`actionKind !== ""` redundant term in `actionEnabled`
+  (`EmbeddedState.qml:433`).** This was already corrected in this round per
+  the code comment at line 424-432, which explicitly documents that an
+  earlier version of the comment made a false claim about a test reddening
+  and that mutation testing showed no such test existed. Re-verified the
+  comment's own logical claim holds: `actionHosted`'s `switch` has a
+  `default: return false` that already covers `actionKind === ""`, so the
+  extra term is provably redundant by inspection, matching what the comment
+  now says. This is a case of the review process correcting itself and
+  recording it — nothing further to flag.
+- **`takeEmbeddedAction`/`routesEmbeddedAction` table
+  (`Main.qml`)**: the "start" branch in `takeEmbeddedAction` is gated by
+  `routesEmbeddedAction(kind)` before the `if/else if` runs, so the
+  enablement table (`routesEmbeddedAction`) and the act performed cannot
+  disagree by construction — matches the comment's claim about the earlier
+  defect (`embeddedStartHosted` gating the control while a bare `if` gated
+  the act). `tst_setup_host.qml`'s
+  `test_every_hosted_kind_is_one_the_host_routes` passes.
 
-Ran `tst_setup_wizard.qml` (50 tests). Result: **49 passed, 1 failed** —
-`test_the_landing_does_not_discard_a_reply_still_in_flight` is the only one
-that reddens, with the exact failure the file's own comment predicts (`seeds`
-length actual `0`, expected `2`). `test_the_resumed_steps_findings_are_populated`
-— the test that restates the spec's scenario almost word for word — **stays
-green** against the loop, exactly as the dev-writer's self-report claims: the
-harness is synchronous, all three gating replies (`getCapabilities`,
-`getEmbeddedIdentity`, `getNodeStatus`) are written before `advance()` ever
-runs, and bumping the epoch on the way to `resumeIndex` discards nothing
-because nothing is still in flight by then. Only the held `listKnownSeeds`
-reply — the one probe that does not gate `preflightDone` — is genuinely
-outstanding at the moment a real loop would move the epoch, and it is the only
-thing the loop mutation actually destroys.
+## Areas covered and clean
 
-This is worth restating plainly for whoever reads only the tests next time:
-**`test_the_resumed_steps_findings_are_populated` is not the regression guard
-its name suggests.** It is a real, useful test (it pins the resumed step's
-findings against a hand-walked equivalent), but it cannot fail against the one
-specific defect ("landing loops instead of assigning") that this piece's
-design doc calls out as the whole reason for a single assignment. The comment
-block directly above the test already says this in the source
-(`tst_setup_wizard.qml:1225-1240`) — so this is confirmed rather than a new
-finding, and no action is needed beyond noting it held up under an independent
-run.
+- `radicle/rust-ffi/src/profileinit.rs`, `lib.rs`, and the C++
+  `radicle_impl.cpp`/`.h`, `local_reader.cpp`/`.h`, `radicle_ffi.h` wiring for
+  the new `encrypted`/`problem` fields on `getEmbeddedIdentity()`.
+- `SetupFlow.qml`'s four-step collapse: step sequencing (`advance`/`back`),
+  the four preflight findings and their blocking rules, the identity step's
+  single forward control and three-state derivation, the embedded step's
+  mode-confirmation gating, and the resume/landing logic
+  (`resumeIndex`/`landOnFirstUnfinishedStep`) — all match
+  `embedded-setup/spec.md` and are covered by passing, mutation-verified
+  tests, apart from the one gap above.
+- `EmbeddedState.qml`'s seven-state derivation, the `startPending`/
+  `startSucceeded`/`foundForeignNode` distinctions, and
+  `actionEnabled`/`actionUnavailableNote` — all correct and covered.
+- `RepoList.qml`'s `hasNodeToAsk` guard, the blank-pane observable, and the
+  passphrase field lifetime (cleared on submit, not on reply) — read
+  correctly against the spec and passing tests.
+- `lint-qml.sh` — verified it structurally does fire on the exact defect
+  class it was written for (a `Could not find property` warning on an
+  assignment to a deleted property), independent of the readability
+  reviewer's correction about the stale "34 of that form, 1 of the form
+  below" count in its comment (that count is a readability/prose-accuracy
+  concern about the script's own comment, not about whether the gate
+  functions — I did not rely on it for anything and it does not affect this
+  finding).
 
-Reverted the mutation; `SetupFlow.qml` is back to the single assignment and
-the file is unmodified in git status.
+## Not investigated further
 
-## The lapsed `!startPending` proof — reproduced
-
-**Mutated `EmbeddedState.qml`'s `actionEnabled`** from
-`actionKind !== "" && actionHosted && !startPending` to
-`actionKind !== "" && actionHosted`. Ran `tst_embedded_state.qml` (21 tests).
-Result: **20 passed, 1 failed** — exactly
-`test_an_outstanding_start_withholds_a_hosted_start_control`, and no other
-test. This confirms the comment directly above `actionEnabled`
-("Deleting the `!startPending` term turns
-`test_an_outstanding_start_withholds_a_hosted_start_control` red") and confirms
-the reasoning for why the test arms `startHosted` deliberately: with
-`startHosted: false` (every other test's default), `actionEnabled` is already
-`false` for every input, so a version without `!startPending` would pass every
-other assertion in the file — the restrengthened test is the only one that can
-see the term at all today. Reverted; file unmodified in git status.
-
-## The other three named mutations — each reproduced, each reddens exactly one test
-
-Applied against the `tst_setup_host.qml` harness (which reproduces `Main.qml`'s
-host shape; `Main.qml`'s own `openSetup()` was diffed line-for-line against the
-harness's copy and the two match exactly, so the reproduction has not
-diverged for this piece):
-
-- **Rely on `Component.onCompleted` instead of an explicit `show()` on every
-  raise** (`openSetup()` drops the `setupWizard.show()` call). Ran
-  `tst_setup_host.qml` (10 tests): **9 passed, 1 failed** —
-  `test_raising_the_setup_restarts_the_flow`, with the exact symptom the test
-  names (`currentStep` stays `"preflight"` instead of landing at `"identity"`
-  on the first showing, because nothing ever called `restart()`).
-- **Route every kind to `openSetup()`** (`takeEmbeddedAction(kind)` calls
-  `openSetup()` unconditionally instead of gating on `kind === "setup"`). Ran
-  `tst_setup_host.qml`: **9 passed, 1 failed** —
-  `test_a_start_request_does_not_raise_the_setup`, which is exactly the pair
-  this requirement is stated as ("a start request does not raise the setup,
-  and a setup request does").
-- **Drop the raise exclusion** (`openSetup()` no longer sets
-  `settingsOpen = false`). Ran `tst_setup_host.qml`: **9 passed, 1 failed** —
-  `test_raising_each_surface_lowers_the_other`, on the "and settings are
-  lowered" assertion specifically.
-
-All three mutations were made in the test harness file, run, observed, and
-reverted; `git status` confirms `tst_setup_host.qml` is back to its original
-content and no other file was touched by these three.
-
-## Other checks made, no defect found
-
-- **`root.setupShown`/`root.settingsShown` read the pane's `visible`, not the
-  raw flags.** Confirmed in `Main.qml:534-535` — both are
-  `<pane>.visible` rather than `root.setupOpen`/`root.settingsOpen` directly,
-  matching the comment's stated reason (a copy of a condition agrees with the
-  item whether or not it renders). `local.yaml` asserts both together in the
-  steps around the setup's raise/lower, which is the layer that can actually
-  see a divergence between the flag and the rendered pane.
-- **Re-entrancy of `restart()`.** If `restart()` is called a second time
-  before a first call's preflight has answered (e.g. the host raises the
-  setup, lowers it, and raises it again quickly), `reset()` at the top of the
-  second `restart()` bumps `epoch` first, so any callback still in flight from
-  the first `runPreflight()` fails `isCurrent()` and cannot fire
-  `onAllProbesAnsweredChanged` against the wrong showing's `resumeWanted`.
-  Traced through the code; no test exercises this directly, but the mechanism
-  is the same epoch guard already proven above, and no failure scenario was
-  found — recorded as read-and-cleared rather than a gap, since a fourth
-  `restart()`-during-`restart()` scenario would need a held-reply fixture this
-  suite already has the pattern for if someone wants to add it later.
-- **`submitStart`'s stale-reply branch still clears `startPending`.** Even
-  when `!isCurrent(issuedAt)`, `submitStart`'s callback sets
-  `flow.startPending = false` before returning (`SetupFlow.qml:606-609`).
-  This is correct rather than a leak: the pending flag is local UI state about
-  whether *this view* is waiting on a call, and a call issued from a step the
-  user has left still needs its semaphore released or a later step's
-  `canStartNode` would stay wedged. `test_a_late_reply_does_not_repopulate_a_step_the_user_left`
-  passing (confirmed in the full run) shows the *data* is still correctly
-  dropped; only the pending flag resolves.
-- **`confirmEmbedded()`'s `refreshCapabilities()` re-entrancy.** If the step
-  changes between `saveSetting`'s reply and the nested `refreshCapabilities()`
-  call, the outer `isCurrent(issuedAt)` check in `confirmEmbedded`'s callback
-  already returns before `refreshCapabilities()` is ever invoked, so there is
-  no window where a stale `refreshCapabilities()` call is issued under the
-  wrong epoch. No defect.
-- **`landOnFirstUnfinishedStep()` deliberately does not bump `epoch`.**
-  Confirmed by reading and by the mutation above: the function's whole
-  contract is "assign once, leave the epoch where the preflight replies were
-  issued" — bumping it here would have the opposite effect the fix is for,
-  discarding the very seed-list reply the design doc calls out. Correct as
-  written.
-- **Test-count and file-count claims.** Ran `sh
-  radicle-ui/tests/run-qml-tests.sh` directly (not `| tail`), captured full
-  output, counted `^--- tst_` occurrences (31) and summed every `Totals:`
-  line's "passed" figure (533), with 0 failed throughout. Matches the
-  dev-writer's report exactly.
-
-## Judged, not flagged
-
-- `tst_setup_host.qml`'s honesty about its own limits (documented in its file
-  header: it is a reproduction of `Main.qml`'s shape, not `Main.qml` itself,
-  and the gap is closed only by `local.yaml`, which is unrun in this
-  environment) is accurate and not a finding — `Main.qml`'s `openSetup()` was
-  diffed against the harness's copy line-for-line and the two match for
-  everything this piece touches.
-- The four new `local.yaml` steps are unrun here, per the prompt's stated
-  known gap. Read them for divergence from the component-level reproduction
-  rather than run them; found none — the assertions on `setupShown`,
-  `settingsShown`, `reposEmbeddedPanel`/`reposEmbeddedState`, and `navView`
-  match what the host and the state derivation actually implement.
-
-## Clean
-
-The re-entry/landing logic (`restart()`, `resumeIndex`, `landOnFirstUnfinishedStep()`),
-the `EmbeddedState` seven-state derivation and its ordering, the host wiring in
-`Main.qml`/`tst_setup_host.qml` (raise/lower exclusion, kind-routing, restart
-on show), and the `!startPending` guard in `actionEnabled` were all
-independently reproduced by mutation and each reddens exactly the test the
-dev-writer's report says it should, with no unexpected collateral failures and
-no unexpected survivors. No new correctness defect was found in this piece
-beyond what the report already surfaces.
+Did not re-review the state-panel/wizard-host pieces already closed at
+`b802335`, per scope. Did not attempt a `cargo mutants` run over
+`radicle/rust-ffi` beyond the targeted manual mutations above (time-boxed;
+manual mutation on the specific new surface — `key_encrypted` and its
+call sites — was sufficient to verify the claims in scope).
