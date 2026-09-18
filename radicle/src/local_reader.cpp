@@ -123,6 +123,11 @@ std::string LocalReader::profileExists(const std::string& home)
     return take(radicle_local_profile_exists(home.c_str()));
 }
 
+std::string LocalReader::keyEncrypted(const std::string& home)
+{
+    return take(radicle_local_key_encrypted(home.c_str()));
+}
+
 std::string LocalReader::initProfile(const std::string& home, const std::string& alias,
                                      const std::string& passphrase)
 {

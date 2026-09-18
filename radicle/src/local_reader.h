@@ -118,6 +118,25 @@ public:
     /// -> {"exists":bool}
     static std::string profileExists(const std::string& home);
 
+    /// Whether the identity at `home` is sealed with a passphrase.
+    ///
+    /// Asked because the node is handed an already-decrypted signing key when
+    /// it is built: whether a passphrase is needed has to be known *before* a
+    /// start is attempted, and `initProfile`'s `encrypted` — computed from its
+    /// argument, on a reply only the creating session holds — cannot answer it.
+    ///
+    /// This is the one read on this path that opens the **secret** key file.
+    /// It parses the envelope rather than unlocking it: no passphrase, no
+    /// ssh-agent, nothing rewritten.
+    ///
+    /// **A non-empty `problem` means the question could not be answered, which
+    /// is not the same as an unencrypted key.** Reading `encrypted` alone
+    /// collapses the two, and the collapse is the dangerous direction — an
+    /// unreadable key would be started with an empty passphrase.
+    ///
+    /// -> {"encrypted":bool,"problem":"…"}
+    static std::string keyEncrypted(const std::string& home);
+
     /// Create a Radicle identity at `home`, the way `rad auth` does.
     ///
     /// **Refuses an existing profile rather than overwriting it.** The signing
