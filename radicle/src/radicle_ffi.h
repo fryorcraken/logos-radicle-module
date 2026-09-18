@@ -198,6 +198,27 @@ char* radicle_local_node_id(const char* home);
 /// -> {"exists":bool}
 char* radicle_local_profile_exists(const char* home);
 
+/// Whether the identity at `home` is sealed with a passphrase.
+///
+/// **The only way a later session can learn whether starting the node needs a
+/// passphrase.** The node is handed an already-decrypted signing key when it is
+/// built, so the question has to be answered *before* a start is attempted;
+/// `radicle_local_init_profile`'s `encrypted` field computes its answer from the
+/// passphrase argument and rides a reply no later session holds.
+///
+/// Reads the **secret** key file, unlike every other read on this path, which
+/// touches only `keys/radicle.pub`. It parses the key's envelope and reports
+/// which kind it is — no passphrase, no ssh-agent, nothing unlocked and nothing
+/// written back.
+///
+/// `problem` is non-empty when the key could not be read at all, and that is
+/// **not** the same answer as an unencrypted key: a caller reading `encrypted`
+/// alone would start the node with an empty passphrase against a key it cannot
+/// read. The two travel together for that reason.
+///
+/// -> {"encrypted":bool,"problem":"…"}
+char* radicle_local_key_encrypted(const char* home);
+
 /// Creates a Radicle identity at `home`, the way `rad auth` does.
 ///
 /// **An existing profile is refused, never overwritten.** This is the one
