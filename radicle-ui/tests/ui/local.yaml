@@ -105,7 +105,10 @@
 #     matters MORE since Embedded became startable: the not-implemented
 #     placeholder used to keep that pane populated no matter what, and an
 #     embedded home with no identity is now the first state in this app that
-#     legitimately has nothing to list.
+#     legitimately has nothing to list. It is paired with
+#     `reposEmbeddedPanel`/`reposEmbeddedState`, which name WHAT is standing
+#     there — a panel that drew nothing and a panel that drew the wrong state
+#     fail differently, and only the second pair can see the second.
 #
 # WHAT THIS LAYER STRUCTURALLY CANNOT COVER, so nobody re-derives it.
 #
@@ -500,6 +503,15 @@ steps:
   # in Local — so an empty one HERE can only mean the mode stopped reporting that
   # profile's key, which is the property under test. Against a build with the
   # fall-through bug this is non-empty and fails.
+  #
+  # **This assertion got sharper when the header started showing Embedded's own
+  # DID.** It used to hold partly for a reason that had nothing to do with
+  # isolation: the header's identity was gated on `mode === "local"`, so Embedded
+  # showed nothing whatever the backend reported. `root.nodeIdentity` reads
+  # `caps.nodeId` rather than the rendered slot, so it was never the gate that
+  # made this pass — but the two failures would have been indistinguishable on
+  # screen. Now the slot renders whatever this reports, so an emptiness here is
+  # visibly an emptiness the backend stated.
   - name: and carries no identity from it
     expect:
       state:
@@ -514,26 +526,110 @@ steps:
   # placeholder items' own `visible`, so it can only be false when something is
   # genuinely rendered. See RepoList.sayingNothing.
   #
-  # It matters MORE now, not less. While Embedded was unstartable the
-  # not-implemented state kept this pane populated whatever happened; that
-  # placeholder is gone, so an embedded home with no identity is the first state
-  # in this app that legitimately has nothing to list. If anything here is going
-  # to render nothing at all, it is this.
+  # **It is only genuinely meaningful now.** While Embedded was unstartable the
+  # not-implemented state kept this pane populated whatever happened, so this
+  # step could not fail here; the flip removed that placeholder and, for one
+  # change, nothing replaced it — an empty list under a red banner, which is the
+  # regression the Embedded state panel exists to repair. The panel is what
+  # `sayingNothing` reads here now, so this step and the one after it are the
+  # pair that says the panel both drew and drew the right thing.
   - name: and it is not merely blank
     wait_for:
       state: "root.reposSayingNothing === false"
     timeout: 45s
 
-  # The not-implemented state must be GONE — it is now a false claim about a
-  # mode the module fully supports short of a node daemon.
+  # What IS on screen, named. This is the assertion that replaced
+  # `root.reposNotImplemented === false`.
   #
-  # Asserted separately from the blank-pane check above because the two fail
-  # differently: this one catches a screen still saying "Embedded is not
-  # available in this version", which is a specific lie, while the one above
-  # catches a screen saying nothing at all.
-  - name: and no longer claims the mode is unimplemented
+  # That check was real while Embedded was the mode that set the flag — the
+  # placeholder had to come down, or the mode would render as one the build
+  # cannot start. With all three modes startable the flag is false everywhere, so
+  # it became a check nothing could fail; and deleting it outright would have
+  # left the one state a user actually lands in with nothing asserting anything
+  # about it. This spec runs against a real embedded home with no identity in it,
+  # which is state E1, so the replacement names E1.
+  #
+  # Both halves are asserted because they fail differently. `reposEmbeddedPanel`
+  # is read off the rendered item's own `visible`, so it catches a panel that
+  # derived correctly and never drew — which is a blank pane, and which the check
+  # above would catch too. `reposEmbeddedState` catches the panel drawing the
+  # WRONG state: a running-and-empty sentence over a home with no identity would
+  # satisfy every other assertion in this file.
+  - name: and renders the no-identity state instead
     expect:
-      state: "root.reposNotImplemented === false"
+      state:
+        - "root.reposEmbeddedPanel === true"
+        - "root.reposEmbeddedState === 'noIdentity'"
+
+  # And it asked nothing to get there. `navError` is what the old defect
+  # produced: `localListRepos` went out against a home with no identity, the
+  # backend returned `absentProfileReason`, and it latched into the red strip
+  # under a panel explaining that no node exists.
+  - name: and nothing errored, because nothing was asked
+    expect:
+      state: "root.navError === ''"
+
+  # ---- the setup, raised and lowered --------------------------------------
+  #
+  # The panel's action emitted `embeddedActionTaken` and NOTHING LISTENED. A
+  # user in the state this spec is now in — Embedded, a real home, no identity —
+  # got a button that did nothing at all when clicked. That is the dead end this
+  # milestone exists to remove, and it was invisible to every layer: the
+  # component suite asserted the signal was emitted, which it was.
+  #
+  # So the assertion is on the HOST, through the real click. `Main.qml` has no
+  # component test — nothing instantiates it, and `tst_setup_host.qml`
+  # reproduces its shape rather than driving it — so these four steps are the
+  # only thing in any layer that can see the real button reaching the real host.
+  #
+  # The step before this one is what closes the other half of the rule: it
+  # asserted the panel rendering after Embedded was SELECTED, and `setupShown`
+  # is false there, so "selecting Embedded must not auto-open the setup" is
+  # already proved by the time this clicks anything. That is why no separate
+  # step asserts it — the observable existing is what made the existing step
+  # cover it.
+  - name: the setup is not raised until it is asked for
+    expect:
+      state:
+        - "root.setupShown === false"
+        - "root.settingsShown === false"
+
+  - name: take the panel's setup action
+    click: { objectName: "embeddedStateAction" }
+
+  # Raised OVER the view, not navigated to. Both halves are asserted because
+  # they fail differently: a setup hosted as a navigation destination would
+  # satisfy `setupShown === true` while `navView` moved off the repository list,
+  # and a setup raised alongside settings would satisfy it while leaving the
+  # other surface unreachable behind it.
+  - name: the setup is raised over the screen that was there
+    wait_for:
+      state:
+        - "root.setupShown === true"
+        - "root.settingsShown === false"
+        - "root.navView === 'repos'"
+    timeout: 30s
+
+  # The way OUT, clicked rather than called — the whole defect class here is a
+  # control that reaches no handler, so invoking `closed()` directly would
+  # assert the handler works while leaving the door shut. Same reasoning as the
+  # Settings Back control above.
+  - name: close the setup
+    click: { objectName: "wizardClose" }
+
+  # Lowering restores exactly what was underneath and raises nothing in its
+  # place. `reposEmbeddedPanel` is re-asserted because the panel is what was
+  # under the overlay: a lowering that left the screen in some other state would
+  # satisfy `setupShown === false` on its own.
+  - name: the setup is lowered and the screen underneath is unchanged
+    wait_for:
+      state:
+        - "root.setupShown === false"
+        - "root.settingsShown === false"
+        - "root.navView === 'repos'"
+        - "root.mode === 'embedded'"
+        - "root.reposEmbeddedPanel === true"
+    timeout: 30s
 
   # ---- back to the seed ---------------------------------------------------
   #
@@ -575,9 +671,17 @@ steps:
   # RE-FETCHED, against the seed. `repoCount > 0` cannot be satisfied by the
   # embedded home, which is empty, so this can only pass if leaving Embedded
   # issued a fresh `remoteListRepos` and it landed.
+  #
+  # `reposEmbeddedPanel === false` is added because it CAN fail, where the old
+  # flag could not: the Embedded state panel is real in the mode just left, and a
+  # panel that failed to stand down would leave the seed's repositories rendering
+  # behind a sentence about a node with no identity. That is the same defect the
+  # deleted assertion was originally guarding against, restored to a referent
+  # that exists.
   - name: and the seed's repositories arrive
     wait_for:
       state:
         - "root.repoCount > 0"
         - "root.navError === ''"
+        - "root.reposEmbeddedPanel === false"
     timeout: 60s

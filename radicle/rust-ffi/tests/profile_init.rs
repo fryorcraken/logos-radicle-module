@@ -26,7 +26,7 @@
 mod fixture;
 
 use fixture::{parse, scratch_dir};
-use radicle_local_ffi::profileinit::{init_profile, profile_exists};
+use radicle_local_ffi::profileinit::{init_profile, key_encrypted, profile_exists};
 
 /// A scratch home path that does not exist yet — `init_profile` creates it.
 ///
@@ -475,6 +475,179 @@ fn a_relative_home_is_refused_rather_than_resolved_against_the_working_directory
         "a refused init resolved the relative path anyway and created {}",
         cwd.join(relative).display()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Reporting whether an EXISTING key is encrypted.
+//
+// `init_profile`'s reply already carries `encrypted`, and it is computed from
+// the passphrase argument — which makes it useless to any later session, since
+// no later session has that reply. `key_encrypted` observes the key on disk
+// instead, and these tests are written to tell the two apart: every one of
+// them reads a home some OTHER call created, with the creating reply thrown
+// away.
+// ---------------------------------------------------------------------------
+
+/// Both directions, observed from disk rather than echoed from an argument.
+///
+/// The two homes are created in the same test and their replies discarded, so
+/// an implementation that remembered what it was told has nothing to remember
+/// from. A probe hardcoding either answer fails one leg.
+#[test]
+fn the_reported_encryption_follows_the_key_that_was_written() {
+    let (dir_plain, home_plain) = fresh_home("key-encrypted-plain");
+    let (dir_sealed, home_sealed) = fresh_home("key-encrypted-sealed");
+
+    // The creating replies are deliberately dropped: what is under test is what
+    // a session that never saw them can still learn.
+    let _ = init_profile(&home_plain, "tester", "");
+    let _ = init_profile(&home_sealed, "tester", "correct horse battery");
+
+    let plain = parse(&key_encrypted(&home_plain));
+    assert_eq!(
+        plain["encrypted"],
+        serde_json::json!(false),
+        "a key written with an empty passphrase must read back as \
+         unencrypted: {plain}"
+    );
+    assert_eq!(
+        plain["problem"],
+        serde_json::json!(""),
+        "and with no problem to report: {plain}"
+    );
+
+    let sealed = parse(&key_encrypted(&home_sealed));
+    assert_eq!(
+        sealed["encrypted"],
+        serde_json::json!(true),
+        "a key written with a passphrase must read back as encrypted: {sealed}"
+    );
+    assert_eq!(
+        sealed["problem"],
+        serde_json::json!(""),
+        "and with no problem to report: {sealed}"
+    );
+
+    cleanup(&dir_plain);
+    cleanup(&dir_sealed);
+}
+
+/// The probe needs no passphrase, no `RAD_PASSPHRASE` and no ssh-agent.
+///
+/// This is the property that makes the field askable at all. `can_write` is the
+/// control: it needs the *private* half, so it fails against this same home in
+/// this same environment — which is what proves the probe is not quietly
+/// unlocking anything.
+#[test]
+fn reporting_encryption_needs_no_passphrase_and_no_agent() {
+    let (dir, home) = fresh_home("key-encrypted-no-secret");
+    let _ = init_profile(&home, "tester", "correct horse battery");
+
+    let probed = parse(&key_encrypted(&home));
+    assert_eq!(
+        probed["encrypted"],
+        serde_json::json!(true),
+        "an encrypted key must be reported as such without unlocking it: \
+         {probed}"
+    );
+    assert!(
+        probed["error"].is_null(),
+        "the question was answered, so it must not come back as an error \
+         object: {probed}"
+    );
+
+    // The control. If this passed, the environment would be holding the key
+    // open and the assertion above would prove nothing about secrets.
+    let can = parse(&radicle_local_ffi::cobwrite::can_write(&home));
+    assert_eq!(
+        can["canWrite"],
+        serde_json::json!(false),
+        "precondition: nothing in this environment can unlock the key, so \
+         the probe above cannot have been unlocking it: {can}"
+    );
+
+    cleanup(&dir);
+}
+
+/// Reading the key does not change it.
+///
+/// A probe that unsealed and rewrote the key would report the right answer and
+/// destroy the property it reported. The file's bytes are compared before and
+/// after, which is the only observation that would notice.
+#[test]
+fn reporting_encryption_leaves_the_key_untouched() {
+    let (dir, home) = fresh_home("key-encrypted-immutable");
+    let _ = init_profile(&home, "tester", "correct horse battery");
+
+    let key = std::path::Path::new(&home).join("keys").join("radicle");
+    let before = std::fs::read(&key).expect("the private key must exist");
+
+    let probed = parse(&key_encrypted(&home));
+    assert_eq!(probed["encrypted"], serde_json::json!(true), "{probed}");
+
+    let after = std::fs::read(&key).expect("the private key must still exist");
+    assert_eq!(
+        before, after,
+        "probing whether the key is encrypted must not rewrite it"
+    );
+
+    cleanup(&dir);
+}
+
+/// An unreadable key is NOT an unencrypted one, and the two must not be
+/// reported alike.
+///
+/// This is the requirement that a `Result` collapsed with `unwrap_or(false)`
+/// would silently break: the answer would be `encrypted:false` with nothing
+/// saying the question was never answered, and a caller would start a node with
+/// an empty passphrase against a key it cannot read.
+///
+/// The key file is replaced with a directory, which `Keystore::is_encrypted`
+/// cannot parse and cannot be mistaken for a plaintext key.
+#[test]
+fn an_unreadable_key_reports_a_problem_rather_than_unencrypted() {
+    let (dir, home) = fresh_home("key-encrypted-unreadable");
+    let _ = init_profile(&home, "tester", "");
+
+    let key = std::path::Path::new(&home).join("keys").join("radicle");
+    std::fs::remove_file(&key).expect("the private key must exist to replace");
+    std::fs::create_dir(&key).expect("could not put a directory in its place");
+
+    let probed = parse(&key_encrypted(&home));
+    assert_eq!(
+        probed["encrypted"],
+        serde_json::json!(false),
+        "an unreadable key must not claim to be encrypted: {probed}"
+    );
+    assert!(
+        !probed["problem"].as_str().unwrap_or_default().is_empty(),
+        "and must say the question could not be answered, or it is \
+         indistinguishable from a plaintext key: {probed}"
+    );
+
+    cleanup(&dir);
+}
+
+/// A home with no key at all reports a problem too, for the same reason.
+///
+/// `getEmbeddedIdentity()` only asks this where `exists` is true, so this is
+/// the defence in depth rather than the ordinary path — but "no key" answering
+/// `false` with an empty `problem` would be a plaintext key as far as any
+/// caller could tell.
+#[test]
+fn a_home_with_no_key_reports_a_problem_rather_than_unencrypted() {
+    let (dir, home) = fresh_home("key-encrypted-absent");
+    std::fs::create_dir_all(&home).expect("could not create the empty home");
+
+    let probed = parse(&key_encrypted(&home));
+    assert_eq!(probed["encrypted"], serde_json::json!(false), "{probed}");
+    assert!(
+        !probed["problem"].as_str().unwrap_or_default().is_empty(),
+        "a home with no key must say so rather than read as plaintext: \
+         {probed}"
+    );
+
+    cleanup(&dir);
 }
 
 /// The FFI boundary answers with JSON rather than unwinding.

@@ -29,10 +29,36 @@ Item {
 
     signal repoActivated(var repo)
 
+    /// The Embedded state panel's action was taken. `kind` is "setup", "start"
+    /// or "restart".
+    ///
+    /// **A request, not the act.** This screen creates no identity, starts no
+    /// node and writes no mode — it names what the user asked for and lets the
+    /// host decide, which is what keeps "rendering the state writes nothing" a
+    /// structural property rather than a promise.
+    ///
+    /// **Only "setup" reaches a host today**, and that is expressed as data
+    /// rather than as a rule this file knows: `app.embeddedSetupHosted` and
+    /// `app.embeddedStartHosted` say which requests are routed, and an action
+    /// whose request is not routed is rendered not-enabled with a sentence
+    /// saying so. Hosting start therefore means flipping one property on the
+    /// host — no edit here, and nothing for a future reader to notice.
+    ///
+    /// The signal is emitted only from an ENABLED control, so an unhosted act
+    /// cannot be requested even by a caller reaching past the button.
+    signal embeddedActionTaken(string kind)
+
     /// Rows currently listed — read by the UI tests.
     readonly property int count: repos.count
 
-    /// Whether this mode has no node to list at all.
+    /// Whether the reported startable set OMITS the mode in force.
+    ///
+    /// **This is no longer the fetch guard** — see `hasNodeToAsk`, which is.
+    /// Startability and "has a node to ask" are different questions, and reading
+    /// the first as the second is what lost the Embedded surface: a mode is
+    /// startable when it resolves a workable home, not when a node is running in
+    /// it. This property now decides one thing only, the unstartable
+    /// explanation, and is one of the two terms `hasNodeToAsk` conjoins.
     ///
     /// Keyed on the MODE rather than on `app.source`, and that distinction is
     /// the whole fix. `source` is the derived method prefix, and `local` and
@@ -56,10 +82,137 @@ Item {
     /// backend already reports means Phase 2 changes one list and this follows.
     readonly property bool notImplemented: !!app && app.modeStartable === false
 
+    /// The Embedded state in force, derived from what the backend reports.
+    ///
+    /// Inputs come from `app` — capabilities, identity and node status — and are
+    /// bound rather than copied, so a later reply moves the state without
+    /// anything here being told. A `null` app leaves every default in place,
+    /// which derives to `blocked`; that is only reachable before wiring exists,
+    /// and it is the inert direction (no fetch, no action).
+    ///
+    /// Held unconditionally rather than only in Embedded: it is a pure function
+    /// of its inputs, `embeddedShown` is what gates the rendering, and a
+    /// conditional instantiation would make the state unreadable from a test in
+    /// any other mode — which is exactly how a blank pane hides.
+    readonly property EmbeddedState embedded: EmbeddedState {
+        pathsProblem:   app ? (app.embeddedPathsProblem || "") : ""
+        home:           app ? (app.embeddedHome || "") : ""
+        identityExists: !!app && app.embeddedIdentityExists === true
+        // Defaults TRUE when there is no app, unlike every other field here,
+        // and the asymmetry is deliberate: a missing reply then asks for a
+        // passphrase nobody needs, which is visible and costs one dismissal,
+        // rather than starting a node unasked on a reply nobody supplied.
+        encrypted:      !app || app.embeddedEncrypted === true
+        running:        !!app && app.embeddedRunning === true
+        serving:        !!app && app.embeddedServing === true
+        startPending:   !!app && app.embeddedStartPending === true
+        startError:     app ? (app.embeddedStartError || "") : ""
+        startSucceeded: !!app && app.embeddedStartSucceeded === true
+        // Which requests the host actually routes. Absent means false, which is
+        // the inert direction: a named but disabled action, never an enabled
+        // one reaching nobody.
+        setupHosted:    !!app && app.embeddedSetupHosted === true
+        startHosted:    !!app && app.embeddedStartHosted === true
+        restartHosted:  !!app && app.embeddedRestartHosted === true
+    }
+
+    /// Issue the automatic start, exactly once per arrival in the stopped state.
+    ///
+    /// **The "once" is an edge, not a counter.** `wantsAutoStart` is a pure
+    /// derivation that is true only in `stopped` with an unencrypted key, and
+    /// issuing the start makes it false immediately — `startPending` moves the
+    /// state to `starting`, and the reply moves it on again. So the handler
+    /// cannot fire twice for one arrival however many times the backend reports
+    /// the same status, and it fires again only after the state has genuinely
+    /// left `stopped` and come back. A surface re-issuing on every reading would
+    /// start a node repeatedly against a backend that is slow to answer.
+    ///
+    /// `Connections` on the derived property rather than a call from wherever a
+    /// reply lands: the trigger is the ANSWER moving, not an input to it, which
+    /// is the same rule `Main.qml`'s `embeddedSettled` follows. Three replies
+    /// feed this state and any of them can be the one that completes it.
+    ///
+    /// **And `Component.onCompleted` beside it, which is not belt and braces.**
+    /// A change signal fires on a CHANGE, so a `RepoList` built against a
+    /// backend already reporting a stopped unencrypted node would never see
+    /// one — `wantsAutoStart` is true from its first evaluation. That is the
+    /// module starting up with Embedded already the mode in force, which is the
+    /// ordinary case for anyone who has used it before, and the one a live mode
+    /// change cannot reproduce. `design.md` records the same asymmetry biting
+    /// the setup host's own tests.
+    ///
+    /// An empty passphrase, which is what an unencrypted key takes — and the
+    /// only secret this surface can supply without asking for one.
+    ///
+    /// **No hosting check here, and that is deliberate rather than missing.**
+    /// `wantsAutoStart` carries the `startHosted` term itself, so this function
+    /// inherits the same gate the rendered control goes through instead of
+    /// re-deriving it — one place answering "may a start go out", not two that
+    /// can drift. Writing the check here instead would be the fourth copy of a
+    /// guard this repo keeps paying for, and it is the shape that let the
+    /// automatic path ignore the flag while the manual path honoured it.
+    function autoStartIfWanted() {
+        if (embedded.wantsAutoStart && app) app.startEmbeddedNode("");
+    }
+
+    /// Start the node with whatever was typed into the passphrase field.
+    ///
+    /// **The field is cleared as the call is issued, not when it is answered.**
+    /// The call already holds the value it needs, so clearing here makes the
+    /// secret's lifetime exactly the call rather than the call plus however
+    /// long the backend takes — and this repo's dev Basecamp ships the QML
+    /// inspector compiled in, which reads live object properties, so "resident"
+    /// means "readable".
+    ///
+    /// A refusal therefore empties the field, which is correct: the passphrase
+    /// that was refused is not the one to retry with, and `wantsPassphrase`
+    /// keeps the field on screen through `startFailed` so a corrected one can be
+    /// typed. Keeping the refused value would offer a user a filled field whose
+    /// contents are known wrong.
+    function submitEmbeddedPassphrase() {
+        if (!app || !embedded.actionEnabled) return;
+        var typed = passphraseField.text;
+        passphraseField.text = "";
+        app.startEmbeddedNode(typed);
+    }
+
+    readonly property Connections embeddedAutoStart: Connections {
+        target: page.embedded
+        function onWantsAutoStartChanged() { page.autoStartIfWanted(); }
+    }
+
+    Component.onCompleted: autoStartIfWanted()
+
+    /// Whether the Embedded state panel is the thing standing where a repository
+    /// list would be.
+    ///
+    /// In Embedded with nothing listed. NOT "in Embedded" alone: a serving node
+    /// with repositories renders the rows, and the panel would cover them.
+    readonly property bool embeddedShown:
+        !!app && app.mode === "embedded" && !notImplemented && count === 0
+
+    /// Whether this mode has a node that could answer a list request.
+    ///
+    /// **Keyed on whether there is a node to ask, never on whether the mode is
+    /// startable** — that is the requirement `source-modes` was re-keyed to and
+    /// the defect `embedded-state` exists to repair. `embedded` resolves a
+    /// workable home, so it is startable; a guard keyed on startability
+    /// therefore stopped firing for it at the same moment the panel behind it
+    /// stopped rendering, and the request went out against a home with no
+    /// identity.
+    ///
+    /// Both terms are live. `notImplemented` covers a mode the reported startable
+    /// set omits — no mode in this build, and the property is about the view for
+    /// any set it is given. `embedded.hasNodeToAsk` covers a startable mode whose
+    /// node does not exist or is not loaded.
+    readonly property bool hasNodeToAsk:
+        !notImplemented
+        && (!app || app.mode !== "embedded" || embedded.hasNodeToAsk)
+
     /// Whether this screen is currently saying NOTHING AT ALL: no rows, and no
     /// rendered explanation of why there are none.
     ///
-    /// Read off the two placeholder items' OWN `visible`, not recomputed from
+    /// Read off the three placeholder items' OWN `visible`, not recomputed from
     /// the same terms they are keyed on. That is the whole point: a copy of
     /// their conditions would agree with them whether or not either actually
     /// renders, which is the "fixture that answers the same for every input"
@@ -77,9 +230,45 @@ Item {
     /// `loadedOnce` is the term that keeps it honest: before the first reply
     /// there is legitimately nothing to say yet, and without it this would fire
     /// on every launch.
+    ///
+    /// **`embeddedState.visible` is carried here from the `notImplementedState`
+    /// this replaced, and that carrying is a requirement rather than tidiness.**
+    /// An observable naming an item that no longer exists silently reduces to a
+    /// constant: `!undefined` is `true`, so this would go on reporting "nothing
+    /// is rendered" whatever the panel did, and `tests/ui/local.yaml`'s
+    /// blank-pane assertion — the only assertion that can see a blank pane at
+    /// all — would stop being able to fail while continuing to pass.
+    ///
+    /// **`loadedOnce` is deliberately not required where a state panel is the
+    /// thing that should be rendering.** Four of the seven Embedded states issue
+    /// no request at all, so `loadedOnce` never becomes true in them — and a
+    /// version that required it would be false in every one of those states
+    /// whether or not the panel rendered. That is the fixture-that-answers-the-
+    /// same-for-every-input trap in the observable itself: the spec's scenario
+    /// "the observable follows the rendered item, not a recomputed copy"
+    /// prevents the panel from rendering and requires this to go TRUE, and it
+    /// could not.
+    ///
+    /// So `expectingAPanel` splits the two situations. Where a panel is what
+    /// should be on screen, its absence is the defect and there is nothing to
+    /// wait for. Where a list is, `loadedOnce` still keeps this quiet until the
+    /// first reply lands.
+    readonly property bool expectingAPanel: embeddedShown || notImplemented
+
+    /// Whether the Embedded state panel is ACTUALLY rendering.
+    ///
+    /// Read off the item's own `visible` rather than from `embeddedShown`, which
+    /// is the condition it is keyed on. The distinction is the one
+    /// `sayingNothing` documents: a copy of the condition agrees whether or not
+    /// the item draws, so an assertion on it cannot see the panel failing to
+    /// render — which is precisely the defect worth catching.
+    readonly property bool embeddedPanelShown: embeddedState.visible
+
     readonly property bool sayingNothing:
-        count === 0 && loadedOnce && !loading
-        && !notImplementedState.visible && !placeholder.emptyShown
+        count === 0 && !loading
+        && !embeddedState.visible && !notImplementedState.visible
+        && !placeholder.emptyShown
+        && (expectingAPanel || loadedOnce)
 
     ListModel { id: repos }
 
@@ -94,11 +283,18 @@ Item {
 
     function fetch() {
         if (!app) return;
-        // Embedded has no node to ask, so it asks nothing. Fetching and then
-        // hiding the result is how this bug returns: the reply would still be
-        // in flight, would still pass the prefix-based guard below, and would
-        // still repopulate the model behind the placeholder.
-        if (page.notImplemented) {
+        // A mode with no node to ask asks nothing. Fetching and then hiding the
+        // result is how this bug returns: the reply would still be in flight,
+        // would still pass the prefix-based guard below, and would still
+        // repopulate the model behind the panel — rows appearing under a
+        // sentence saying no node exists.
+        //
+        // The guard was keyed on `notImplemented` — on STARTABILITY — and that
+        // is what lost this surface. `embedded` became startable, so the guard
+        // stopped firing for it at the same moment the panel it protected
+        // stopped rendering, and `localListRepos` went out against a home with
+        // no identity. See `hasNodeToAsk`.
+        if (!page.hasNodeToAsk) {
             page.loading = false;
             page.hasMore = false;
             return;
@@ -318,11 +514,21 @@ Item {
     LoadingState {
         id: placeholder
         anchors.fill: parent
-        // Silenced entirely in Embedded. "No repositories matched" is a
+        // Silenced wherever no node answered. "No repositories matched" is a
         // DIFFERENT false claim, not a milder one: it says an embedded node
-        // exists and holds nothing, when none exists at all. A spinner would
-        // be worse still — it promises an answer that is not coming.
-        visible: !page.notImplemented && count === 0
+        // exists and holds nothing, when none exists, none is loaded, or its
+        // start was refused. A spinner would be worse still — it promises an
+        // answer that is not coming.
+        //
+        // The one state where the wording WOULD be true — `runningEmpty`, a
+        // serving node whose list came back with nothing — is covered by the
+        // panel's own sentence instead, which says the same thing and adds what
+        // the generic string cannot: that this node lists what it is SEEDING, so
+        // an empty list reads as a node with nothing seeded rather than as a
+        // node that has lost something. Two centred messages over one pane is
+        // one too many, so the panel stands down this placeholder in all seven
+        // states rather than in six.
+        visible: !page.notImplemented && count === 0 && !page.embeddedShown
         loading: page.loading
         loaded: page.loadedOnce
         count: repos.count
@@ -330,13 +536,25 @@ Item {
         loadingText: "Loading repositories…"
     }
 
-    // ---- Embedded: not implemented ------------------------------------
+    // ---- a mode this build cannot start -------------------------------
     //
     // A state of its own rather than an empty list, because the two say
-    // different things and only one of them is true. The wording is lifted
-    // from the toggle's own caption ("not available in this version yet") so
-    // the header and the body agree — this module has already shipped one bug
-    // from having two vocabularies for one fact.
+    // different things and only one of them is true.
+    //
+    // **It no longer names Embedded**, and that is the point rather than a
+    // tidy-up. This copy was written when Embedded was the one unstartable mode
+    // and read "Embedded … is not available in this version yet"; Embedded is
+    // startable now, so naming it here would be a false sentence rendered for
+    // whichever mode the backend actually declines. `source-modes` requires this
+    // state to be derived from the reported startable SET rather than from a
+    // mode name, and the wording has to follow the derivation or it re-encodes
+    // the mode name one layer up in prose.
+    //
+    // No mode in this build reports as unstartable, so this is the state a
+    // FOURTH mode — or a build where one of the three cannot run — inherits
+    // without a line of new UI. It also still renders during the window before
+    // the first `getCapabilities` reply, if that reply ever reports a set
+    // omitting the mode in force.
     Column {
         id: notImplementedState
         objectName: "notImplementedState"
@@ -349,8 +567,8 @@ Item {
             objectName: "notImplementedNote"
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: "Embedded runs a node inside Basecamp with its own separate "
-                + "identity — it is not available in this version yet."
+            text: "This version cannot start the selected mode, so there is no "
+                + "node to list repositories from."
             color: Theme.textDim
             font.pixelSize: Theme.fontLg
             wrapMode: Text.WordWrap
@@ -358,7 +576,7 @@ Item {
         }
 
         // Says what to do instead, so the state is not merely a dead end. It
-        // names the other two modes by the words on their segments.
+        // names the other modes by the words on their segments.
         Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
@@ -366,6 +584,166 @@ Item {
                 + "Radicle node on this machine."
             color: Theme.textFaint
             font.pixelSize: Theme.fontMd
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+        }
+    }
+
+    // ---- Embedded: the state panel ------------------------------------
+    //
+    // One centred panel standing where the repository list would be, saying
+    // which of the seven states is in force and offering that state's own next
+    // action. Never a spinner, and never "No repositories matched" — see
+    // `EmbeddedState.qml` for why each state is its own sentence rather than one
+    // banner with one button.
+    //
+    // **This replaces `notImplementedState` as the thing `sayingNothing`
+    // watches**, and that carrying is a requirement in its own right: an
+    // observable naming an item that no longer exists reduces to a constant,
+    // and the end-to-end assertion consuming it stops being able to fail while
+    // continuing to pass.
+    Column {
+        id: embeddedState
+        objectName: "embeddedState"
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Theme.gapLg * 2, Theme.captionWidth)
+        spacing: Theme.gap
+        visible: page.embeddedShown
+
+        Text {
+            objectName: "embeddedStateNote"
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            // The state's sentence, verbatim where the backend wrote it. Bound
+            // rather than assigned, so a later reply moves the words with the
+            // state and the two cannot disagree.
+            text: page.embedded.sentence
+            color: Theme.textDim
+            font.pixelSize: Theme.fontLg
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+        }
+
+        // ---- the passphrase, where one is needed --------------------------
+        //
+        // **One field on this surface, not a step of a flow.** A passphrase is
+        // one answer to one question asked at one moment; routing it through the
+        // guided setup would make the user walk steps whose work is already done
+        // to reach the only one that is not.
+        //
+        // Shown for an encrypted key in `stopped` and in `startFailed`, which
+        // `wantsPassphrase` decides: a mistyped passphrase is the likeliest
+        // refusal, and the field has to survive one so it can be corrected.
+        TextField {
+            id: passphraseField
+            objectName: "embeddedPassphrase"
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(parent.width, 280)
+            visible: page.embedded.wantsPassphrase
+            // Never displayed as it is typed.
+            echoMode: TextInput.Password
+            placeholderText: "passphrase"
+            // Enter submits, because a single field with a button below it is a
+            // form and a user will press it.
+            onAccepted: page.submitEmbeddedPassphrase()
+
+            // **Emptied the moment the field stops being shown.**
+            //
+            // The third instance in this piece of a passphrase outliving the
+            // showing it was typed for, and the one with no lifecycle event to
+            // hang a fix on: `SetupWizard.qml` is recreated per opening and
+            // clears in `show()`, but this `TextField` is a permanent object in
+            // `RepoList`'s tree, so nothing was ever told "a showing ended".
+            // `visible` IS that event — it is bound to `wantsPassphrase`, so it
+            // goes false exactly when the surface stops asking.
+            //
+            // Clearing on the way OUT rather than on the way in, deliberately.
+            // Both close the reviewer's cycle (type, let the field hide, let it
+            // return pre-filled), but hiding is the earlier moment: clearing on
+            // re-show would leave the secret resident for the whole span the
+            // field is hidden, and this module's dev Basecamp ships the QML
+            // inspector compiled in, so "resident" means "readable".
+            //
+            // Nothing legitimate is lost. `submitEmbeddedPassphrase()` already
+            // empties the field as the call is issued, so the `startFailed`
+            // showing — the one case that must survive, so a refused passphrase
+            // can be corrected — arrives at an empty field either way, and
+            // `wantsPassphrase` holds `visible` true across that transition
+            // regardless.
+            //
+            // Removing this line turns
+            // `test_an_abandoned_passphrase_does_not_survive_the_showing` red
+            // with the typed value coming back on the re-showing.
+            onVisibleChanged: if (!visible) text = "";
+        }
+
+        // The state's own action. Absent — not disabled-and-unexplained — where
+        // the state offers none: `blocked` offers nothing that would write,
+        // because nothing could succeed, and the sentence above already names
+        // the obstacle; and a stopped node with an unencrypted key offers none
+        // because this surface has already started it.
+        Button {
+            objectName: "embeddedStateAction"
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: page.embedded.actionKind !== ""
+            enabled: page.embedded.actionEnabled
+            text: page.embedded.actionLabel
+            // Requests the act; performs none of it — EXCEPT a start, which
+            // this capability now hosts and which carries the passphrase typed
+            // above. The field is on this surface, so the value cannot be
+            // handed to the host through a signal without the host holding a
+            // plaintext secret it has no other use for.
+            //
+            // Everything else still leaves as a request. A state panel that
+            // acted because it was displayed would act without being asked, so
+            // nothing here creates an identity or writes the mode.
+            //
+            // Guarded on `actionEnabled` as well as by `enabled`, so an act
+            // whose request reaches nobody cannot be requested by a test or a
+            // caller invoking `clicked()` directly. `enabled:false` stops a
+            // pointer, not a programmatic emit, and "an action that is not
+            // enabled emits no request" is the requirement rather than a
+            // property of the mouse.
+            onClicked: {
+                if (!page.embedded.actionEnabled) return;
+                if (page.embedded.actionKind === "start") {
+                    page.submitEmbeddedPassphrase();
+                    return;
+                }
+                page.embeddedActionTaken(page.embedded.actionKind);
+            }
+
+            background: Rectangle {
+                implicitWidth: 180; implicitHeight: 30
+                radius: Theme.radius
+                color: parent.enabled
+                       ? (parent.hovered ? Theme.accentSoft : Theme.surface)
+                       : Theme.surface
+                border.color: Theme.border
+                border.width: 1
+                opacity: parent.enabled ? 1.0 : 0.5
+            }
+            contentItem: Text {
+                text: parent.text
+                color: Theme.text
+                font.pixelSize: Theme.fontMd
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                opacity: parent.enabled ? 1.0 : 0.5
+            }
+        }
+
+        // Why the action above cannot be taken. A disabled control with nothing
+        // beside it reads as a module that is broken and gives the user no other
+        // thing to try; this says which surface the act is waiting on.
+        Text {
+            objectName: "embeddedStateUnavailable"
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            visible: page.embedded.actionUnavailableNote !== ""
+            text: page.embedded.actionUnavailableNote
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
         }

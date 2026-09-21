@@ -481,9 +481,13 @@ std::string RadicleImpl::getEmbeddedIdentity()
 
     if (home.empty()) {
         return dump(nlohmann::json{
-            {"home",    ""},
-            {"exists",  false},
-            {"nodeId",  ""},
+            {"home",      ""},
+            {"exists",    false},
+            {"nodeId",    ""},
+            // False because there is no key to describe, which is the same
+            // reason `nodeId` is empty. The `problem` below is what says the
+            // falsity is an absence rather than an observation.
+            {"encrypted", false},
             // Not an {"error":...} object: the question was answered, and the
             // answer is that there is nowhere to put an identity. A caller has
             // to render that as a blocked wizard step rather than as a failed
@@ -501,18 +505,44 @@ std::string RadicleImpl::getEmbeddedIdentity()
     // Read only when there is something to read. `nodeId` on an empty home
     // reports its own "no key" reason, which would be a second, worse-worded
     // answer to a question `exists` has already answered.
+    //
+    // The same rule covers `encrypted`, and here it is not merely tidier: the
+    // probe opens the SECRET key file, so an empty home would come back with a
+    // `problem` naming a missing key — a diagnostic for a state `exists:false`
+    // has already reported plainly, on a field describing a key that is not
+    // there. So both are asked only when `exists` says there is something to
+    // ask about, and `encrypted` is false otherwise because no key exists to be
+    // encrypted.
     std::string nodeId;
+    bool encrypted = false;
+    std::string problem;
     if (exists) {
         radicle::LocalReader reader{home};
         const auto id = nlohmann::json::parse(reader.nodeId(), nullptr, false);
         if (!id.is_discarded()) nodeId = id.value("nodeId", "");
+
+        // An unreadable key is NOT an unencrypted one. `encrypted` stays false
+        // — there is no observation behind it — and `problem` carries the
+        // reason, so a caller can tell "this key needs no passphrase" from "we
+        // could not find out". Collapsing them is the dangerous direction: it
+        // starts the node with an empty passphrase against a sealed key.
+        const auto sealed =
+            nlohmann::json::parse(radicle::LocalReader::keyEncrypted(home), nullptr, false);
+        if (sealed.is_discarded()) {
+            problem = "the embedded key could not be examined to tell whether "
+                      "it is encrypted";
+        } else {
+            encrypted = sealed.value("encrypted", false);
+            problem   = sealed.value("problem", "");
+        }
     }
 
     return dump(nlohmann::json{
-        {"home",    home},
-        {"exists",  exists},
-        {"nodeId",  nodeId},
-        {"problem", ""},
+        {"home",      home},
+        {"exists",    exists},
+        {"nodeId",    nodeId},
+        {"encrypted", encrypted},
+        {"problem",   problem},
     });
 }
 

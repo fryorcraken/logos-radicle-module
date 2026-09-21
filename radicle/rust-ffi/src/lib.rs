@@ -418,6 +418,29 @@ pub unsafe extern "C" fn radicle_local_profile_exists(home: *const c_char) -> *m
     guarded(move || serde_json::json!({ "exists": profileinit::profile_exists(&home) }).to_string())
 }
 
+/// Whether the identity at `home` is sealed with a passphrase.
+///
+/// Asked separately from `radicle_local_profile_exists` because it is a
+/// different question with a different failure mode: "is there an identity"
+/// reads `keys/radicle.pub` and cannot fail, while this opens the secret half
+/// and can. Folding them would make one reply's success depend on the other's.
+///
+/// **This is the only way a later session can learn whether starting the node
+/// needs a passphrase.** `radicle_local_init_profile`'s `encrypted` is computed
+/// from its argument and rides a reply no later session holds. See
+/// `profileinit::key_encrypted` for why the answer travels with a `problem`
+/// rather than as a bare boolean.
+///
+/// -> {"encrypted":bool,"problem":"…"}
+///
+/// # Safety
+/// `home` must be NULL or a valid NUL-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn radicle_local_key_encrypted(home: *const c_char) -> *mut c_char {
+    let home = read_str(home);
+    guarded(move || profileinit::key_encrypted(&home))
+}
+
 /// Create a Radicle identity at `home`, the way `rad auth` does.
 ///
 /// An empty `passphrase` means an unencrypted key on disk, matching
