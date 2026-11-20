@@ -245,6 +245,17 @@ cannot fail is easiest to write:
   can create a throwaway home instead of depending on a developer's profile —
   which may finally let local browsing into CI.
 
+## The Logos stack
+
+**Moving past Basecamp 0.3.0 waits for scaffold.** Newer Basecamp and
+module-builder releases exist, but scaffold supports one Basecamp release at a
+time. Its Basecamp and `lgpm` pins, and the module-builder generation whose
+SDK matches that Basecamp, only work as a set. So
+the next stack bump starts from a scaffold release that names a newer
+Basecamp, not from the Basecamp release. Scaffold's `DEFAULT_BASECAMP_RELEASE`
+in its `src/constants.rs` is the thing to check. The reasoning is in the
+`scaffold-0-5` change's `design.md`.
+
 ## Background documents
 
 `docs/M3-embedded-node-plan.md` and `docs/M3-phase0-findings.md` are the
