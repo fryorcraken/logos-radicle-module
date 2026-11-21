@@ -291,14 +291,20 @@ jobs:
       #     compiled in. The e2e layer no longer uses a bundle at all — the
       #     dev `#app` already carries the inspector, which is what scaffold
       #     builds by default. See ui-tests.yml.
-      #   * `--print-output` is a flag only on `install` in v0.3.1, but the
+      #   * `--print-output` is a flag only on `install` (still so in v0.5.0), but the
       #     `LOGOS_SCAFFOLD_PRINT_OUTPUT=1` it is sugar for is read inside
       #     `run_logged`, which every build path goes through. The env var
       #     below is therefore the whole feature, on a released binary.
       #
       # So this is a plain version again, and the pin that made both workflows
       # hostage to an open PR branch is gone.
-      LGS_VERSION: "0.3.1"
+      #
+      # It moves as a set with `[repos.basecamp].pin` / `[repos.lgpm].pin` in
+      # scaffold.toml and with `logos-module-builder` in both flake.nix files:
+      # scaffold supports one Basecamp release at a time, and those pins are
+      # that release's. See openspec/changes/scaffold-0-5/design.md (archived
+      # under openspec/changes/archive/ once merged).
+      LGS_VERSION: "0.5.0"
 
       # The `--print-output` equivalent, set for the whole job: stream nix's
       # output into the step log instead of tucking it into .scaffold/logs/ and
@@ -480,8 +486,8 @@ jobs:
       #
       # nix's output is streamed into this step's log rather than written to
       # `.scaffold/logs/` on a runner about to be destroyed — via the job-level
-      # `LOGOS_SCAFFOLD_PRINT_OUTPUT=1`, since `build` grew no `--print-output`
-      # flag until after v0.3.1. The env var is what the flag sets anyway, and
+      # `LOGOS_SCAFFOLD_PRINT_OUTPUT=1`, since `build` has no `--print-output`
+      # flag (none as of v0.5.0). The env var is what the flag sets anyway, and
       # is read by `run_logged`, which every build path goes through.
       - name: Build both modules (dev + portable)
         run: lgs basecamp build --variant all

@@ -724,8 +724,10 @@ one-line answers are here so this list stays readable.
   (`sun_path`), and `Home::socket_default()` adds 17 of them. A home under
   this repo's own worktree already overshoots at 114 bytes and
   `Runtime::init` fails with an error naming neither the path nor the limit.
-  This is the same cap that once made every Basecamp module segfault and is
-  why `runtime_dir` is pinned in `scaffold.toml`. **Measured against
+  This is the same cap that once made every Basecamp module segfault, which
+  `scaffold.toml` answered with a pinned `runtime_dir` until scaffold v0.5.0's
+  short per-profile default made the pin unnecessary (`scaffold-0-5`
+  design, Decision 5). **Measured against
   Basecamp's own profile dirs, this document's "socket follows the home"
   proposal fails** — 192 bytes in the dev-profile layout, ~20 bytes of slack
   in the installed one — so `RAD_SOCKET` is a Phase 1 requirement, not an

@@ -48,6 +48,10 @@ name: UI tests
 # (non-inspector) `#bin-bundle-dir` and `#app` are absent too, so this is not
 # an inspector-only gap — nothing for 0.2.3 at that rev is published.
 #
+# Re-checked for the 0.3.0 pin (bbe5da0) with the same `nix path-info --store`
+# probe against the `#app` output (…-logos-basecamp-0.3.0): "path is not
+# valid", so 0.3.0 is not published either and the reasoning below still holds.
+#
 # Consequences, and why the job is shaped the way it is:
 #   * timeout-minutes is 120, matching Basecamp's own doctests. That is far
 #     above the 8m21s actually observed, and deliberately so: it is a backstop
@@ -154,7 +158,10 @@ jobs:
       # `fix/preserve-scaffold-toml-comments`), so bumping the pin silently
       # reintroduced `scaffold.toml` comment stripping. A released version
       # cannot do that.
-      LGS_VERSION: "0.3.1"
+      #
+      # Moves as a set with the scaffold.toml pins and `logos-module-builder`
+      # — see the same note in ci.yml.
+      LGS_VERSION: "0.5.0"
 
       # The `--print-output` equivalent — see the note in ci.yml. Streams nix
       # output into the step log instead of a `.scaffold/logs/` file on a
@@ -177,7 +184,15 @@ jobs:
       #
       # Pin the VERSION, not a range or `latest`: a moving ref would silently
       # change the tool that gates every spec here.
-      SITOMETRES: "@paradoxcomputer/sitometres@0.1.2"
+      #
+      # 0.2.0, not 0.1.2, since the move to Basecamp 0.3.0. 0.1.2 cannot drive
+      # it at all: it stages the core module so that Basecamp 0.3.0 reads it as
+      # variant `linux-amd64` ("not supported on this platform … supported
+      # variants [linux-x86_64-dev, linux-amd64-dev]"), the dependency never
+      # loads, and every spec fails at `open`. 0.2.0 against the same build
+      # passes browse, branches, write and local. Keep in step with
+      # radicle-ui/tests/e2e-env.sh.
+      SITOMETRES: "@paradoxcomputer/sitometres@0.2.0"
 
     steps:
       # Action majors are the Node-24 ones. GitHub retired the Node 20 runtime,
@@ -432,11 +447,37 @@ jobs:
       - name: Build Basecamp (dev, inspector included)
         run: |
           set -eu
+          # Resource sampler, so a runner that dies of memory or disk mid-build
+          # says so in this log. See "Runner resources after the Basecamp
+          # build" below for why it is here.
+          echo "nproc=$(nproc)"
+          free -m
+          df -h /
+          ( while sleep 20; do
+              printf '[resources] %s mem-avail=%sMiB swap-used=%sMiB disk-avail=%s\n' \
+                "$(date -u +%T)" \
+                "$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)" \
+                "$(free -m | awk '/^Swap/ {print $3}')" \
+                "$(df -h --output=avail / | tail -n 1 | tr -d ' ')"
+            done ) &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
           nix build "github:logos-co/logos-basecamp/$BASECAMP_REV#app" \
             -o result-basecamp --accept-flake-config
           bin="$PWD/result-basecamp/bin/LogosBasecamp"
           test -x "$bin"
           echo "BASECAMP_BIN=$bin" >> "$GITHUB_ENV"
+
+      # `always()`, so it runs when the build above is cancelled too. That is
+      # the case it exists for: a cancelled step prints nothing about why, and
+      # the kernel log is the only record of an OOM kill.
+      - name: Runner resources after the Basecamp build
+        if: always()
+        run: |
+          free -m
+          df -h /
+          sudo dmesg | grep -i -E 'out of memory|oom-kill|killed process' \
+            || echo "no OOM kill in the kernel log"
 
       # The inspector must actually be in there. Without this the failure is
       # sitometres refusing the binary several steps later with "no Basecamp

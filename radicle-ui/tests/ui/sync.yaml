@@ -21,6 +21,16 @@
 # cancelSync() and that real requests go out, and leaves the completion
 # transition to tst_repo_switch.qml, which can drive finishSyncIfDone()
 # directly. See the comment at the cancel step for the reasoning.
+#
+# ORDER MATTERS, and it is not the order the label goes through in life. The
+# staleness poll runs BEFORE the sync is started and cancelled, because
+# cancelling does not cancel anything: cancelSync() only orphans the replies,
+# and every GetTree/GetBlob already dispatched is still served, one after
+# another, by the core module. A poll issued after a cancel queues behind that
+# backlog. Against a 33-entry repository that measured 116s before the poll's
+# ListBranches was answered, so a 60s wait failed on a healthy module — and
+# the wait would have to be sized for whichever repository the seed lists
+# first, which nobody chose. Polling first has no backlog to wait behind.
 
 app: radicle_ui
 with: [radicle]
@@ -62,16 +72,86 @@ steps:
         - "root.updateAvailable === false"
         - "root.syncLabel === 'Download All'"
 
-  - name: start the sync
+  # ---- the "Update" state -------------------------------------------------
+  #
+  # updateAvailable is set by checkForUpdate(), which compares the branch head
+  # reported by a fresh ListBranches against lastSyncedCommit. Driving that
+  # honestly end-to-end would mean waiting for someone to push to a public
+  # repository, so instead the comparison is given something to find: the
+  # last-synced commit is set to a value the real head cannot equal, and the
+  # REAL checkForUpdate() is then invoked against the REAL seed.
+  #
+  # What that does and does not prove is worth being precise about. It does not
+  # prove the app notices a genuine upstream push. It does prove the whole
+  # mechanism either side of that: the poll issues a real ListBranches to a
+  # real seed, the reply is parsed, the head is compared, the flag flips, and
+  # the button re-labels and re-colours from it. The comparison itself — head
+  # equal means no update, head different means update — is what the component
+  # tests in tst_staleness.qml pin down, along with the pollEpoch guard (whose
+  # load-bearing case is a reset with rid and branch unchanged; the repo- and
+  # branch-switch tests pass on their rid/branch terms alone).
+  # Two properties are set, because the button's idle label is a function of
+  # both: syncedOnce decides "Download All" vs "Re-sync", and updateAvailable
+  # overrides either with "Update". A sync that completed would have set both;
+  # none has run yet, so they are set here to stand in for it.
+  - name: stand in for a completed sync of an older commit
+    eval: >-
+      (function () {
+        var s = root.sourceTabItem;
+        s.syncedOnce = true;
+        s.lastSyncedCommit = "0000000000000000000000000000000000000000";
+        return s.lastSyncedCommit;
+      })()
+
+  # Before any poll runs there is nothing to report, so the flag must still be
+  # clear and the label must be the plain post-sync one. This is what makes
+  # the next step's transition meaningful rather than a value that was already
+  # true.
+  - name: the button reads Re-sync until a poll actually runs
+    expect:
+      state:
+        - "root.updateAvailable === false"
+        - "root.syncLabel === 'Re-sync'"
+
+  - name: run the staleness poll against the real seed
+    eval: "root.sourceTabItem.checkForUpdate()"
+
+  # The flag flips only if a real reply came back and the heads differed.
+  - name: the poll finds the branch has moved on
+    wait_for:
+      state: "root.updateAvailable === true"
+    timeout: 60s
+    expect:
+      calls: ["radicle.remoteListBranches"]
+
+  - name: and the button says so
+    expect:
+      state: "root.syncLabel === 'Update'"
+
+  # The stand-in is finished with. Drop syncedOnce again so the cancel
+  # assertions further down keep their meaning: with it left true they could
+  # not tell a cancel that claims completion from the stand-in itself. The
+  # label stays "Update" meanwhile, since updateAvailable overrides it.
+  - name: forget the stand-in's claim that a sync completed
+    eval: "root.sourceTabItem.syncedOnce = false"
+
+  # The explicit requirement behind this feature: "Update" is a colour and a
+  # label, never a gate. Re-syncing is never wrong, just sometimes unnecessary,
+  # so the button must stay exactly as clickable in this state as in any other.
+  # Clicking it here is the assertion — a disabled control would fail to
+  # resolve as clickable, and a guarded onClicked would leave syncing false.
+  - name: the Update state does not stop the button being clicked
     click: { objectName: "syncButton" }
 
-  # Two things at once: the click reached syncAll(), and the button switched to
-  # its in-progress rendering. The label becomes a percentage, so asserting it
-  # is no longer any of the three idle words proves the Text swapped over.
-  - name: the button goes into its in-progress state
+  # Two things at once: the click reached syncAll(), clearing the stale flag
+  # because fresh data is about to arrive, and the button switched to its
+  # in-progress rendering. The label becomes a percentage, so asserting it is
+  # no longer any of the three idle words proves the Text swapped over.
+  - name: clicking it starts a real sync and clears the stale flag
     wait_for:
       state:
         - "root.syncing === true"
+        - "root.updateAvailable === false"
         - "root.syncLabel !== 'Download All'"
         - "root.syncLabel !== 'Re-sync'"
         - "root.syncLabel !== 'Update'"
@@ -119,81 +199,15 @@ steps:
   # An interrupted sync must NOT claim completion: syncedOnce is set in
   # finishSyncIfDone(), never in cancelSync(), precisely so the button does
   # not offer "Re-sync" for a repository that was never fully downloaded.
+  # lastSyncedCommit is recorded only there too, so it still holds the
+  # stand-in's value rather than the head this sync captured.
   - name: a cancelled sync does not claim to have completed
     expect:
       state:
         - "root.syncedOnce === false"
         - "root.syncLabel === 'Download All'"
+        - "root.sourceTabItem.lastSyncedCommit === '0000000000000000000000000000000000000000'"
 
   - name: no error surfaced during the sync
     expect:
       state: "root.navError === ''"
-
-  # ---- the "Update" state -------------------------------------------------
-  #
-  # updateAvailable is set by checkForUpdate(), which compares the branch head
-  # reported by a fresh ListBranches against lastSyncedCommit. Driving that
-  # honestly end-to-end would mean waiting for someone to push to a public
-  # repository, so instead the comparison is given something to find: the
-  # last-synced commit is set to a value the real head cannot equal, and the
-  # REAL checkForUpdate() is then invoked against the REAL seed.
-  #
-  # What that does and does not prove is worth being precise about. It does not
-  # prove the app notices a genuine upstream push. It does prove the whole
-  # mechanism either side of that: the poll issues a real ListBranches to a
-  # real seed, the reply is parsed, the head is compared, the flag flips, and
-  # the button re-labels and re-colours from it. The comparison itself — head
-  # equal means no update, head different means update — is what the component
-  # tests in tst_staleness.qml pin down, along with the pollEpoch guard (whose
-  # load-bearing case is a reset with rid and branch unchanged; the repo- and
-  # branch-switch tests pass on their rid/branch terms alone).
-  # Two properties are set, because the button's idle label is a function of
-  # both: syncedOnce decides "Download All" vs "Re-sync", and updateAvailable
-  # overrides either with "Update". A sync that completed would have set both;
-  # this run cancelled instead, so they are set here to stand in for it.
-  - name: stand in for a completed sync of an older commit
-    eval: >-
-      (function () {
-        var s = root.sourceTabItem;
-        s.syncedOnce = true;
-        s.lastSyncedCommit = "0000000000000000000000000000000000000000";
-        return s.lastSyncedCommit;
-      })()
-
-  # Before any poll runs there is nothing to report, so the flag must still be
-  # clear and the label must be the plain post-sync one. This is what makes
-  # the next step's transition meaningful rather than a value that was already
-  # true.
-  - name: the button reads Re-sync until a poll actually runs
-    expect:
-      state:
-        - "root.updateAvailable === false"
-        - "root.syncLabel === 'Re-sync'"
-
-  - name: run the staleness poll against the real seed
-    eval: "root.sourceTabItem.checkForUpdate()"
-
-  # The flag flips only if a real reply came back and the heads differed.
-  - name: the poll finds the branch has moved on
-    wait_for:
-      state: "root.updateAvailable === true"
-    timeout: 60s
-
-  - name: and the button says so
-    expect:
-      state: "root.syncLabel === 'Update'"
-
-  # The explicit requirement behind this feature: "Update" is a colour and a
-  # label, never a gate. Re-syncing is never wrong, just sometimes unnecessary,
-  # so the button must stay exactly as clickable in this state as in any other.
-  # Clicking it here is the assertion — a disabled control would fail to
-  # resolve as clickable, and a guarded onClicked would leave syncing false.
-  - name: the Update state does not stop the button being clicked
-    click: { objectName: "syncButton" }
-
-  - name: clicking it starts a real sync and clears the stale flag
-    wait_for:
-      state:
-        - "root.syncing === true"
-        - "root.updateAvailable === false"
-    timeout: 30s

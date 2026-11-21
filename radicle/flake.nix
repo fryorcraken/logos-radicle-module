@@ -2,7 +2,7 @@
   description = "Radicle core module — seed-node and local-node repository access";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.6";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.3.0";
 
     # Used for ONE thing: fetching the Rust crate's dependencies. The builder's
     # own pinned nixpkgs (25.11, Sept 2025) has a `fetchCargoVendor` whose
@@ -119,10 +119,11 @@
       #
       # WHAT ACTUALLY WORKS: `externalLibInputs`, the builder's own per-system
       # escape hatch. `resolveExtInput` resolves each entry as
-      # `value.packages.${system}.default` INSIDE the per-system `let`
-      # (mkLogosModule.nix:219), and `mkExternalLib.buildExternalLibs` passes a
-      # value that is already a derivation straight through
-      # (mkExternalLib.nix:115-117). The resolved result reaches `preConfigure`
+      # `input.packages.${system}.default` INSIDE the per-system `let`
+      # (mkLogosModule.nix:274-288 at builder 0.3.0), and
+      # `mkExternalLib.buildExternalLibs` passes a value that is already a
+      # derivation straight through (its `lib.isDerivation source` arm,
+      # mkExternalLib.nix:115-117 at 0.3.0). The resolved result reaches `preConfigure`
       # as `{ externalLibs }`. So one staticlib is selected per system, and
       # only that one is an inputDrv — which is the property the `case` cannot
       # have.

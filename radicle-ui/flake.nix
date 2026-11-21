@@ -2,7 +2,7 @@
   description = "Radicle UI — QML view over the radicle core module";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.6";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.3.0";
     radicle.url = "path:../radicle";
   };
 

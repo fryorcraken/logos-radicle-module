@@ -128,10 +128,11 @@ git push rad main      # Radicle
 ### 2. Build and install
 
 Requires `nix` with flakes and [`logos-scaffold`](https://github.com/logos-co/scaffold)
-(`lgs`), which drives every build from `scaffold.toml`. **This repo pins an
-unreleased `lgs` build** — installing the crates.io release will get you
-unrecognised-flag errors on some of the workflows here; [`CLAUDE.md`](CLAUDE.md)
-carries the exact `cargo install` line and the reason.
+(`lgs`), which drives every build from `scaffold.toml`. Install the crates.io
+release both CI workflows pin as `LGS_VERSION`
+(`cargo install logos-scaffold --version <LGS_VERSION> --locked`). That
+version moves together with the Basecamp pins in `scaffold.toml`;
+[`CLAUDE.md`](CLAUDE.md) says why.
 
 ```bash
 lgs basecamp build --variant all   # both modules, both variants
@@ -144,8 +145,9 @@ This builds and launches its own Basecamp from source, so it does not need the
 release download or the catalog from the previous section.
 
 > **After any `lgs basecamp setup`, run `git diff scaffold.toml`.** `setup`
-> rewrites the file and drops every comment, including the block explaining why
-> `runtime_dir` is pinned — losing it re-opened a bug that made every module
+> rewrites the file and drops every comment, including the block explaining the
+> launch environment (why there is no `runtime_dir`, and why `WAYLAND_DISPLAY`
+> is set). Losing that block once re-opened a bug that made every module
 > segfault. Restore what it removed.
 
 Basecamp does not hot-reload plugins; after a rebuild, kill it, remove the
