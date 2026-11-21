@@ -245,6 +245,33 @@ cannot fail is easiest to write:
   can create a throwaway home instead of depending on a developer's profile —
   which may finally let local browsing into CI.
 
+## Known defects in shipped behaviour
+
+**Cancelling a sync does not cancel its requests, and the core module stays
+busy for minutes afterwards.** `cancelSync()` in `SourceTab.qml` only bumps
+`syncEpoch`, which drops the replies when they arrive. Every `GetTree` and
+`GetBlob` the sync already dispatched is still served, one after another, and
+any call made after the cancel waits behind them. Measured against a 33-entry
+repository on the live seed: a `ListBranches` issued after a cancel took 116 s
+to come back. So a user who cancels and then switches branch, opens a file or
+polls for staleness sees nothing happen for that long, and nothing says why.
+
+What a fix has to settle:
+
+- **Where the cancel is enforced.** Orphaning replies in QML cannot shorten
+  the queue. The requests have to stop being served, which puts the cancel in
+  the core module or in how the view dispatches. Dispatching a sync in bounded
+  batches, so that a cancel stops the next batch, is a QML-only option.
+  Dropping queued calls in the core would mean widening its interface.
+- **The spec.** No requirement says what a cancel does to requests already
+  sent, or how soon the module answers after one. This is observable
+  behaviour, so it belongs in a spec before it is built.
+- **The e2e workaround to undo.** `sync.yaml` polls for staleness *before* it
+  starts and cancels a sync, because the reverse order waited behind the
+  backlog (`scaffold-0-5`, `bc24ded`). Once a cancel really stops the work,
+  the spec can go back to the order a user follows, and that order then
+  becomes the regression test.
+
 ## The Logos stack
 
 **Moving past Basecamp 0.3.0 waits for scaffold.** Newer Basecamp and

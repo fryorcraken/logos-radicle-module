@@ -282,8 +282,9 @@ Two things were checked before changing the tool that gates every spec:
   a top-level `verdict`, and `steps[]` entries with `name` and `verdict`, one
   per spec step (18 for 18 in `browse`). So "The run proved what the spec
   asks" needs no change.
-- **The two failing specs are not 0.2.0's doing.** `source` and `sync` fail
-  at the same step under 0.1.2 on the old stack too (Risks).
+- **The two specs that failed were not 0.2.0's doing.** `source` and `sync`
+  failed at the same step under 0.1.2 on the old stack too. Both turned out to
+  be spec defects (Risks).
 
 Rejected: staying on 0.1.2 and working around its staging, for example by
 pre-installing the modules into a `--user-dir`. That would test a layout no
@@ -322,17 +323,29 @@ check from the other side.
   cache (`nix path-info --store https://cache.nix.logos.co/public` on the
   built output reports "path is not valid"). → Expected and one-off; the
   header of `ui-tests.yml` records the re-check.
-- **[`source` and `sync` fail against the live seed, and the cause is not this
-  change]** Both fail the same step on the new stack and on the old one, run
-  side by side on this machine against the same seed.
-  - `source` step 13: the first repository the seed now lists has its
-    `README.md` row below the 900 px offscreen window, and the click on it
-    selects nothing.
-  - `sync` step 17: the staleness poll never reports the branch moved.
-  `main`'s last `ui-tests.yml` run (44837719837) already failed `sync`. →
-  Reported to the runner as findings against the specs. Making a spec
-  independent of which repository a public seed lists first is a spec change,
-  not a toolchain one.
+- **[`source` and `sync` depended on which repository the live seed lists
+  first]** Both failed the same step on the new stack and on the old one, run
+  side by side on this machine against the same seed, so the toolchain was not
+  the cause. `main`'s last `ui-tests.yml` run (44837719837) had already failed
+  `sync`. → Fixed in the specs, in `bc24ded`:
+  - `source` step 13: a 33-entry repository put the `README.md` row below the
+    900 px offscreen window. The click landed on nothing and still reported
+    "clicked". The spec now scrolls the row into view by index first.
+  - `sync` step 17: the staleness poll waited behind a cancelled sync's
+    requests (next entry). The spec now polls before it starts and cancels the
+    sync.
+- **[Cancelling a sync leaves the core module busy for minutes]** A product
+  defect found by that `sync` failure, recorded here and not fixed.
+  `cancelSync()` in `SourceTab.qml` only bumps `syncEpoch`, which orphans the
+  replies. Every `GetTree`/`GetBlob` already dispatched is still served, one
+  after another, by the core module, so any call made after a cancel queues
+  behind that backlog. Against a 33-entry repository a `ListBranches` took 116 s
+  to come back, so a user who cancels a sync and then switches branch or opens
+  a file waits that long with no sign of why. Basecamp did not cause it: the
+  same spec failed the same way on 0.2.3. → Carried in `docs/PLAN.md`, "Known
+  defects in shipped behaviour", for a later piece. Fixing it changes observable
+  behaviour, so it needs a spec. `sync.yaml`'s step order is the workaround,
+  and its header comment says so.
 - **[A package from this change does not install into a Basecamp older than
   0.3.0]** module-builder 0.3.x adds an `assets/` root entry, which an older
   `lgpm` rejects ("Forbidden root entry: assets"). → Accepted: catalog users

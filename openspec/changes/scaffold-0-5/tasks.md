@@ -49,10 +49,12 @@
       be done: 0.1.2 cannot open the app on 0.3.0 at all. `SITOMETRES` moved
       to `0.2.0` in `ui-tests.yml`, `e2e-env.sh` and `docs/e2e.md`.
       On 0.2.0: browse 18/18, branches 17/17, write 36/36 and local 47/47 pass.
-      `source` (step 13) and `sync` (step 17) fail identically on the OLD
+      `source` (step 13) and `sync` (step 17) failed identically on the OLD
       stack (Basecamp 0.2.3, sitometres 0.1.2, the pre-change modules), run
-      side by side against the same seed. So they are pre-existing, and are
-      reported as findings rather than fixed here (design: Risks).
+      side by side against the same seed, which is what cleared the toolchain.
+      Both were spec defects, fixed by the tester in `bc24ded`: `source.yaml`
+      scrolls its README row into view, and `sync.yaml` polls for staleness
+      before it cancels a sync (design: Risks).
 
 ## 3. Launch-time environment
 
