@@ -178,8 +178,9 @@ std::string settingsPathFromEnv();
  * ## Why the 108-byte socket cap does not rule this out
  *
  * It is the obvious objection, because this is precisely the path length that
- * made every Basecamp module segfault and is why `runtime_dir` is pinned in
- * `scaffold.toml`. It does not apply, and the reason is that the cap constrains
+ * made every Basecamp module segfault, and is why `lgs basecamp launch` now
+ * gives each profile a short `/tmp/lgs-…` runtime dir (see the comment block
+ * in `scaffold.toml`). It does not apply, and the reason is that the cap constrains
  * the *socket* alone: `resolveSocket()` picks the socket independently of the
  * home, preferring `$XDG_RUNTIME_DIR`, exactly so that a long home cannot reach
  * it. Phase 0 measured this directory at 166 bytes under Basecamp's own profile

@@ -254,7 +254,10 @@ SDK matches that Basecamp, only work as a set. So
 the next stack bump starts from a scaffold release that names a newer
 Basecamp, not from the Basecamp release. Scaffold's `DEFAULT_BASECAMP_RELEASE`
 in its `src/constants.rs` is the thing to check. The reasoning is in the
-`scaffold-0-5` change's `design.md`.
+`scaffold-0-5` change's `design.md`, Decision 1 (under
+`openspec/changes/archive/` once merged). When that bump happens, re-run a
+spec on the current sitometres too: 0.1.2 could not drive Basecamp 0.3.0 at
+all (`docs/e2e.md`).
 
 ## Background documents
 

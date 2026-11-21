@@ -49,6 +49,18 @@ it supports, 0.3.0.** These move together, as one set:
   - sitometres `0.1.2` has only ever been run here against the 0.2.3 pin.
     Whether it still drives 0.3.0's inspector has to be measured, not
     assumed.
+- **The shared `runtime_dir = "/run/user/1000"` on both profiles goes**
+  (added at the user's request during design + code). Scaffold v0.5.0's
+  default runtime dir is short, private and per profile, so the `sun_path`
+  reason for the pin is gone. Sharing one directory between `alice` and `bob`
+  is the cross-profile `logos_token_<module>` collision that scaffold's
+  default exists to prevent. The pin's remaining job, letting Qt find the
+  Wayland socket, is to be done by naming the socket absolutely instead, and
+  only if a real launch proves it works. `design.md` Decision 5 records the
+  outcome.
+- **sitometres `0.1.2` → `0.2.0`** in `ui-tests.yml`, `e2e-env.sh` and
+  `docs/e2e.md`, which turned out to be forced: 0.1.2 cannot open the app on
+  Basecamp 0.3.0 (`design.md` Decision 6).
 - **`scaffold.toml`'s comment block and CLAUDE.md, made true again** under
   CLAUDE.md's own "Keeping this file true" rules. At minimum:
   - the "written against released v0.3.1" note on the verb table, and the

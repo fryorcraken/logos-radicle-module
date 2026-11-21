@@ -47,31 +47,40 @@ risc0_dev_mode = true
 [circuits]
 version = "0.4.1"
 
-# QtRO module sockets live under XDG_RUNTIME_DIR/TMPDIR. A unix socket path is
-# capped at 108 bytes (sun_path), and scaffold's default in-profile `xdg-tmp`
-# is 88 chars under this project path — the socket name then overflowed and
-# every module segfaulted at "Failed to register module for remote access",
-# basecamp's own bundled ones included. macOS gets a short /tmp/lgs-<profile>
-# by default; Linux keeps the long in-profile path, so the `runtime_dir` on
-# each profile below is set explicitly.
+# Why there is no `runtime_dir` on the profiles, and why WAYLAND_DISPLAY is set.
 #
-# It must be the session's real runtime dir, not just any short path: Qt finds
-# the Wayland compositor socket (wayland-0) through XDG_RUNTIME_DIR, so a
-# private dir like /tmp/lgs-alice starts basecamp with no display and it exits
-# immediately.
+# `launch` exports each profile's runtime dir as both XDG_RUNTIME_DIR and
+# TMPDIR, and the QtRO module sockets (`logos_token_<module>`) are created in
+# it. So it has two jobs:
+#   - be SHORT. A unix socket path is capped at 108 bytes (sun_path); an
+#     in-project path overflowed it and every module, Basecamp's own included,
+#     segfaulted at "Failed to register module for remote access".
+#   - be PER PROFILE, so two profiles never share socket names (scaffold#89).
+# Scaffold v0.5.0's default, /tmp/lgs-<project-hash>-<profile>, created 0700,
+# does both. This file used to pin `runtime_dir = "/run/user/1000"` on alice
+# AND bob, which fixed the length and overrode the separation.
 #
-# WARNING: `lgs basecamp setup` DESTROYS this whole comment block. It rewrites
-# the file without preserving comments. Scaffold#266 briefly fixed that and
-# then reverted the fix into a separate PR, so the stripping is still live on
-# the released version both CI workflows pin via LGS_VERSION. Verified rather
-# than assumed: a `setup` run removed 26 comment lines here. So run
-# `git diff scaffold.toml` after any `setup` and restore what it took.
+# That pin had one other effect, and it is the reason for WAYLAND_DISPLAY
+# below. libwayland resolves a relative WAYLAND_DISPLAY (the session's
+# `wayland-0`) against XDG_RUNTIME_DIR, and the compositor's socket is not in
+# a private /tmp dir. An ABSOLUTE WAYLAND_DISPLAY is used as-is. There is no
+# X11 fallback to hide the difference: Basecamp's launcher sets
+# QT_QPA_PLATFORM=wayland whenever WAYLAND_DISPLAY is set. Measured: without
+# the line below Basecamp exits at startup ("Failed to create wl_display",
+# then "no Qt platform plugin could be initialized"); with it, alice and bob
+# run side by side, each in its own runtime dir.
 #
-# No CI job runs `setup` any more, and neither does the e2e layer — only
-# `install` and `launch` need it, so this bites during interactive work.
+# The uid in the path is per machine, as it was in the pin this replaces. If
+# yours differs, `echo $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` in your desktop
+# session prints the value to use. On an X11 session with no Wayland
+# compositor, DELETE the line instead: setting it is what makes the launcher
+# force Wayland, and there is nothing there to connect to.
 #
-# Keep the note — it is the record of two bugs that each cost a debugging
-# session.
+# WARNING: `lgs basecamp setup` DESTROYS every comment in this file, and still
+# does on v0.5.0: a run there deleted all 29 comment lines and changed no
+# value. So run `git diff scaffold.toml` after any `setup` and restore what it
+# took (`git restore scaffold.toml`). Only `install` and `launch` need `setup`;
+# no CI job runs it, so this bites during interactive work.
 [basecamp.env]
 # Qt's own logging otherwise vanishes into the platform log sink, so neither
 # `lgs basecamp launch` nor the profile log captures it.
@@ -79,9 +88,5 @@ QT_FORCE_STDERR_LOGGING = "1"
 # Surface QML errors. Basecamp does not log them itself, so a ui_qml plugin
 # that fails to load looks exactly like one that was never clicked.
 QT_LOGGING_RULES = "qt.qml.import.debug=true"
-
-[basecamp.profiles.alice]
-runtime_dir = "/run/user/1000"
-
-[basecamp.profiles.bob]
-runtime_dir = "/run/user/1000"
+# See the block above: the runtime dir is private now, so name the socket.
+WAYLAND_DISPLAY = "/run/user/1000/wayland-0"

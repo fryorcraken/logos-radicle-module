@@ -17,7 +17,7 @@ nix build "github:logos-co/logos-basecamp/$(tomlq -r '.repos.basecamp.pin' scaff
 # 2. Build the modules — the DEV variant, matching the dev Basecamp — and run
 #    the spec.
 lgs basecamp build --variant lgx
-npx --yes '@paradoxcomputer/sitometres@0.1.2' \
+npx --yes '@paradoxcomputer/sitometres@0.2.0' \
   run radicle-ui/tests/ui/browse.yaml \
   --app radicle_ui \
   --app-dir .scaffold/basecamp/lgx \
@@ -36,10 +36,14 @@ asks the app what it believes is true.
 
 Assert on `calls:` when the point of the change is that a call happens. A step
 that only checks what is on screen will pass against a view rendering stale
-cached data. **But note `calls:` does not work for QML→backend hops here**: QML
-dispatches through the `radicle_ui` QtRO replica and that hop is not logged as
-a LogosAPIClient invocation, so sitometres reports "no backend calls at all"
-while the data plainly arrives. Assert the effect with `state:` instead.
+cached data. **But note `calls:` did not work for QML→backend hops here** on
+sitometres 0.1.x against Basecamp 0.2.3: QML dispatches through the
+`radicle_ui` QtRO replica and that hop was not logged as a LogosAPIClient
+invocation, so sitometres reported "no backend calls at all" while the data
+plainly arrived. Assert the effect with `state:` instead. sitometres 0.2.0
+against Basecamp 0.3.0 does list those calls per step (`calls:
+radicle.remoteGetTree, …`), but no spec here has yet relied on a `calls:`
+assertion, so treat that as observed output rather than a proven gate.
 
 **`objectName` must sit on the clickable element**, not its parent. Naming a
 Repeater delegate matched one element instead of four, because the delegate
@@ -193,6 +197,16 @@ before the switch.
 
 **Pin the version, never a range or `latest`.** A moving ref would silently
 change the tool that gates every spec.
+
+**The sitometres version moves with the Basecamp pin.** 0.1.2 cannot drive
+Basecamp 0.3.0. It stages the core module so that 0.3.0 reads it as the
+`linux-amd64` variant, which a dev Basecamp refuses ("supported variants
+[linux-x86_64-dev, linux-amd64-dev]"). `radicle` then never loads, and every
+spec times out at `open`. 0.2.0 against the same build passes browse,
+branches, write and local. When the Basecamp pin moves, re-run a spec on the
+current sitometres before assuming the app broke. The only sign of this
+failure is the module-load line in Basecamp's log, which `--user-dir <dir>`
+keeps on disk after the run.
 
 **Do not point `--basecamp` at the `.LogosBasecamp` ELF directly** — that
 clears the probe and then fails to spawn with `ENOENT`, because the wrapper is

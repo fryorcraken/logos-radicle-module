@@ -22,7 +22,10 @@
 # `bin/.LogosBasecamp`, and a nix dirBundler bundle ships
 # `bin/.LogosBasecamp.elf`. The dev `#app` these scripts use ships the former,
 # so a published version works again.
-SITOMETRES="@paradoxcomputer/sitometres@0.1.2"
+#
+# 0.2.0 since Basecamp 0.3.0: 0.1.2 stages the core module under a variant
+# 0.3.0 refuses, so nothing opens. See the note on SITOMETRES in ui-tests.yml.
+SITOMETRES="@paradoxcomputer/sitometres@0.2.0"
 
 # The dev Basecamp — the QML inspector is ON in `#app` and off in the shipping
 # bundles; see docs/e2e.md. Built to a local out-link rather than through
