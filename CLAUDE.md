@@ -290,23 +290,32 @@ an open PR branch can, and did.
 
 For background on the release line: v0.3.0 moved the module table from
 `[basecamp.modules.*]` to the top-level `[modules.*]` this repo uses, and added
-`develop`, `build`, `run` and `paths`; v0.3.1 is eight fix commits on top.
-**The verb table below was written against released v0.3.1.**
+`develop`, `build`, `run` and `paths`. v0.4.0 narrowed scaffold to supporting
+**one Basecamp release at a time** (0.3.0 since then). **The verb table below
+was checked against released v0.5.0** with `lgs basecamp --help`.
+
+**`LGS_VERSION`, the `scaffold.toml` Basecamp and `lgpm` pins, and the
+`logos-module-builder` tag in both `flake.nix` files move as one set.** Scaffold
+names the one Basecamp it supports in `DEFAULT_BASECAMP_RELEASE` (its
+`src/constants.rs`), its `lgpm` pin is the rev that Basecamp locks, and the
+module-builder generation decides which SDK the modules link, which Basecamp
+then accepts or refuses at runtime. Bumping one without the others builds
+cleanly and fails in the e2e layer, or not at all until a user loads the
+module. So a stack bump starts from a scaffold release, not from a Basecamp
+release. The reasoning is in the `scaffold-0-5` change's `design.md`, under
+`openspec/changes/archive/` once it has merged.
 
 Do not be misled by `version = "0.2.0"` at the top of `scaffold.toml`: that is
 the **file schema** version, not the CLI version, and `0.2.0` is what `lgs`
-0.3.x expects (`SCAFFOLD_TOML_SCHEMA_VERSION` in scaffold's own source).
-Bumping it to match the CLI would make the file unparseable.
+expects (`SCAFFOLD_TOML_SCHEMA_VERSION` in scaffold's own source, unchanged
+from 0.3.x through 0.5.0). Bumping it to match the CLI would make the file
+unparseable.
 
-One trap if you are on a build from a clone rather than the release. The
-version string was bumped 0.3.0 → 0.3.1 only in the release commit itself, so
-any master build from that eight-commit window reports `0.3.0` while carrying
-most of v0.3.1's code, and `--version` cannot tell you which. This repo was
-originally documented from exactly such a build. If `lgs --version` says
-`0.3.0`, check whether it is a path install (`cargo install` prints the package
-source when it replaces one) before assuming you are behind. A genuinely
-missing command below means v0.2.0 or older, which is a schema difference you
-will notice anyway.
+A build of scaffold from a clone can report the previous version: scaffold
+bumps the version string only in its release commit, so `--version` on a master
+build between two releases names the older one. If a command below seems
+missing, check whether your `lgs` is a path install (`cargo install` prints
+the package source when it replaces one) before assuming you are behind.
 
 ### The verb table
 
@@ -721,8 +730,14 @@ identically as "clicking the app does nothing". Four separate bugs here wore
 that same face.
 
 `scaffold.toml` sets `QT_LOGGING_RULES=qt.qml.import.debug=true` so Basecamp
-prints why a view failed. Read `.scaffold/basecamp/profiles/alice/basecamp.log`
-before forming a theory; one line there beats an afternoon of guessing.
+prints why a view failed. Read Basecamp's own session log before forming a
+theory; one line there beats an afternoon of guessing. It is
+`<app_logs_dir>/basecamp.log`, a symlink to the current timestamped
+`basecamp_<date>_<time>.log`, and `lgs basecamp paths alice` prints
+`app_logs_dir`. That directory is inside the tree `launch` scrubs, so read it
+before relaunching. The profile's `basecamp.log` beside `xdg-data/` is a
+different file: scaffold's tee of the terminal, written only under
+`launch --log-file`.
 
 Note that `qmllint` does not catch syntax errors — it passed a file Qt then
 refused with "Unexpected token `}'". `radicle-ui/tests/check-qml-syntax.sh`

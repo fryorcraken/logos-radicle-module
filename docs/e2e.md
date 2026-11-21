@@ -132,12 +132,12 @@ The specs need a Basecamp built **with the QML inspector**, a compile-time
 feature. For a long time this file said that meant
 `#bin-bundle-dir-inspector`, and the job built it through
 `lgs basecamp setup --inspector`. **That was wrong, and cost a great deal of
-incidental complexity.** Reading logos-basecamp's `flake.nix` at the pinned
-rev:
+incidental complexity.** Reading logos-basecamp's `flake.nix`, first at 0.2.3
+and again at 0.3.0 (`bbe5da0`), where the three rows still read the same:
 
 | attr | inspector | feeds |
 |---|---|---|
-| `app` | **on** (`inherit logosQtMcp`, no `enableInspector` flag) | the dev build |
+| `app` | **on** (`inherit logosQtMcp`; `nix/app.nix` defaults `enableInspector ? true`) | the dev build |
 | `appDistributed` | off (`enableInspector = false`) | `#bin-bundle-dir`, appimage, macos |
 | `appDistributedWithInspector` | on | `#bin-bundle-dir-inspector` |
 
@@ -309,6 +309,14 @@ two processes contending on the same git storage. Five consecutive clean runs
 with no other instance up; two failures while an interactive `lgs basecamp
 launch alice` was being driven by hand. Close the interactive instance first,
 and do not read a lone step-9 failure as a code defect until you have.
+
+Since scaffold v0.5.0 an interactive `lgs basecamp launch` only contends if it
+was pointed at that profile. `launch` gives each profile its own `HOME`
+(`.scaffold/basecamp/profiles/<name>/home`), so Local mode there finds no
+`~/.radicle` at all unless `RAD_HOME` is set in the environment `lgs` was
+started from. That is the only way to reach your own node from an
+`lgs`-launched instance, and it brings the contention back. See CLAUDE.md
+"Local mode under `lgs basecamp launch`".
 
 ## The app starts in Explore, and every spec depends on that
 
