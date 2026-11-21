@@ -4,7 +4,7 @@
       pin change, so `skip_specs: true` in `.openspec.yaml`. The proposal is
       written; a behaviour change Basecamp 0.3.0 forces comes back here.
 - [x] design + code — `dev-writer`
-- [ ] tests — `tester`
+- [x] tests — `tester`
 - [ ] review: correctness — `code-reviewer`
 - [ ] review: security — `code-reviewer`
 - [ ] review: readability — `code-reviewer`

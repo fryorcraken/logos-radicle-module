@@ -124,6 +124,42 @@ steps:
   # Using `text:` to SELECT is fine; CLAUDE.md's preference for `state:` is
   # about what to ASSERT on, where a label can match an item that is loaded
   # but hidden.
+  #
+  # Scroll the row into view first. The window is a fixed 900px and the
+  # repository the seed lists first is not this spec's to choose: one with
+  # thirty-odd root entries puts README.md below the fold. The click is then
+  # posted at coordinates outside the ListView's clip, lands on nothing, and
+  # still reports "clicked" — so the failure shows up one step later as a
+  # viewer that never opened, which reads as a dead handler and is not. The
+  # list is scrolled by index, taken from the entry names the pane itself
+  # reports, so this holds for any repository and any window height.
+  #
+  # The click that follows is still a real one on the real row. Only the
+  # viewport is moved, from outside, which is what a user's scroll wheel does.
+  # The ListView is found by its model's size rather than by an id, which a
+  # spec cannot reach; it is the only descendant whose count equals the
+  # tree's entry count AND that can scroll to an index.
+  - name: scroll the README row into view
+    eval: >-
+      (function () {
+        var s = root.sourceTabItem;
+        var i = s.entryNames.split(",").indexOf("README.md");
+        function find(o) {
+          if (o.positionViewAtIndex && o.count === s.entryCount) return o;
+          var ch = o.children;
+          for (var k = 0; k < ch.length; k++) {
+            var r = find(ch[k]);
+            if (r) return r;
+          }
+          return null;
+        }
+        var list = find(s);
+        if (i < 0) throw new Error("no README.md in " + s.entryNames);
+        if (!list) throw new Error("no ListView holding the tree");
+        list.positionViewAtIndex(i, 1);
+        return "scrolled to " + i;
+      })()
+
   - name: click the README row in the file tree
     click: { objectName: "fileRowName", text: "README.md", match: "contains" }
 

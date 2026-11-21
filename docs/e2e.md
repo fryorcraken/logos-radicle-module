@@ -53,6 +53,23 @@ Give anything a spec needs to click a stable `objectName`. Specs select by
 `objectName`, not by label, so renaming a button must not break a test — and
 changing an `objectName` is an interface change.
 
+**A click on a row below the fold lands on nothing and still reports
+"clicked".** The offscreen window is fixed at 900px and the seed's first
+repository is not yours to choose, so a row's position depends on both. The
+failure surfaces a step later, as a pane that never opened, which reads as a
+dead handler. `source.yaml` scrolls the row into view first, by index, with an
+`eval:` that finds the tree's ListView by its entry count and throws when the
+row is absent, so the failure names itself. The click that follows is still the
+real one.
+
+**Cancelling a sync does not cancel its requests.** `cancelSync()` only orphans
+the replies; every `GetTree`/`GetBlob` already dispatched is still served, in
+turn, by the core module. Any call made after a cancel queues behind that
+backlog: against a 33-entry repository a `ListBranches` took 116s to come back.
+`sync.yaml` therefore runs the staleness poll before it starts and cancels the
+sync, and a spec that needs a backend answer after a cancel has to size its
+wait for a repository nobody chose.
+
 **Add new specs to the `ui-tests.yml` matrix.** It runs one job per spec;
 `SPEC` was once hardcoded to `browse.yaml` and three specs sat in the tree
 running nowhere. A spec outside the matrix is decoration. `ci.yml`'s schema
